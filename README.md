@@ -26,18 +26,31 @@ palmer is a **client** — the part herdr deliberately leaves to you.
 └───────────────────────────────┘
 ```
 
-## Why a browser and not an app
+## Why this exists
 
-The machine this has to work on is a locked-down Windows laptop with no admin rights,
-where WSL is the only way in. A desktop app cannot be installed there. A browser pointed
-at `localhost` can.
+[cate](https://github.com/0-AI-UG/cate) already puts terminals on a zoomable canvas, and
+it is excellent. It is also an IDE: editor, browser, terminal, and its own runtime
+underneath. palmer is the narrow version — **terminals only, on somebody else's runtime**.
 
-That constraint turns out to be a gift: the browser gives **real zoom**. `Ctrl+-` shrinks
-the cells and more of the canvas fits — something no terminal UI can do, because a
-terminal cannot scale text. Opened with `--app=`, a browser window has no chrome and
-looks like an application anyway.
+The bet is that narrow is worth something. Orca and Paseo are widely called heavy, and
+the usual reason is surface area: desktop plus mobile plus web plus CLI needs a frame,
+and the frame is the weight. palmer keeps one frontend and borrows the hard part.
 
-So there is one frontend, not three. herdr already ships a TUI for the terminal case.
+**Be honest about how strong that is.** It is a preference for focus, not a capability
+nobody else has. What is genuinely unoccupied is narrower: people build clients on herdr
+— a macOS console, a menu-bar remote, a review sidebar — and none of them is a canvas.
+
+## One frontend, in a browser
+
+The browser is the default, and the reason is zoom. `Ctrl+-` shrinks the cells and more
+of the canvas fits; no terminal UI can do that, because a terminal cannot scale text.
+Opened with `--app=`, a browser window has no chrome and reads as an application.
+
+If it later deserves a real window, the same web code goes inside Tauri for a few MB.
+Electron is the thing being complained about; it is not the answer here.
+
+There is no CLI frontend. herdr already ships a TUI, and a second one would be a worse
+copy.
 
 ## What is verified
 
