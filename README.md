@@ -1,102 +1,87 @@
 # palmer
 
-> ⚠️ Day one. Nothing is built yet — this is the plan and what has been verified.
+> ⚠️ 아직 아무것도 만들지 않았다. 이 문서는 **계획과, 코드를 쓰기 전에 확인한 사실**이다.
 
-A spatial canvas for the coding agents you have running. Terminals sit where you put
-them, at the size you chose, and each one shows whether it is working, waiting on you,
-or done.
+돌고 있는 코딩 에이전트들을 위한 공간형 캔버스. 터미널이 놓아둔 자리에 그 크기로 있고,
+각각이 **일하는 중인지 · 나를 기다리는지 · 끝났는지** 보인다.
 
-palmer is **not a terminal multiplexer**. [herdr](https://github.com/herdrdev/herdr)
-already is one, and a good one: a Rust daemon that keeps agents alive across
-disconnects and restarts, tracks their state, and exposes all of it over a local socket.
-palmer is a **client** — the part herdr deliberately leaves to you.
+palmer 는 **터미널 멀티플렉서가 아니다.** [herdr](https://github.com/herdrdev/herdr) 가
+이미 그것이고, 잘 만들었다 — 연결이 끊겨도 재시작해도 에이전트를 살려두는 러스트 데몬,
+상태 추적, 그리고 그 전부를 로컬 소켓으로 내주는 API. palmer 는 **클라이언트**다.
+herdr 가 일부러 남겨 둔 자리다.
 
 ```
-┌─ your browser ────────────────┐
-│  palmer — canvas, zoom, drag  │
+┌─ 브라우저 ────────────────────┐
+│  palmer — 캔버스, 줌, 드래그   │
 └──────────────┬────────────────┘
-               │ websocket
+               │ 웹소켓
 ┌──────────────┴────────────────┐
-│  palmer server (thin bridge)  │
+│  palmer server (얇은 다리)     │
 └──────────────┬────────────────┘
-               │ ~/.config/herdr/herdr.sock  (newline-JSON)
+               │ ~/.config/herdr/herdr.sock
 ┌──────────────┴────────────────┐
-│  herdr — terminals, agents,   │
-│  persistence, status          │
+│  herdr — 터미널·에이전트·      │
+│  영속성·상태                   │
 └───────────────────────────────┘
 ```
 
-## Why this exists
+## 왜 만드는가
 
-[cate](https://github.com/0-AI-UG/cate) already puts terminals on a zoomable canvas, and
-it is excellent. It is also an IDE: editor, browser, terminal, and its own runtime
-underneath. palmer is the narrow version — **terminals only, on somebody else's runtime**.
+[cate](https://github.com/0-AI-UG/cate) 는 이미 터미널을 줌 되는 캔버스에 올려 놓았고
+훌륭하다. 다만 IDE 다 — 에디터·브라우저·터미널에 자체 런타임까지. palmer 는 좁은 판이다:
+**터미널만, 남의 런타임 위에.**
 
-The bet is that narrow is worth something. Orca and Paseo are widely called heavy, and
-the usual reason is surface area: desktop plus mobile plus web plus CLI needs a frame,
-and the frame is the weight. palmer keeps one frontend and borrows the hard part.
+좁은 게 값이 있다는 데 건다. Orca 와 Paseo 가 무겁다는 평을 듣는 흔한 이유가 표면적이다 —
+데스크톱·모바일·웹·CLI 를 다 받치려면 뼈대가 필요하고 그 뼈대가 곧 무게다.
 
-**Be honest about how strong that is.** It is a preference for focus, not a capability
-nobody else has. What is genuinely unoccupied is narrower: people build clients on herdr
-— a macOS console, a menu-bar remote, a review sidebar — and none of them is a canvas.
+**이 근거가 얼마나 센지 정직하게 적어 둔다.** 이건 취향에 가깝지 남이 못 하는 능력이 아니다.
+확인된 빈자리는 더 좁다: herdr 위에 클라이언트를 만드는 사람들이 있는데
+(macOS 콘솔 `herdrm`, 메뉴바·폰 리모트 `herdr-remote`, 리뷰 사이드바 `herdr-reviewr` —
+각각 별 수백~수천 개) **캔버스는 아무도 안 만들었다.**
 
-## One frontend, in a browser
+그게 "아무도 필요로 하지 않아서"일 수도 있다. 만들어 봐야 안다.
 
-The browser is the default, and the reason is zoom. `Ctrl+-` shrinks the cells and more
-of the canvas fits; no terminal UI can do that, because a terminal cannot scale text.
-Opened with `--app=`, a browser window has no chrome and reads as an application.
+## 프런트엔드는 하나, 브라우저
 
-If it later deserves a real window, the same web code goes inside Tauri for a few MB.
-Electron is the thing being complained about; it is not the answer here.
+브라우저가 기본이고 이유는 **줌**이다. `Ctrl+-` 로 셀이 작아지면 캔버스가 더 들어온다 —
+터미널 UI 로는 못 하는 일이다. 글자 크기를 못 바꾸기 때문이다.
+`--app=` 으로 열면 주소창 없는 창이 되어 앱처럼 읽힌다.
 
-There is no CLI frontend. herdr already ships a TUI, and a second one would be a worse
-copy.
+나중에 진짜 창이 필요하면 **같은 웹 코드를 Tauri 에 넣는다**(몇 MB).
+Electron 은 우리가 불평하는 그것이므로 답이 아니다.
 
-## What is verified
+CLI 프런트엔드는 만들지 않는다. herdr 에 이미 TUI 가 있다.
 
-Measured against herdr 0.8.2 before writing any code:
+## 코드 전에 확인한 것 (herdr 0.8.2 실측)
 
-- installs to `~/.local/bin` with **no sudo** — 18MB, single binary, checksum-verified
-- `herdr server` runs headless; the socket appears at `~/.config/herdr/herdr.sock`
-- the socket speaks newline-delimited JSON, protocol 20, **91 methods**
-- `session.snapshot` returns workspaces, tabs, panes, layouts and agents — and each pane
-  carries `agent_status`, which is the traffic light
-- `pane.send_text` types into a terminal; `pane.read` reads it back
-- **`pane.read` with `format: "ansi"` preserves escape sequences**, so pane output can be
-  fed straight to xterm.js
+- `~/.local/bin` 에 **sudo 없이** 설치 — 18MB 단일 바이너리, 체크섬 검증
+- `herdr server` 헤드리스 구동, 소켓은 `~/.config/herdr/herdr.sock` (0600)
+- 뉴라인 구분 JSON, 프로토콜 20, **메서드 91개**
+- `session.snapshot` → workspaces·tabs·panes·layouts·agents, 그리고 pane 마다
+  **`agent_status`** — 이게 신호등이다
+- `pane.send_text` 로 입력이 들어가고 `pane.read` 로 화면이 읽힌다
+- **`pane.read` 에 `format:"ansi"` 를 주면 이스케이프가 살아서 온다** →
+  xterm.js 에 그대로 먹일 수 있다
 
-That last one is the load-bearing fact. Without it there is no browser terminal.
+마지막 줄이 이 프로젝트를 떠받친다. 이게 안 됐으면 브라우저 터미널이 성립하지 않는다.
 
-## What is not verified
+자세한 것과 **헛짚었던 지점들**: `docs/herdr-api.md`
 
-- whether output can be **streamed** rather than polled — `events.subscribe` and
-  `pane.wait_for_output` exist, but a live terminal needs more than snapshots
-- whether herdr installs on the target WSL box without admin ("WSL beta,
-  endpoint-protected install" in their docs)
-- how `agent_status` behaves with a real agent — it read `unknown` for a plain shell
+## 아직 모르는 것
 
-## Where to start
+- 출력을 **스트리밍**할 수 있는가, 폴링뿐인가 → 서버 구조가 여기서 갈린다
+- `agent_status` 가 실제 에이전트에서 **`blocked` 와 `working` 을 가르는가**
+  (평범한 셸에서는 `"unknown"` 이 나왔다)
 
-Three questions decide whether this is buildable, and they come before any code:
+## 문서
 
-1. [#1](https://github.com/maengyo/palmer/issues/1) — can pane output be **streamed**, or
-   only polled? The answer shapes the whole server.
-2. [#2](https://github.com/maengyo/palmer/issues/2) — does herdr install on the target
-   WSL box **without admin**? If not, palmer has no reason to exist.
-3. [#3](https://github.com/maengyo/palmer/issues/3) — is `agent_status` trustworthy with
-   a real agent, and does it tell **blocked** from **working**?
+- `AGENTS.md` — 작업 지침. 에이전트에게 시킬 때의 규칙
+- `docs/herdr-api.md` — API 실측 기록
+- `docs/decisions.md` — 정한 것과 **일부러 안 정한 것**
+- `docs/backlog.md` — 할 일의 씨앗. **살아 있는 목록은
+  [이슈](https://github.com/maengyo/palmer/issues)와
+  [보드](https://github.com/users/maengyo/projects/3)다**
 
-Work is tracked in [issues](https://github.com/maengyo/palmer/issues) and on the
-[board](https://github.com/users/maengyo/projects/3). `AGENTS.md` is the working
-agreement; `docs/herdr-api.md` is what the API actually does, measured.
-
-## Prior art
-
-[cate](https://github.com/0-AI-UG/cate) is where the spatial idea comes from, and it is
-the better tool if you can install a desktop app. [herdr](https://herdr.dev) is the
-runtime this is built on. Orca, Paseo, Emdash, Conductor and Superset all occupy this
-space; none of them puts terminals on a free canvas in a browser.
-
-## License
+## 라이선스
 
 MIT
