@@ -62,6 +62,21 @@ That last one is the load-bearing fact. Without it there is no browser terminal.
   endpoint-protected install" in their docs)
 - how `agent_status` behaves with a real agent — it read `unknown` for a plain shell
 
+## Where to start
+
+Three questions decide whether this is buildable, and they come before any code:
+
+1. [#1](https://github.com/maengyo/palmer/issues/1) — can pane output be **streamed**, or
+   only polled? The answer shapes the whole server.
+2. [#2](https://github.com/maengyo/palmer/issues/2) — does herdr install on the target
+   WSL box **without admin**? If not, palmer has no reason to exist.
+3. [#3](https://github.com/maengyo/palmer/issues/3) — is `agent_status` trustworthy with
+   a real agent, and does it tell **blocked** from **working**?
+
+Work is tracked in [issues](https://github.com/maengyo/palmer/issues) and on the
+[board](https://github.com/users/maengyo/projects/3). `AGENTS.md` is the working
+agreement; `docs/herdr-api.md` is what the API actually does, measured.
+
 ## Prior art
 
 [cate](https://github.com/0-AI-UG/cate) is where the spatial idea comes from, and it is
