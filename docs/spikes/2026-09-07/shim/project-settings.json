@@ -1,0 +1,34 @@
+{
+ "hooks": {
+  "SessionStart": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "echo PROJ-SessionStart:$(date +%s.%N) >> <LOG>"
+     }
+    ]
+   }
+  ],
+  "UserPromptSubmit": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "echo PROJ-UserPromptSubmit:$(date +%s.%N) >> <LOG>"
+     }
+    ]
+   }
+  ],
+  "Stop": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "echo PROJ-Stop:$(date +%s.%N) >> <LOG>"
+     }
+    ]
+   }
+  ]
+ }
+}

@@ -28,8 +28,8 @@ if that window got pushed aside, even if it is off screen.
 │  palmer daemon - owns PTYs, receives hooks,    │
 │  remembers places. Alive with no browser.      │
 └──────┬─────────────────────┬───────────────────┘
-       │ PTY (raw bytes,     │ hooks - paired by env var
-       │ input, resize)      │ (you install them once)
+       │ PTY (raw bytes,     │ hooks - paired by pane id in the URL
+       │ input, resize)      │ (a PATH shim adds them per pane)
 ┌──────┴─────────────────────┴───────────────────┐
 │  pane: a shell. Run claude, codex, anything.   │
 │  Each a real PTY. Hooks/SSE report status.     │
@@ -113,7 +113,8 @@ When a real window is needed later, **the same web code goes into Tauri** (CodeG
   the hook fires. **AskUserQuestion comes through the same hook** — two kinds of dialog, one hook
   (other dialogs unverified). `Notification` is a delayed nudge that fires when an approval sits
   for more than six seconds (one observation, 6.0s). The spike layered this on with `--settings`;
-  the product will use a global hook the user installs once (see "Settled" below).
+  the product does the same through a PATH shim in every terminal it opens — nothing for the user to
+  install (see "Settled" below).
 - **There is a lot to take from polycanv** — hook layering, status merge rules, the Unix socket
   bridge, PTY handling, comparison benchmark tooling. The claude and codex hooks were measured in
   a TUI on 2026-08-19; opencode is spec only, and qwen only goes as far as `SessionStart`.
@@ -152,10 +153,12 @@ wrong.
 - **Terminal list on the left** — whatever is waiting sits on top. Windows move when they get
   pushed; their place in the list does not.
 - **palmer only opens shells** — it has no tool list. Typing `claude` is the user's job.
-- **The user installs hooks once** — palmer does not launch the agent, so there is nowhere to
-  attach `--settings`. A global hook plus a per-terminal environment variable does the pairing.
-  Planting a file per project was rejected: terminals are scattered across projects, and a `cd`
-  inside one breaks it.
+- **Hooks attach themselves.** Every shell palmer opens has `~/.palmer/bin` first on PATH; a
+  two-line `claude` shim there execs the real one with `--settings` pointing at a per-pane file.
+  No user config is touched and there is nothing to install. **Measured:** `--settings` merges with
+  the other layers, it does not replace them (spike E). `command claude` or an absolute path
+  bypasses the shim — then the light stays grey and palmer says why. This reversed the morning's
+  "install once" decision; the premise behind it was wrong.
 - **Nothing overlaps.** A new window lands where it is put and pushes its neighbour aside
   (termcanvas-style minimum translation). The overlap setting is gone — nothing overlaps, so there
   is nothing to switch.

@@ -312,6 +312,27 @@ herdr(서버 35MB + pane 당 6MB)보다 작고 polycanv(55MB/1개)보다 훨씬 
 
 ---
 
+## 스파이크 E — `--settings` 는 병합인가 대체인가 (2026-09-07 저녁)
+
+훅을 PATH shim 으로 붙이려면(`decisions.md` "훅은 palmer 가 붙인다") 껍데기가 `claude --settings
+/tmp/palmer/<pane>.json` 을 exec 한다. `--settings` 가 사용자 훅을 지우면 이 길은 없다.
+코드와 로그는 `docs/spikes/2026-09-07/shim/`.
+
+사용자 설정은 건드리지 않고, 같은 병합 코드를 타는 프로젝트 층 + `--settings` 층으로 잰다.
+`claude -p "Reply with exactly the word: ok" --settings ../extra.json`, Claude Code 2.1.263, 1회, 5초.
+
+| 이벤트 | 프로젝트 훅 (command) | `--settings` 훅 (command) | `--settings` 훅 (http) |
+|---|---|---|---|
+| SessionStart | 왔다 | 왔다 | **안 왔다** |
+| UserPromptSubmit | 왔다 | 왔다 | 왔다 (541B) |
+| Stop | 왔다 | 왔다 | 왔다 (608B) |
+
+**병합된다.** shim 이 사용자 훅을 지우지 않는다. **`http` 타입은 실제로 받는다** — 오전에 "미확인" 이던 것.
+`http` 가 `SessionStart` 에서 안 온 건 1회 관측이라 재확인 대상이지만, 상태에 쓰는 세 이벤트엔 안 걸린다.
+`PermissionRequest` 는 `-p` 모드에서 안 나므로 여기 없다 — 스파이크 C 가 command 타입으로 잰 것이 있다.
+
+---
+
 ## 캔버스 — 남들은 어떻게 했나 (2026-09-07 조사, 소스 직독)
 
 원문은 `docs/research/2026-09-07-canvas-placement-zoom.md`. cate·opencove·termcanvas·nodeterm·ccanvas

@@ -1,0 +1,46 @@
+{
+ "hooks": {
+  "SessionStart": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "echo EXTRA-SessionStart:$(date +%s.%N) >> <LOG>"
+     },
+     {
+      "type": "http",
+      "url": "http://127.0.0.1:8899/hook"
+     }
+    ]
+   }
+  ],
+  "UserPromptSubmit": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "echo EXTRA-UserPromptSubmit:$(date +%s.%N) >> <LOG>"
+     },
+     {
+      "type": "http",
+      "url": "http://127.0.0.1:8899/hook"
+     }
+    ]
+   }
+  ],
+  "Stop": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "echo EXTRA-Stop:$(date +%s.%N) >> <LOG>"
+     },
+     {
+      "type": "http",
+      "url": "http://127.0.0.1:8899/hook"
+     }
+    ]
+   }
+  ]
+ }
+}
