@@ -1,6 +1,8 @@
 """Spike C: claude 2.1.259 를 진짜 PTY 에서 띄우고, 승인 프롬프트·질문 UI 에서 어떤 훅이 언제 오는지 본다."""
 import os, pty, sys, time, json, select, re, fcntl, termios, struct, signal
-D=sys.argv[1]; LOG=f"{D}/hooks.log"; CWD="<저장소>"
+D=sys.argv[1]; LOG=f"{D}/hooks.log"
+# claude 를 띄울 디렉터리. 두 번째 인자로 주고, 없으면 저장소 뿌리를 쓴다.
+CWD=sys.argv[2] if len(sys.argv)>2 else os.path.abspath(os.path.join(os.path.dirname(__file__),"..","..",".."))
 open(LOG,"w").close()
 env={k:v for k,v in os.environ.items() if not (k.startswith("CLAUDE") or k.startswith("CODEX_COMPANION") or k.startswith("HERDR"))}
 env.update({"TERM":"xterm-256color","PALMER_HOOK_LOG":LOG})
