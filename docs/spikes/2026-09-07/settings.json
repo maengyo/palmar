@@ -1,0 +1,114 @@
+{
+ "hooks": {
+  "SessionStart": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 <이 디렉터리>/hooklog.py SessionStart",
+      "timeout": 5
+     }
+    ]
+   }
+  ],
+  "UserPromptSubmit": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 <이 디렉터리>/hooklog.py UserPromptSubmit",
+      "timeout": 5
+     }
+    ]
+   }
+  ],
+  "PreToolUse": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 <이 디렉터리>/hooklog.py PreToolUse",
+      "timeout": 5
+     }
+    ]
+   }
+  ],
+  "PermissionRequest": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 <이 디렉터리>/hooklog.py PermissionRequest",
+      "timeout": 5
+     }
+    ]
+   }
+  ],
+  "Notification": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 <이 디렉터리>/hooklog.py Notification",
+      "timeout": 5
+     }
+    ]
+   }
+  ],
+  "PostToolUse": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 <이 디렉터리>/hooklog.py PostToolUse",
+      "timeout": 5
+     }
+    ]
+   }
+  ],
+  "Stop": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 <이 디렉터리>/hooklog.py Stop",
+      "timeout": 5
+     }
+    ]
+   }
+  ],
+  "SubagentStop": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 <이 디렉터리>/hooklog.py SubagentStop",
+      "timeout": 5
+     }
+    ]
+   }
+  ],
+  "SessionEnd": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 <이 디렉터리>/hooklog.py SessionEnd",
+      "timeout": 5
+     }
+    ]
+   }
+  ],
+  "PreCompact": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python3 <이 디렉터리>/hooklog.py PreCompact",
+      "timeout": 5
+     }
+    ]
+   }
+  ]
+ }
+}

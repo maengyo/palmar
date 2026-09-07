@@ -1,0 +1,350 @@
+# 우리 런타임 — 실측 기록
+
+2026-09-07, macOS arm64, Python 3.13.9(측정 도구로만 썼다 — 언어 결정이 아니다), Claude Code 2.1.259.
+herdr 를 빼기로 한 뒤 "직접 갖는다" 는 것이 성립하는지를 잰 첫 기록이다.
+스크립트는 `docs/spikes/2026-09-07/`. polycanv(2026-08-19~22)에서 온 것은 출처를 적었다.
+
+**표기:** "실측" 은 우리가 이 기계에서 돌린 것이다. "조사" 는 에이전트 5개가 문서·소스·자기 기계에서
+확인한 것이고 원문은 `docs/research/2026-09-07-own-runtime.md` 에 등급(verified/likely)과 함께 있다.
+
+## 무엇을 직접 갖는가
+
+| 일 | 누가 | 근거 |
+|---|---|---|
+| PTY 띄우기·크기·입출력 | 데몬 | 표준 기능. polycanv 가 `pty`/`termios` 로 했다 |
+| 터미널 에뮬레이션 | **브라우저(xterm.js)** | pyte 로 하면 부하에서 tmux 의 8배 CPU (아래) |
+| 에이전트 상태 | CLI 훅/SSE → 데몬 | 스파이크 C. polycanv `cli-status-hooks.md` |
+| UI 가 죽어도 세션 유지 | 데몬이 PTY 소유 | polycanv #21. 재시작 방식은 미정(⑦) |
+| 좌표·크기·배치 | palmer 보관 | herdr 도 못 들고 있었다(`herdr-api.md`) |
+| 재접속 시 화면 복원 | 미정 — ⑨ | alt-screen TUI 는 다시 그리게 하면 될 수도 있다 |
+
+에뮬레이션 근거: polycanv TUI 실측(터미널 1개, `seq 1 200000`, CPU 1.50s vs tmux 0.18s).
+서버/클라이언트로 나눠 잰 값은 아니다 — 같은 파서를 서버에서 돌려도 같은 값일 것으로 보지만 **미측정**이다.
+
+---
+
+## 스파이크 A — 데몬이 죽어도 pane 프로세스가 사는가 (fd 전달)
+
+**답: 산다.** PTY master fd 를 유닉스 소켓으로 다음 프로세스에 넘기면 원래 데몬이 죽어도
+자식은 그대로 돈다.
+
+방법: `daemon1.py` 가 `pty.fork()` 로 bash 루프를 띄우고 master fd 를 `socket.send_fds` 로 넘긴 뒤
+정리 없이 `os._exit`. `daemon2.py` 가 `socket.recv_fds` 로 받아 읽고 쓴다.
+
+- daemon1 이 (스크립트가 정해 둔 0.3초 뒤) 죽은 것을 확인한 뒤 1.6초 동안 **새 출력 3줄**이 계속
+  왔다(죽기 전 버퍼에 있던 2줄까지 합쳐 5줄을 읽었다). **SIGHUP 없음**(트랩으로 확인).
+- 넘겨받은 fd 로 `TIOCSWINSZ` → 30행 x 100열이 커널에 반영됐다(되읽기로 확인).
+  자식이 SIGWINCH 를 받아 다시 그리는지는 안 쟀다 — ⑨.
+- 자식은 pid 1 로 재부모화된다 → 새 데몬은 `waitpid` 를 못 쓴다. 종료 감지는 macOS
+  `kqueue NOTE_EXIT` — **고아 프로세스에도 0ms 에 왔다**(별도 실행 1회, SIGKILL 기준).
+  Linux 는 `pidfd_open` 이고 이 기계에 없어 미실측이다.
+- 본 실행의 kqueue 검사는 이벤트를 못 받았다. SIGTERM 을 보내도 대상 bash 루프가 3초 동안 죽지
+  않았기 때문이다(원인 미확인 — 대상 쪽 문제로 보이지만 안 팠다). 그래서 SIGKILL 로 다시 쟀다.
+- 반대 사실(조사): **master fd 를 마지막으로 닫으면 자식은 SIGHUP 을 받는다**(조사 에이전트의
+  macOS 로컬 실행, Linux 는 커널 문서). 즉 "재시작에 살아남는다" = "누군가 fd 를 들고 있다" 다.
+- 넘길 것은 fd + 바이트 링버퍼(있다면) + 상태 JSON + 좌표. 화면 상태는 브라우저에 있다.
+- **언어 제약(조사):** `SCM_RIGHTS` fd 전달은 파이썬 표준(`socket.send_fds`, 3.9+)으로 되고,
+  **Node 와 Bun 은 못 한다**(Node 는 요청이 "계획 없음" 으로 닫힘, Bun 은 이슈 무응답).
+  Go/Rust 도 될 것으로 보지만 이번 조사에는 없다. → 핸드오프를 고르면 언어가 좁아진다(② ·⑦).
+
+---
+
+## 스파이크 C — 훅은 언제 오는가 (Claude Code 2.1.259)
+
+**답: `PermissionRequest` 가 대화상자와 같은 순간에 오고, 승인이든 질문이든 같은 훅이다.**
+
+방법: `--settings <스크래치 파일>` 로 훅 10종을 얹고(사용자 설정 무변경), 진짜 PTY(`pty.fork`,
+110열 x 32행)에서 `claude --permission-mode default` 를 띄워 텍스트를 쓰고 0.5초 뒤 Enter 를 보냈다.
+훅 명령은 stdin JSON 을 시각과 함께 파일에 적는 파이썬 한 줄. 환경에서 `CLAUDE*`·`HERDR*` 를 뺐다.
+아래 표는 **2차 실행** 하나다. 화면 시각은 50ms 폴링의 첫 히트라 화면↔훅 차이는 "50ms 이내" 까지만
+말할 수 있다.
+
+| 시각 | 무엇 | 훅 |
+|---|---|---|
+| 2.24s | 기동 | `SessionStart` (source, model) |
+| 2.81s | 프롬프트 1 입력 (bash 명령 시키기) | |
+| 3.35s | Enter 약 40ms 뒤 | `UserPromptSubmit` (prompt 원문 포함) |
+| 6.72s | | `PreToolUse` tool=Bash |
+| **6.78s** | **화면에 "Do you want to proceed?"** | |
+| **6.79s** | | **`PermissionRequest` tool=Bash** (PreToolUse +71ms) |
+| 7.79s | Enter (승인) | |
+| 9.40s | | `PostToolUse` tool=Bash |
+| 10.82s | | `Stop` (last_assistant_message) |
+| 11.88s | 프롬프트 2 입력 (AskUserQuestion 시키기) | |
+| 12.43s | | `UserPromptSubmit` |
+| 15.39s | | `PreToolUse` tool=AskUserQuestion |
+| **15.44s** | **화면에 질문 폼 ("Red or blue? ❯ 1. Red")** | |
+| **15.45s** | | **`PermissionRequest` tool=AskUserQuestion** |
+| 16.45s | Enter (선택) | |
+| 16.47s | | `PostToolUse` tool=AskUserQuestion |
+| 18.41s | | `Stop` |
+| 18.97s | `/exit` | |
+| 20.63s | | `SessionEnd` (reason) |
+
+- Enter 시각은 기록하지 않았다. 텍스트 2.81s + 0.5초 대기로 추정한 ≈3.31s 기준의 40ms 다.
+- **`Notification`(permission_prompt)은 즉시 오지 않는다.** 1차 실행에서 `PermissionRequest` 6.0초
+  뒤에 왔고, 2차에서는 1초 안에 승인해서 안 왔다. 공식 문서도 "입력 없이 약 6초 기다린 뒤, 키를
+  치면 미뤄진다" 고 적었다(조사). 기다림 신호로는 `PermissionRequest` 를 쓴다.
+- 공식 문서는 AskUserQuestion 에 `PermissionRequest` 가 오는지 명시하지 않는다. **우리가 실측으로
+  확인했다.** 다만 실측한 대화상자는 두 종류뿐이고, 조사는 반례도 적었다 — 샌드박스 명령의
+  네트워크 요청 프롬프트에는 안 온다고 한다. ExitPlanMode·trust 대화상자는 미확인.
+- 신호등 매핑(polycanv `hooks.py` 에서, `Notification` 만 빼고): `UserPromptSubmit`→일하는 중,
+  `PermissionRequest`→나를 기다림, `Stop`→끝남, `SessionStart`→대기. polycanv 는 `Notification`→
+  기다림도 넣었지만 6초 늦게 오는 것을 봤으므로 우리는 뺀다. `PostToolUse` 는 기다림 해제에 쓸 수 있다.
+  조사에서 더 나온 것: `StopFailure`(API 오류로 턴이 끝남 — "오류" 색 후보), `SessionStart` 의
+  source `startup|resume|clear|compact|fork`.
+- **`/exit` 뒤 `SessionEnd` 는 왔지만 프로세스는 15초 뒤에도 살아 있었다**(1회 관측, 원인 미확인).
+  1차 실행 화면에는 "Update installed · Restart to update" 가 보였지만 이 관측이 나온 2차 실행
+  화면에서는 확인하지 못했다. 데몬은 `SessionEnd` 가 아니라 **프로세스 종료**로 pane 을 닫아야 한다.
+- 훅 명령은 `python3 …` 였다. 실제 제품에서는 **`http` 타입 훅**이 낫다(조사) — 헬퍼 스크립트도
+  PATH 도 없이 데몬이 `127.0.0.1` 에서 직접 받는다. 미실측.
+- 우리 훅이 발화한 것은 확인했다. 사용자 `~/.claude/settings.json` 의 훅이 함께 돌았는지는 로그에
+  우리 것만 적혀 확인하지 못했다 — 병합은 문서 근거이고 실물 확인은 아직이다.
+- **1차 실행에서 배운 것:** 텍스트와 `\r` 을 한 번에 쓰면 제출되지 않는다. 입력창에 텍스트가 남고
+  세 번째 `\r` 이 누적 입력을 한꺼번에 제출했다. 붙여넣기 판정으로 보이지만 확인한 것은 아니다.
+  **테스트 드라이버는 반드시 나눠 보내라.**
+
+### 다른 CLI (polycanv 실측 2026-08-19 + 조사 2026-09-07, 이번에 실행 재확인 안 함)
+
+**codex 0.147.0**
+- 훅 12종(`Interrupt` 포함, `Notification` 없음). `$CODEX_HOME/config.toml` 의
+  `[[hooks.permission_request]]` 등(snake_case 키, 페이로드는 PascalCase) 또는 `~/.codex/hooks.json`.
+  `PermissionRequest` 가 승인 프롬프트와 동시에 발화(polycanv TUI 실측).
+- **훅 신뢰 게이트.** 훅 정의의 해시 단위로 신뢰를 요구하고, 신뢰 전에는 실행하지 않는다.
+  공식 문서는 기동 시 경고를 찍는다고 하고(조사), TUI 는 디렉터리·훅 두 단계 프롬프트를 띄운다
+  (polycanv TUI 실측). polycanv 가 `codex exec` 에서 본 "조용한 미발화" 는 비대화형 경로였다.
+  우회 플래그는 사용자의 보안 결정을 대신하는 것이라 쓰지 않는다.
+- **훅 없는 길(조사, 소스 기준, 실물 미확인).** codex TUI 는 기본으로 타이틀에 spinner·project 를
+  쓰고, `tui.terminal_title` 에 `status` 를 넣으면 `Working`/`[ ! ] Action Required` 를 내보낸다.
+  xterm.js 의 타이틀 이벤트로 읽으면 신뢰 게이트가 필요 없다. OSC 9 알림 경로도 있다.
+- herdr 스파이크에서 본 것: **기동 시 업데이트 대화상자를 띄울 수 있다** — 자동 입력 금지.
+
+**opencode 1.14.x** — 훅이 아니라 HTTP SSE. `opencode serve --port` 로 서버를 띄우고 pane 에는
+`opencode attach http://127.0.0.1:PORT` 를 띄우면 `GET /event` 로 `session.status{busy|idle}` /
+`permission.asked`·`permission.replied` / `question.asked` / `session.error` 가 온다(조사, 1.14.48
+OpenAPI 실물). polycanv 는 `opencode serve` 를 띄워 `/event` 가 열리는 것까지 확인했고, 실제 세션이
+🟢→🟡→🔴 를 만드는 것은 확인 못 했다(#4).
+
+**qwen 0.21** — claude 호환 훅. 프로젝트 로컬 `.qwen/settings.json` 이 먹는 것과 `SessionStart` 발화만
+확인됐다(polycanv). 인증이 없어 `UserPromptSubmit`/`Stop` 은 미확인이고 `--settings` 도 미확인.
+
+---
+
+## 조사로 확인한 것 (2026-09-07, 우리 실행 아님)
+
+### 언어별 PTY — PTY·크기·fd 전달
+
+| | PTY | 크기 변경 | fd 전달(핸드오프) |
+|---|---|---|---|
+| **Python 3.9+** | 표준 `pty`/`os.openpty` | 표준 `fcntl`/`termios` | **표준 `send_fds`** |
+| **Bun** ≥1.3.5 (Win 1.3.14+) | **내장 `Bun.Terminal`** | 내장 | **못 함** |
+| Node 26 | 없음 — `node-pty` 네이티브 애드온 | node-pty | **못 함** |
+| Deno | 없음(FFI 만) | — | — |
+| Go / Rust | 순수 Go `creack/pty` / `portable-pty` | 됨 | 조사에 없음 |
+
+### 언어별 — 웹소켓과 사용자 설치
+
+| | 웹소켓 서버 | 사용자 설치 |
+|---|---|---|
+| **Python** | 표준에 없음 — 패키지 또는 손으로 | CLT 파이썬은 3.9.6, 3.11+ 면 `uv` 가 앞에 붙는다 |
+| **Bun** | 내장(밀림 제어 있음) | 63MB 단일 바이너리를 설치 스크립트로 |
+| Node | `ws` 패키지 | 1.1.0 프리빌트가 깨졌다 — 1.2.0-beta 고정 필요 |
+| Go / Rust | 표준/크레이트 | 플랫폼별 정적 바이너리 + 설치 스크립트 |
+
+- macOS 의 `/usr/bin/python3` 은 Xcode CLT 설치를 권하는 스텁이다. 손으로 짠 RFC 6455 서버는 조사가
+  검증했다. node-pty 1.1.0 프리빌트는 mac/win 만이고 mac 것은 실행 비트가 빠져 있다.
+
+- Python 주의: `pty.fork` 는 스레드가 있으면 경고·교착 위험. 자식에게 제어 터미널을 주지 않으면
+  SIGWINCH 가 안 간다 — Claude Code 는 SIGWINCH 로 다시 그리므로 필수. Linux 는 자식 종료 후 master
+  읽기가 `EIO`, macOS 는 빈 바이트다. 바닥을 3.9 로 잡으면 편의 함수만 잃는다.
+- Bun 주의: 미리 만든 `Bun.Terminal` 을 넘기면 제어 터미널이 안 붙는 버그(미수정) → 인라인만 쓴다.
+  Linux 에서 종료 콜백이 안 오는 이슈가 있다.
+- 파이썬은 화면을 해석하지만 않으면 CPU 문제가 없다는 게 전제다 — **아직 안 잰 것**.
+
+### 재접속 복원 — 업계는 어떻게 하나
+
+- VS Code·shpool·zmx·herdr 는 **서버에 헤드리스 에뮬레이터를 두고 붙을 때 화면+스크롤백을 직렬화**해
+  보낸다. 원시 바이트 재생은 장치 질의 응답이 쓰레기로 찍히고(xterm.js 메인테이너), 이스케이프
+  중간에서 잘리고 모드 상태가 어긋난다(mulmoterminal 이 코드로 막는 것들, Zed 의 미복원 목록).
+  원시 재생 중 mulmoterminal(1MiB)은 질의 제거·경계 컷까지 하고, sshx(2MiB)는 오래된 청크를 버리고
+  순번으로 이어 붙일 뿐이다(alt-screen 복원은 목표가 아니다).
+- 그러나 서버 에뮬레이터는 pyte 문제 그 자체다. `@xterm/headless` 는 순수 JS(Node/Bun 만).
+- **codex·opencode TUI 는 alt screen 이 기본이고 Claude Code 는 조건부다** — 2026-05-06 이후 처음 쓴
+  사용자만 기본 fullscreen 이고 환경변수·저장된 설정이 뒤집는다. alt-screen 앱은 SIGWINCH 에 전체를
+  다시 그린다. **크기를 흔들어 다시 그리게 하는 것**이 남는 길이다 — herdr 는 alt-screen pane 을
+  재생하지 않고 "앱이 다시 그릴 때까지 best effort" 라고만 적었고, 크기 흔들기 구현은
+  mulmoterminal 에서 확인됐다. → ⑨.
+- 에이전트 스스로의 감독 프로세스도 있다: `claude --bg` + `claude attach <id>`, `codex app-server` +
+  `codex --remote`, `opencode serve` + `opencode attach`. pane 에 attach 클라이언트만 띄우면 palmer 가
+  재시작해도 에이전트는 산다. 콜드 재시작은 어느 도구든 `--resume <id>` 재기동이다(herdr 도 그렇다).
+
+### 브라우저 쪽 — xterm.js 로 여러 개를 그릴 때
+
+- xterm.js 6.0 은 canvas 렌더러를 없앴다 — DOM 또는 WebGL. WebGL 컨텍스트 한도는 크로미엄 렌더러
+  프로세스당 16개로 알려져 있으나 조사도 현재 기본값 상수를 확인하지 못했다(등급: likely).
+  `--max-active-webgl-contexts` 로 올릴 수 있지만 그건 크로미엄 실행 인자다 — **브라우저로 열면 우리가
+  못 올리고**, Tauri 앱은 시스템 웹뷰라 같은 인자가 있는지 미확인이다. **실제 한도는 우리가 재야 한다**
+  (nodeterm 의 브라우저판 기본 12개, cate 의 창당 6·프로세스 12가 출발점).
+- 파서가 메인 스레드라 pane N 개면 fps 가 1/N 로 간다(메인테이너 추정). 흐름 제어(ACK 워터마크:
+  VS Code 100k/5k, ttyd 100k×10)가 없으면 `yes` 하나에 키 입력이 막힌다. macOS PTY 는 1024B 씩
+  읽히므로 서버가 5ms 쯤 모아서 보내야 한다(VS Code).
+- **줌은 카메라다.** CSS transform 으로 키우면 글자 측정·선택이 어긋난 이력이 있고(이슈는 닫혔지만
+  6.0+WebGL 에서 미확인), 줌 때문에 PTY 크기를 바꾸면 안 된다. nodeterm 은 캔버스 좌표계에서 크기를
+  맞추고 안 보이는 것은 버린다.
+- xterm.js 6.0.0 에 스크롤백 있는 상태로 행을 늘리면 터지는 버그가 열려 있다 — 창 크기 조절이 핵심
+  조작인 우리에게 직접 해당.
+- 입력 지연 기준점: xterm 5.3ms vs Hyper(xterm.js/Electron) 39.8ms — 리눅스 노트북 측정이라 우리
+  기계 값이 아니다. 로컬호스트면 웹소켓 홉이 1ms 미만이라 렌더 한 프레임이 지배할 것으로 보나
+  이건 조사 노트의 추정이고, PTY→웹소켓→xterm.js 의 공개 실측치는 어디에도 없다.
+
+### 비교 대상 — 형태와 크기 (2026-09 조사)
+
+| 제품 | 형태 | 크기(macOS arm64) |
+|---|---|---|
+| cate 1.7.0 (2.1k★) | Electron 41 + node-pty, IDE | dmg 496MB (설치 1.1GB 는 1.6.0 기준) |
+| Collaborator 0.8.4 (2.9k★) | Electron 40 + node-pty 사이드카 | zip 153MB |
+| nodeterm 0.3.4 (1.8k★, BUSL) | Electron + tmux; 브라우저 서버판 | dmg 168MB |
+| OpenCove 0.3.2 (1.6k★) | Electron + xyflow; 실험적 웹 UI | dmg 158MB |
+| TermCanvas 0.39 (394★) | Electron + xyflow | dmg 155MB |
+| Horizon 0.2.7 (704★) | Rust/egui, alacritty_terminal | tar.gz 23MB / 인스톨러 37MB |
+| GraphCode 0.1.63 (72★) | Swift, macOS 전용, 그래프 캔버스 | dmg 19.5MB |
+| CodeGrid (25★) | Tauri 2 + portable-pty | dmg 12.5MB |
+| mulmoterminal | Node + node-pty + tmux, `npx`, 브라우저 그리드 | — |
+
+### 비교 대상 — 상태 감지와 세션 유지
+
+| 제품 | 상태 감지 | 세션 유지 |
+|---|---|---|
+| cate | 훅(1.7.0 기준) | 스크롤백 로그 재생 + `--resume` |
+| Collaborator | — | **영속 node-pty 사이드카** |
+| nodeterm | — | **tmux — 앱 재시작·재부팅에 살아남음** |
+| OpenCove | Worker 가 루프백 훅 수신 | **Worker 가 PTY 소유** |
+| TermCanvas | 훅 | — |
+| Horizon | — | 에이전트 `--resume`(CLI 가 지원하는 범위) |
+| GraphCode | — | **zmx 세션 — 앱 종료·재부팅에 살아남음** |
+| CodeGrid | 미기재 | — |
+| mulmoterminal | 미확인 | 마지막 1MiB 원시 재생 |
+
+- cate 의 상태 감지는 2026-05 까지 1초 프로세스 트리 폴링이었고 불안정하다는 이슈 #140 이 있었다.
+  훅으로 바뀐 시점은 미확인. 데몬이 앱 종료 시 죽는지는 조사 등급이 likely 다(코드 주석 추정).
+- cate 의 CPU 교훈(메인테이너 PR): 1초 lsof/프로세스 폴링과 blur 위에 항상 켜진 CSS 애니메이션이
+  45% 를 먹었고, 고치니 2~3%. 커서 깜박임도 기본 꺼짐으로 돌렸다.
+  **pane 이 8~16개면 유휴 비용이 곧 제품이다.**
+
+---
+
+## 캔버스 — 남들은 어떻게 했나 (2026-09-07 조사, 소스 직독)
+
+원문은 `docs/research/2026-09-07-canvas-placement-zoom.md`. cate·opencove·termcanvas·nodeterm·ccanvas
+다섯 개의 소스를 읽은 결과다. 우리가 돌려 본 것은 아니다.
+
+### 새 창을 어디에 놓는가 — 다섯 가지 답
+
+| 앱 | 방식 | 자리가 없으면 |
+|---|---|---|
+| **cate** | 기준 창에서 **네 방향 광선**을 쏘고, 막히면 그 창 너머로 점프 | 전부의 맨 아래에 쌓는다 |
+| opencove | 뷰포트 중앙에서 24px 격자 위 **체비쇼프 링 탐색** | **만들기를 거부하고 PTY 를 죽인다** |
+| termcanvas | 새 창을 기준점에 **못 박고 기존 창들을 밀어낸다**(최소 이동 벡터 20회 반복) | — |
+| nodeterm | 뷰포트 중앙 + 창 크기만큼 링 탐색 | 포기하고 겹친다 |
+| ccanvas | 뷰포트 중앙 + 8칸 계단. **충돌 검사 없음** | 그냥 겹친다 |
+
+- cate 의 기준 창은 **포커스된 창, 없으면 가장 최근에 만든 창**이다. 네 방향에서 찾은 자리 중
+  중심이 가장 가까운 것을 고른다.
+- **충돌 판정은 전부 단순 AABB 선형 검사**다. 공간 인덱스를 쓰는 곳이 하나도 없다.
+- **cate 에는 "겹치기 허용" 설정이 없다.** 자동 배치는 늘 겹침을 피하고, 사람이 끌면 자유롭게 겹친다.
+  설정은 `snapToGrid`(기본 꺼짐)와 `placementPicker`(기본 켜짐) 둘뿐이다.
+- cate 의 상수: 간격 40, 격자 20, 광선 200회 한도. 기본 터미널 크기 640x400 고정(뷰포트에서 유도하지도,
+  기억하지도 않는다). termcanvas 만 **마지막으로 조절한 크기를 기억**하고 뷰포트 비율에서 유도한다.
+- cate 의 **번호 붙은 후보 고르기**(ghost picker)가 흥미롭다 — 빈 공간을 최대 사각형으로 쪼개고 가까운
+  순으로 여섯 개를 제시하며, 각 후보는 **옆 창의 크기를 그대로 흉내 낸다**(그래서 결과가 격자처럼 정렬된다).
+  빈 캔버스에서는 자리 대신 **크기 세 가지**를 고르게 한다.
+- cate 의 정렬 안내선은 **드래그가 아니라 배치에만** 걸린다. 화면에 그리는 안내선 컴포넌트는 죽은 코드다.
+
+### 줌 아래에서 xterm.js 를 멀쩡하게 두기 — 값이 비싸다
+
+**cate 는 이걸 풀었고, 그 과정에서 여덟 가지를 고쳤다.** +/- 버튼이 공짜가 아니라는 증거다.
+
+1. **줌으로 PTY 를 리사이즈하면 안 된다.** cate 가 겪은 회귀: 상자는 1.25배가 됐는데 셀은 1.286배가 돼
+   **90열이 87열이 됐고**, 그게 SIGWINCH 로 나가 셸과 TUI 가 다시 그렸다. 원인은 **xterm 이 셀 픽셀을
+   올림**하기 때문이다(13px·DPR 1 에서 1.25배는 8.75px 를 원하는데 9px 를 받는다). 이 조사에서 가장
+   값진 한 줄이다.
+2. **해상도는 글꼴 크기로 올린다.** VS Code 의 수법을 흉내 내, 줌이 올라가면 xterm 의 `fontSize` 를
+   `기본 × 배율` 로 올려 **글리프 아틀라스를 다시 굽고**, 렌더 상자를 `1/배율` 로 되돌린다.
+   배율은 `[1.0, 1.25, 1.5, 1.75, 2.0, 2.5]` 로 계단이고, 1.0 이하로는 안 내려간다(축소는 이득이 없다).
+3. **셀을 다시 잰다.** 배율을 믿지 않고 실제 셀 크기를 **축마다 따로** 재서 상자를 맞춘다. 가로세로가
+   따로 올림돼 셀 비율이 단계마다 틀어지기 때문이다(7:15 → 9:19 → 11:23).
+4. **마우스 좌표를 다시 쓴다.** xterm 은 셀을 `measureText` 로 재고(변형 영향 없음) 마우스는
+   `getBoundingClientRect` 로 계산한다(변형 영향 있음). cate 는 캡처 단계에서 `clientX/Y` 를 축마다
+   다른 비율로 고쳐 쓴다. termcanvas·opencove 는 대신 xterm 의 비공개 `_mouseService` 에 손을 댄다 —
+   그쪽이 **드래그 선택의 자동 스크롤 경계까지** 덮는다(cate 의 방식은 그건 못 덮는다).
+5. **줌 뒤에 터미널이 하얘진다.** 합성 레이어가 새 배율로 다시 래스터화될 때 WebGL 그리기 버퍼가 비어
+   올라온다. cate 는 줌이 바뀔 때마다 두 프레임 뒤에 `refresh(0, rows-1)` 를 강제한다. **축소 쪽이 특히**
+   그렇다 — 확대는 아틀라스를 다시 구우면서 저절로 낫는다.
+6. **스크롤바 폭이 캐시돼 있다.** xterm 은 생성자에서 한 번 재고 마는데, 상자를 배율로 키우면 그 값이
+   낡아 FitAddon 이 오른쪽 열을 잘라 먹는다. cate 는 다시 재서 비공개 필드에 써 넣는다.
+7. **DPR 이 바뀌면 기준값이 무효다.** 같은 글꼴이 DPR 1 에서 7px, DPR 2 에서 6.5px 로 잰다.
+8. **제스처 중에는 터미널을 무르게 만든다.** `pointer-events: none` 을 몸통 클래스로 걸고, 그 클래스를
+   **참조 세기로 관리**한다 — 안 그러면 한 제스처가 끝나며 남의 제스처 클래스를 지워 버려 앱을 다시
+   켜야 풀리는 상태가 된다(cate 가 실제로 겪었다).
+
+**세 갈래가 있다.**
+- **cate**: 계단 배율 + 좌표 다시 쓰기. 계단이라 아틀라스를 덜 굽지만 좌표가 어긋나 손으로 고친다.
+- **ccanvas**: 줌을 정확히 따라간다. 좌표는 안 어긋나지만 줌이 멎을 때마다 아틀라스를 다시 굽는다.
+  ccanvas 주석이 계단 방식을 대놓고 나무란다 — "선택 강조가 커서보다 한두 줄 아래로 밀렸다".
+- **opencove**: `@xterm/addon-webgl` 을 **패치해** `setRasterScale()` 을 넣는다. 글꼴 크기를 건드리지
+  않고 렌더러의 실효 DPR 만 올리므로 **행·열과 배치가 구조적으로 안 흔들린다.** 셋 중 가장 깨끗하지만
+  남의 패키지를 패치해야 한다.
+
+### 버벅임이 나는 자리 (실제 사례)
+
+- **WebGL 컨텍스트는 예산으로 관리한다.** cate 는 창당 6개, 프로세스 전체 12개로 막고 넘으면 DOM
+  렌더러로 떨어뜨린다 — "크로미엄이 조용히 넘치는 컨텍스트를 안 그려서 터미널이 하얘진다".
+  우리 앞선 조사의 "렌더러당 16개" 보다 보수적이고, 실제로 겪고 정한 값이다.
+- **줌 값을 각 창에 prop 으로 내리면 죽는다.** cate 는 그것 때문에 **초당 374번 다시 그렸고**, 스토어에서
+  직접 읽게 바꿔 초당 3번이 됐다.
+- **화면 밖 창은 아예 마운트하지 않는다.** cate 는 뷰포트 + 한 화면 여백 밖을 잘라 낸다. 다만
+  **아무것도 버리지 않는다** — DOM 에서만 떼고 터미널과 PTY 는 살아 있다.
+  termcanvas 는 정반대로 **절대 잘라 내지 않는다**("뷰포트 가시성은 상태를 가진 터미널에 너무 변덕스럽다").
+- **살아 있는 blur 위에 계속 도는 애니메이션**이 cate 의 CPU 45% 원인이었다.
+- 팬은 **장치 픽셀 단위로 스냅**해야 한다(nodeterm). 안 하면 드래그 중 같은 글자가 매 프레임 조금씩
+  다르게 리샘플링돼 **글자가 물결친다**.
+
+---
+
+## polycanv 에서 가져올 것 (코드가 있다, 테스트도 있다)
+
+- `status.py` — 상태 계약. "놓치는 것이 헛보는 것보다 나쁘다": 약한 근거는 주의 상태로 올릴 수는
+  있어도 내릴 수는 없다, 지나간 이벤트는 버린다, 들여다본 것은 끝남만 푼다.
+- `hooks.py` / `hook_entry.py` — 훅 얹기(`--settings`)와 훅 진입점(무조건 exit 0). `http` 훅으로 가면
+  진입점은 필요 없어진다.
+- `bridge.py` — 훅 → 데몬 유닉스 소켓. 경로 100자 한도, 죽은 소켓 청소, 0.5초 시한.
+- `terminal.py` 의 PTY 부분 — `pty.fork`, `TIOCSWINSZ`, 읽기 예산, 재생 버퍼.
+  pyte·Textual 부분은 가져오지 않는다.
+- `web.py` — 포트 고르기 규칙(지정했으면 옮기지 않고 실패, 아니면 옆으로).
+- `scripts/dev/bench.py` — 셸만·tmux·polycanv 를 같은 조건으로 재는 도구. 비교 대상에 palmer 를 넣는다.
+
+---
+
+## herdr 조사에서 남는 것 (`docs/herdr-api.md`)
+
+- **우리 런타임이 제공해야 할 것의 목록:** 차분 프레임이 아니라 원시 바이트를 흘리면 되므로
+  더 단순하다. 입력·크기·스크롤·해제 명령, 세션 스냅샷, 상태 이벤트 구독, 자리 저장.
+- **비교 기준:** herdr 서버 RSS 35MB, 컨트롤러 6MB/pane(1회 측정). 최대 출력을 4초간 쏟았을 때
+  PTY 파싱에 코어 하나를 다 썼다(80x24 컨트롤러 하나, 4.6초 창).
+- **화면 정규식 감지의 한계:** codex 업데이트 대화상자 → `idle`. 우리는 훅으로 간다.
+- **자식이 환경을 물려받는 문제** — 그대로 해당된다.
+  (텍스트와 Enter 분리는 herdr 기록이 아니라 오늘 스파이크 C 1차 실행에서 나왔다.)
+
+---
+
+## 아직 안 잰 것
+
+- PTY → 웹소켓 → xterm.js 파이프라인의 지연·CPU·최대 출력 처리. **Python 과 Bun 으로 각각 잰다** —
+  ② 의 입력. 흐름 제어와 병합을 넣은 채로. 브라우저 렌더는 사람이 봐야 한다.
+- 재접속 복원(⑨): alt-screen 에이전트에 SIGWINCH 흔들기만으로 충분한가. Classic 렌더러는 어떤가.
+  셸 pane 의 원시 재생.
+- xterm.js 8~16개 + WebGL 예산제의 브라우저 CPU·메모리. 캔버스 줌에서 6.0+WebGL 의 글자 측정.
+- `http` 훅 타입 실측. codex 타이틀 상태 실물. opencode `serve`+`attach`+SSE 실구동.
+  claude `--settings` 가 사용자 훅과 실제로 병합되는지.
+- 에이전트 자체 감독 프로세스에서 클라이언트가 죽어도 턴이 계속되는가.
+- WSL 에서의 전부(polycanv #7). 회사 제약이 빠졌으니 우선순위는 사람이 정한다.
