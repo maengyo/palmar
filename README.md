@@ -180,10 +180,14 @@ wrong.
 
 ## Still unknown
 
-- **The daemon's language.** Python (handoff possible, WebSocket by hand) vs Bun (PTY and WebSocket
-  built in, no handoff). Both were built and measured, and **throughput did not separate them** —
-  CPU and bytes per second are effectively identical. Two things did: Python genuinely stops
-  reading the PTY when the browser falls behind and Bun cannot, and RSS is 31MB against 87MB.
+- ~~The daemon's language~~ — **settled 2026-09-07: Python, floor at 3.9.** Both were built and
+  measured and throughput did not separate them. Flow control did: when the browser falls behind,
+  Python stops reading the PTY and the child blocks in `write()`; Bun has no way to — `Bun.Terminal`
+  exposes neither a pause nor the fd, so there is nothing to signal (31MB against 87MB). Install
+  settled it further: `/usr/bin/python3` is 3.9.6 and every spike runs on it, so there is nothing
+  to download — the stub is byte-identical to `/usr/bin/git`, so a machine with git has it.
+  **Kept reversible**: no Python-only structure, the protocol written down, terminal state outside
+  the daemon. If Bun opens the fd, this gets looked at again.
 - ~~Daemon restart strategy~~ — **settled 2026-09-07: the daemon does not restart.** Updates restart
   it; agents come back with `--resume` and shell panes die. Handoff was built and worked (spike G)
   but was not chosen — it would pin the language to Python and has to be designed in from the start.
