@@ -1,182 +1,224 @@
 # palmer
 
-> ⚠️ 아직 아무것도 만들지 않았다. 이 문서는 **계획과, 코드를 쓰기 전에 확인한 사실**이다.
+*Read this in [한국어](README.ko.md).*
 
-돌고 있는 코딩 에이전트들을 위한 공간형 캔버스. 터미널이 놓아둔 자리에 그 크기로 있고,
-각각이 **일하는 중인지 · 나를 기다리는지 · 끝났는지** 보인다. 브라우저 탭을 닫아도
-세션은 그 자리에 그대로 있다.
+> ⚠️ Nothing is built yet. This document is **the plan, and the facts checked before writing code**.
 
-**런타임은 우리 것이다.** herdr·tmux·zellij 같은 남의 멀티플렉서 위에 얹지 않는다.
-대신 좁게 갖는다 — PTY 를 띄우고, 바이트를 옮기고, CLI 의 훅을 받고, 자리를 기억한다.
-터미널을 그리는 일은 브라우저의 xterm.js 가 한다.
+A spatial canvas for coding agents that are already running. Terminals sit where you put them,
+at the size you gave them, and each one shows whether it is **working · waiting on you · done**.
+Close the browser tab and the sessions are still there.
 
-**화면은 셋이다.** 오른쪽에서 폴더를 고르면 그 경로의 셸이 캔버스에 열리고, 그 안에서 무엇을
-돌릴지는 사용자가 정한다. 왼쪽 목록은 어느 터미널이 나를 기다리는지 보여 준다 —
-창이 밀려 자리를 옮겼어도, 화면 밖에 있어도.
+**The runtime is ours.** palmer does not sit on someone else's multiplexer — not herdr, not tmux,
+not zellij. Instead it owns a narrow slice: spawn PTYs, move bytes, receive hooks from the CLIs,
+remember where windows are. Drawing the terminal is xterm.js's job, in the browser.
+
+**Three columns.** Pick a folder on the right and a shell opens on the canvas at that path; what
+you run inside it is up to you. The list on the left shows which terminal is waiting on you — even
+if that window got pushed aside, even if it is off screen.
 
 ```
-┌─ 왼쪽 ────┬─ 캔버스 ───────────────┬─ 오른쪽 ──┐
-│ 터미널    │ 터미널이 놓아둔 자리에 │ 디렉터리  │
-│ 목록      │ 그 크기로. 겹치지 않고 │ 폴더만 ↻  │
-│ 기다리는  │ 새 것이 옆을 밀어낸다  │ 게으르게  │
-│ 것이 위로 │ 하나를 크게도 본다     │ 읽는다    │
+┌─ left ────┬─ canvas ───────────────┬─ right ───┐
+│ terminal  │ terminals sit where    │ directory │
+│ list      │ you put them. Nothing  │ folders   │
+│ waiting   │ overlaps: a new window │ only, ↻   │
+│ on top    │ pushes its neighbour   │ read lazy │
 └───────────┴───────────┬────────────┴───────────┘
-                        │ 웹소켓 (연결 수는 ① 에서 정한다)
+                        │ WebSocket (count: open question)
 ┌───────────────────────┴────────────────────────┐
-│  palmer 데몬 — PTY 소유 · 훅 수신 · 상태 중계  │
-│  브라우저가 없어도 산다                        │
+│  palmer daemon - owns PTYs, receives hooks,    │
+│  remembers places. Alive with no browser.      │
 └──────┬─────────────────────┬───────────────────┘
-       │ PTY (원시 바이트)   │ 훅 — 환경변수로 짝을 짓는다
-       │ (입력·크기 포함)    │ (사용자가 한 번 설치한다)
+       │ PTY (raw bytes,     │ hooks - paired by env var
+       │ input, resize)      │ (you install them once)
 ┌──────┴─────────────────────┴───────────────────┐
-│  pane: 셸. 그 안에서 claude·codex·무엇이든     │
-│  각각 진짜 PTY. 훅/SSE 가 상태를 준다          │
+│  pane: a shell. Run claude, codex, anything.   │
+│  Each a real PTY. Hooks/SSE report status.     │
 └────────────────────────────────────────────────┘
 ```
 
-## 어디서 왔는가
+## Where this came from
 
-개념은 [cate](https://github.com/0-AI-UG/cate) 다 — 터미널을 줌 되는 캔버스에 올리고
-에이전트 상태를 붙인 Electron IDE. palmer 는 그중 터미널과 신호등만 갖는 좁은 판이다.
+The idea is [cate](https://github.com/0-AI-UG/cate) — an Electron IDE that puts terminals on a
+zoomable canvas and attaches agent status to them. palmer is the narrow slice of that: terminals
+and status lights, nothing else.
 
-이 프로젝트는 네 번째 시도다. 그 기록을 숨기지 않는다.
-- **polycanv 의 zellij 판** (2026-08-18~20): 타일링이라 자유 배치가 애초에 안 됐고 설치가 세 줄이었다.
-  엔진을 먼저 고르고 요구를 나중에 물은 첫 번째다.
-- **polycanv** (2026-08, 파이썬 TUI — `textual-serve` 로 브라우저에도 띄웠다): 자유 배치·신호등·훅까지
-  됐다. 그러나 파이썬 터미널 에뮬레이터(pyte)가 부하에서 tmux 의 8배 CPU 를 썼고(`seq 1 200000`
-  CPU 1.50s vs 0.18s, 터미널 1개 — polycanv 자신은 "AI CLI 를 지켜보는 용도에는 문제가 안 된다"고
-  적었다), TUI 라 pane 마다 다른 배율·겹침이 없었고, 브라우저 탭을 닫으면 세션이 다 죽었다(#21).
-- **herdr 위의 클라이언트** (2026-09-01~04): 러스트 멀티플렉서가 PTY·영속성·상태를 맡고
-  palmer 는 캔버스만. 스파이크로 스트림과 크기 조절이 성립했다(헤드리스·TUI 없음 조건).
-  상태는 절반이었다 — 질문 UI 는 잡혔지만 bash 승인 프롬프트는 두 번 다 확인에 실패했고,
-  화면 정규식이라 codex 의 대화상자를 `idle` 로 놓쳤다(`docs/herdr-api.md`).
-  그러나 **기능이 비슷해도 남의 프로그램에 종속되는 것은 별로다**는 판단으로 접었다(2026-09-07, 사용자).
-- **palmer** (지금): TUI 를 중계하는 대신 브라우저가 직접 그린다. 에뮬레이션은 xterm.js 로 넘기고,
-  글자는 브라우저가 줄이고(polycanv #20 이 이미 확인한 길), 데몬이 PTY 를 소유해 UI 보다 오래
-  산다(#21 이 그린 모양). **셋 중 앞의 둘은 2026-09-07 에 쟀고**(스파이크 D), 데몬이 UI 보다
-  오래 사는 것은 fd 전달까지만 확인했다 — 재접속 복원은 아직이다.
+This is the fourth attempt. The record is not hidden.
 
-## 왜 만드는가 — 정직하게
+- **polycanv on zellij** (2026-08-18 to 20): tiling, so free placement was never possible, and
+  install took three lines. The first time an engine got picked before the requirements were asked.
+- **polycanv** (2026-08, a Python TUI, also served to the browser via `textual-serve`): free
+  placement, status lights, and hooks all worked. But the Python terminal emulator (pyte) burned
+  8× the CPU of tmux under load (`seq 1 200000`: 1.50s vs 0.18s CPU, one terminal — polycanv itself
+  noted this "is not a problem for watching AI CLIs"), being a TUI meant no per-pane scale and no
+  overlap, and closing the browser tab killed every session (#21).
+- **A client on top of herdr** (2026-09-01 to 04): a Rust multiplexer would own PTYs, persistence
+  and status; palmer would be just the canvas. Spikes confirmed streaming and resize (headless, no
+  TUI). Status only half worked — the question UI was caught, but the bash approval prompt failed
+  detection both times, and because detection was a screen regex it misread a codex dialog as
+  `idle` (`docs/herdr-api.md`). Dropped anyway, on the judgement that **depending on someone else's
+  program is not worth it even when the features line up** (2026-09-07).
+- **palmer** (now): instead of relaying a TUI, the browser draws. Emulation goes to xterm.js, the
+  browser shrinks the glyphs (the path polycanv #20 already confirmed), and a daemon owns the PTYs
+  so it outlives the UI (the shape #21 sketched). **The first two of those three were measured on
+  2026-09-07** (spike D); outliving the UI is confirmed only as far as fd passing — reconnect
+  restore is still open.
 
-**이 분야는 붐빈다.** 2026-09 기준 "에이전트 터미널을 캔버스에 놓는" 제품이 이미 여럿이다
-(`docs/own-runtime.md` 의 표): cate(2.1k★, Electron IDE, dmg 496MB), Collaborator(2.9k★, Electron),
-nodeterm(1.8k★, Electron+tmux, 브라우저 서버판 있음), OpenCove(1.6k★, Electron, 실험적 웹 UI),
-TermCanvas(394★), Horizon(704★, Rust, 23MB), CodeGrid(Tauri, 12.5MB), mulmoterminal(`npx`, 브라우저 그리드).
-herdr 위에도 클라이언트가 많다(`herdr-api.md` 의 조사).
+## Why build it — honestly
 
-palmer 가 다르게 하려는 것은 넷이다: **브라우저만**(Electron 없음), **런타임까지 포함해 설치 한 줄**,
-**남의 멀티플렉서 없음**, **UI 보다 오래 사는 세션**. 가장 가까운 것은 OpenCove 의 Worker + 실험적
-웹 UI(설치 스크립트 있음, Worker 가 PTY 소유)와 nodeterm 서버판(tmux 기반, 설치 여러 줄)이다.
-palmer 의 자리는 그 넷을 실험이 아니라 기본으로 하는 것이다.
-**검색 범위는 2026-09-07 의 조사 5각도**(`docs/research/…`)이고, 검색으로 없다고 한 것이지
-세상에 없다는 뜻은 아니다. 이건 취향에 가깝지 남이 못 하는 능력이 아니다.
+**This space is crowded.** As of 2026-09 there are already several products that put agent
+terminals on a canvas (see the table in `docs/own-runtime.md`): cate (2.1k★, Electron IDE, 496MB
+dmg), Collaborator (2.9k★, Electron), nodeterm (1.8k★, Electron + tmux, has a browser server
+edition), OpenCove (1.6k★, Electron, experimental web UI), TermCanvas (394★), Horizon (704★, Rust,
+23MB), CodeGrid (Tauri, 12.5MB), mulmoterminal (`npx`, browser grid). There are plenty of clients
+on herdr too (`herdr-api.md`).
 
-## 프런트엔드는 하나, 브라우저
+What palmer wants to do differently is four things: **browser only** (no Electron), **one-line
+install including the runtime**, **no third-party multiplexer**, and **sessions that outlive the
+UI**. The closest existing things are OpenCove's Worker plus its experimental web UI (has an
+install script, Worker owns the PTYs) and nodeterm's server edition (tmux-backed, multi-line
+install). palmer's place is making those four the default rather than the experiment.
 
-브라우저가 기본이고 이유는 **줌**이다. `Ctrl+-` 로 셀이 작아지면 터미널마다 행·열이 늘고
-캔버스에 더 들어온다. 이게 이미 우리가 원하던 것이라 **캔버스 자체의 카메라 줌은 첫 버전에서 뺐다.**
-대신 그 단축키를 화면에 잘 보이게 적는다 — 안 보이면 없는 기능이다.
-터미널 에뮬레이터도 폰트를 줄일 수는 있지만 앱 전체가 한 배율이다 — pane 마다 다른 배율·연속 줌·
-겹침은 우리가 원하는 것이고 TUI 로는 길이 안 보인다. polycanv 는 "글자를 못 줄인다" 는 벽까지만
-부딪혔고(#20), 그건 브라우저로 나가서 풀었다.
-크로미엄 계열 브라우저를 `--app=http://127.0.0.1:…` 로 열면 주소창 없는 창이 되어 앱처럼 읽힌다
-(Firefox·Safari 에는 없다).
+**The search was five angles on 2026-09-07** (`docs/research/…`), so "nobody has done this" means
+"the search did not find it", not that it does not exist. This is closer to a preference than to a
+capability nobody else has.
 
-나중에 진짜 창이 필요하면 **같은 웹 코드를 Tauri 에 넣는다**(CodeGrid 가 12.5MB 로 보여 준다).
-Electron 은 우리가 불평하는 그것이므로 답이 아니다.
+## One frontend: the browser
 
-## 코드 전에 확인한 것
+The browser is the default, and the reason is **zoom**. `Ctrl+-` shrinks the cell, so every
+terminal gets more rows and columns and more of them fit on the canvas. That is already what we
+wanted, so **the canvas's own camera zoom is cut from the first version.** What replaces it is
+putting that shortcut somewhere you can see it — an invisible feature is not a feature.
 
-**2026-09-07, 우리 런타임 — 실측 (`docs/own-runtime.md`)**
-- **데몬이 죽어도 pane 프로세스는 산다.** PTY master fd 를 유닉스 소켓으로 다음 프로세스에
-  넘기고 원래 데몬이 죽었을 때, 자식은 HUP 없이 계속 돌았고 넘겨받은 fd 로 크기 변경도 됐다.
-  고아가 된 자식의 종료도 kqueue 로 0ms 에 잡혔다(별도 실행 1회, SIGKILL 기준).
-- **훅은 대화상자와 같은 순간에 온다.** Claude Code 2.1.259 에서 승인 프롬프트가 화면에 뜬 것과
-  `PermissionRequest` 훅이 같은 50ms 폴 안에 들어왔다(화면 감지 해상도 50ms, 1회). 사람이 볼 때와
-  훅이 올 때를 구분할 수 없다. **AskUserQuestion 도 같은 훅**으로 온다 — 승인과 질문 두 종류에서
-  훅 하나로 잡혔다(다른 대화상자는 미확인). `Notification` 은 승인이 6초 넘게 안 되면 오는 지연
-  알림이다(1회 관측 6.0초). 스파이크에서는 `--settings` 로 얹어 확인했고, 제품에서는 사용자가
-  한 번 설치하는 전역 훅으로 간다(아래 "정해진 것").
-- **polycanv 에서 가져올 것이 많다** — 훅 얹기, 상태 병합 규칙, 유닉스 소켓 브리지, PTY 처리,
-  비교 벤치마크 도구. claude·codex 의 훅은 2026-08-19 에 TUI 에서 실측돼 있고, opencode 는 SSE
-  스펙, qwen 은 `SessionStart` 까지만이다.
+A terminal emulator can shrink its font too, but the whole app is one scale. Per-pane scale,
+continuous zoom, and overlap are what we want, and a TUI has no path to them. polycanv hit the
+"cannot shrink the glyphs" wall (#20) and solved it by leaving for the browser.
 
-**2026-09-07, 조사 — 에이전트가 문서·소스·로컬 실행으로 확인 (`docs/research/2026-09-07-own-runtime.md`)**
-- **fd 전달(핸드오프)은 파이썬 표준 라이브러리로 된다**(`socket.send_fds`). **Node·Bun 은 못 한다.**
-  Go·Rust 도 될 것으로 보지만 이번 조사에 없다.
-- **Bun 은 PTY 와 웹소켓 서버가 내장**이다(1.3.5+, **Windows 는 1.3.14+** — 앱이 Windows 를 덮으니
-  중요하다). Node 는 node-pty 네이티브 모듈이 필요하고,
-  안정판 1.1.0 의 프리빌트는 mac/win 만이며 mac 것은 실행 비트가 빠져 깨져 있다(1.2.0-beta 는 고쳐졌다).
-  파이썬은 PTY·fd 전달이 표준이지만 웹소켓은 없고, macOS 의 `/usr/bin/python3` 은 Xcode CLT 설치를
-  권하는 스텁이다(CLT 를 깔면 3.9.6).
-- **Claude Code 훅에 `http` 타입**이 있어 헬퍼 스크립트 없이 데몬이 직접 받을 수 있다.
-  **Codex 는 터미널 타이틀에 `Action Required` 를 쓸 수 있어** 훅 신뢰 게이트 없이도 상태가
-  읽힌다(소스 기준, 실물 미확인).
-- **codex·opencode TUI 는 alt screen 이 기본이고 Claude Code 는 조건부다**(2026-05-06 이후 처음 쓴
-  사용자만 기본 fullscreen, 환경변수·저장된 설정이 뒤집는다). 재접속 복원은 SIGWINCH 로 다시
-  그리게 하는 것부터 잰다.
-- **xterm.js 6** 은 DOM/WebGL 만 있고 WebGL 컨텍스트는 렌더러 프로세스당 16개로 알려져 있다
-  (조사도 현재 기본값 상수는 확인 못 했다). 흐름 제어가 없으면 `yes` 하나에 입력이 막힌다.
-  크기를 키울 때 터지는 6.0.0 버그가 열려 있다.
+Open a Chromium-family browser with `--app=http://127.0.0.1:…` and you get a window with no
+address bar, which reads like an app (Firefox and Safari have no equivalent).
 
-**2026-09-01~04, herdr (`docs/herdr-api.md`)** — 이제 비교 기준이다: herdr 서버 RSS 35MB,
-pane 당 컨트롤러 6MB(1회 측정). 그리고 화면 정규식 감지가 실제로 틀린 사례.
+When a real window is needed later, **the same web code goes into Tauri** (CodeGrid shows this at
+12.5MB). Electron is the thing we are complaining about, so it is not the answer.
 
-## 2026-09-07 에 정해진 것 (스케치로 확인)
+## What was checked before any code
 
-- **오른쪽 디렉터리 레일** — 폴더만 보이고 파일은 안 보인다. 권한이 닿는 홈이 다 보이고 git 저장소는
-  브랜치가 붙는다. **펼칠 때만 그 폴더 하나를 읽고**, 다시 읽는 것은 새로고침 버튼이 시킨다.
-  `git status` 는 안 돌린다 — 저장소마다 도는 폴링이 cate 에서 45% CPU 를 냈다
-- **왼쪽 터미널 목록** — 기다리는 것이 맨 위로. 창은 밀려 움직여도 목록의 자리는 안 움직인다
-- **palmer 는 셸만 연다** — 도구 목록을 갖지 않는다. `claude` 를 치는 것은 사용자다
-- **훅은 사용자가 한 번 설치한다** — palmer 가 에이전트를 띄우지 않으니 `--settings` 를 붙일 자리가
-  없다. 전역 훅 + 터미널마다의 환경변수로 짝을 짓는다. 프로젝트마다 파일을 심는 길은 뺐다 —
-  터미널이 여러 프로젝트에 흩어지고 안에서 `cd` 하면 깨지기 때문이다
-- **겹치지 않는다.** 새 창은 제자리에 앉고 거기 있던 창을 밀어낸다(termcanvas 식 최소 이동).
-  겹치기 설정은 없앴다 — 겹칠 일이 없기 때문이다
-- **하나를 캔버스 크기로 펴서 볼 수 있다.** 행·열이 실제로 늘어난다(카메라가 아니다).
-  레일은 남는다 — 크게 보는 동안에도 누가 기다리는지는 보여야 한다
-- **카메라 줌은 첫 버전에서 뺀다.** 대신 브라우저 `Ctrl+-` 를 화면에 잘 보이게 적는다 —
-  그게 이미 셀을 줄여 캔버스를 더 보여 준다. cate 가 카메라 줌 하나로 여덟 가지를 고쳐야 했다
-- **폴더 생성만 넣는다.** 파일 만들기·지우기·이름 바꾸기는 안 넣는다 — 그건 파일 관리자이고,
-  터미널이 바로 옆에 있다
-- **창 모서리는 둥글다.** 다만 macOS 식 빨강·노랑·초록 버튼은 안 쓴다 — 그 세 색은 신호등의 것이다
-- **앱을 낸다** — macOS·Windows·Linux AppImage·deb. Tauri 로 감싼다. 순서는 브라우저가 먼저다
-- **WSL 은 데몬을 WSL 안에서 돌려 푼다**
-- **"가볍다" 는 버벅이지 않는다는 뜻이다** — 크기보다 프레임 시간과 입력 지연을 먼저 잰다.
-  **2026-09-07 에 쟀다:** pane 8개 전부 최대 출력(초당 30MB)에서도, pane 16개에서도 60fps 를
-  지켰고 긴 작업이 0 이었다. 키를 눌러 에코가 브라우저에 닿기까지 5~7ms — 다만 이건 화면에
-  그려진 시각이 아니다(한 프레임 더 든다). 자세한 건 `docs/own-runtime.md` 스파이크 D
+**2026-09-07 — our runtime, measured (`docs/own-runtime.md`)**
 
-## 아직 모르는 것
+- **Pane processes survive the daemon's death.** Passing the PTY master fd over a Unix socket to
+  the next process and then killing the original daemon left the child running with no HUP, and
+  resize worked through the passed fd. An orphaned child's exit was still caught at 0ms via kqueue
+  (one separate run, SIGKILL).
+- **Hooks arrive at the same moment the dialog does.** In Claude Code 2.1.259 the approval prompt
+  appearing on screen and the `PermissionRequest` hook landed inside the same 50ms poll (screen
+  detection resolution 50ms, one run). There is no distinguishing when a person sees it from when
+  the hook fires. **AskUserQuestion comes through the same hook** — two kinds of dialog, one hook
+  (other dialogs unverified). `Notification` is a delayed nudge that fires when an approval sits
+  for more than six seconds (one observation, 6.0s). The spike layered this on with `--settings`;
+  the product will use a global hook the user installs once (see "Settled" below).
+- **There is a lot to take from polycanv** — hook layering, status merge rules, the Unix socket
+  bridge, PTY handling, comparison benchmark tooling. The claude and codex hooks were measured in
+  a TUI on 2026-08-19; opencode is spec only, and qwen only goes as far as `SessionStart`.
 
-- **데몬의 언어.** Python(핸드오프 가능, 웹소켓 손수) 대 Bun(PTY·웹소켓 내장, 핸드오프 불가).
-  둘로 만들어 쟀는데 **속도로는 안 갈렸다** — CPU 도 처리량도 사실상 같다. 갈린 것은 둘이다:
-  파이썬은 브라우저가 느릴 때 PTY 읽기를 진짜 멈추고, Bun 은 못 멈춘다(RSS 31MB 대 87MB)
-- **데몬 재시작 전략.** 핸드오프 / 재시작 안 함 + `--resume` / 에이전트 자체 데몬(`claude attach` 등)
-- **재접속 복원.** alt-screen 에이전트에 SIGWINCH 흔들기만으로 충분한가. Classic 렌더러는 어떤가
-- **자동 배치.** 다섯 앱이 다섯 가지로 푼 것을 조사해 뒀다(`own-runtime.md` 의 "캔버스").
-  탐색 방식·기준점·자리 없을 때의 행동을 고른다
-- **카메라 줌을 나중에 넣을지.** 뺐지만 조사는 해 뒀다 — 넣는다면 세 갈래 중 고른다
-- **앱을 언제 낼지.** 앱을 내면 "설치 한 줄" 이 "받아서 실행" 으로 바뀐다
-- **미끄러운지는 아직 사람이 봐야 한다.** 잰 것은 자동 드래그와 셸 루프다 — 사람 손,
-  진짜 에이전트 출력, 통합 GPU 기계는 아직이다
-- 훅 설치를 어떻게 안내할지, codex 신뢰 게이트, opencode SSE 실구동
+**2026-09-07 — research, agents checking docs, sources and local runs
+(`docs/research/2026-09-07-own-runtime.md`)**
 
-## 문서
+- **fd passing (handoff) works with the Python standard library** (`socket.send_fds`).
+  **Node and Bun cannot do it.** Go and Rust probably can, but that was not in this research.
+- **Bun has a built-in PTY and WebSocket server** (1.3.5+, **Windows needs 1.3.14+** — which
+  matters because the app has to cover Windows). Node needs the node-pty native module, and stable
+  1.1.0 ships prebuilds only for mac and win, with the mac one missing its executable bit
+  (fixed in 1.2.0-beta). Python has PTY and fd passing in the standard library but no WebSocket,
+  and macOS's `/usr/bin/python3` is a stub that prompts for the Xcode CLT (installing the CLT
+  gets you 3.9.6).
+- **Claude Code hooks have an `http` type**, so the daemon can receive them directly with no helper
+  script. **Codex can write `Action Required` into the terminal title**, so status is readable
+  without going through the hook trust gate (from source; not verified live).
+- **codex and opencode TUIs default to alt screen; Claude Code is conditional** (fullscreen by
+  default only for users who started after 2026-05-06, and env vars or saved settings flip it).
+  Reconnect restore starts by measuring whether SIGWINCH is enough to force a redraw.
+- **xterm.js 6** has only DOM and WebGL renderers, and WebGL contexts are commonly said to cap at
+  16 per renderer process (the research could not confirm the current default constant either).
+  Without flow control a single `yes` blocks input. A 6.0.0 bug on growing the size is still open.
 
-- `AGENTS.md` — 작업 지침. 에이전트에게 시킬 때의 규칙
-- `docs/own-runtime.md` — 우리 런타임 실측 기록 + 조사 요약 (fd 전달, 훅 타이밍, 언어별 PTY, 복원, 비교 대상)
-- `docs/research/2026-09-07-own-runtime.md` — 그날 조사 원문(에이전트 5개, 출처·등급 포함)
-- `docs/herdr-api.md` — herdr 조사 기록. 이제 비교 기준과 "런타임이 제공해야 할 것" 목록으로 남는다
-- `docs/spikes/<날짜>/` — 그날 쓴 측정 스크립트
-- `docs/decisions.md` — 정한 것, 뒤집은 것, **일부러 안 정한 것**
-- `docs/roadmap.md` — **순서와 무엇이 무엇을 막는지.** 네 단계, 의존 관계, 지금 어디인지
-- `docs/backlog.md` — herdr 시절 할 일의 씨앗. 지금은 기록이다. 여기에 새 할 일을 적지 않는다
+**2026-09-01 to 04 — herdr (`docs/herdr-api.md`)** — now the comparison baseline: herdr server RSS
+35MB, 6MB per pane controller (measured once). Plus a real case of screen-regex detection being
+wrong.
 
-**살아 있는 목록은 [이슈](https://github.com/maengyo/palmer/issues)와
-[보드](https://github.com/users/maengyo/projects/3)(비공개)다.**
+## Settled on 2026-09-07 (confirmed against a sketch)
 
-## 라이선스
+- **Directory rail on the right** — folders only, no files. Every home the user can reach is
+  visible, and git repos show their branch. **A folder is read only when it is expanded**, and
+  re-reading happens when the refresh button says so. `git status` is never run — that kind of
+  per-repo polling cost cate 45% CPU.
+- **Terminal list on the left** — whatever is waiting sits on top. Windows move when they get
+  pushed; their place in the list does not.
+- **palmer only opens shells** — it has no tool list. Typing `claude` is the user's job.
+- **The user installs hooks once** — palmer does not launch the agent, so there is nowhere to
+  attach `--settings`. A global hook plus a per-terminal environment variable does the pairing.
+  Planting a file per project was rejected: terminals are scattered across projects, and a `cd`
+  inside one breaks it.
+- **Nothing overlaps.** A new window lands where it is put and pushes its neighbour aside
+  (termcanvas-style minimum translation). The overlap setting is gone — nothing overlaps, so there
+  is nothing to switch.
+- **One terminal can expand to fill the canvas.** Rows and columns genuinely grow; this is not a
+  camera. The rails stay — while you are looking closely, you still need to see who is waiting.
+- **Camera zoom is cut from the first version.** The browser's `Ctrl+-` is written where you can
+  see it instead; it already shrinks the cell and shows more canvas. cate had to fix eight separate
+  things because of camera zoom alone.
+- **Folder creation only.** No creating, deleting, or renaming files — that is a file manager, and
+  a terminal is right there.
+- **Window corners are round.** But no macOS-style red/yellow/green buttons — those three colors
+  belong to the status lights.
+- **Desktop builds ship** — macOS, Windows, Linux AppImage, deb, wrapped with Tauri. Browser first.
+- **WSL is solved by running the daemon inside WSL.**
+- **"Light" means it does not stutter** — frame time and input latency come before size.
+  **Measured on 2026-09-07:** 60fps held with eight panes all flooding (30MB/s) and with sixteen
+  panes, with zero long tasks. Key-to-echo reaching the browser took 5-7ms — though that is not
+  when it was painted (one more frame for that). Details in spike D of `docs/own-runtime.md`.
 
-MIT (LICENSE 파일은 첫 코드와 함께 넣는다)
+## Still unknown
+
+- **The daemon's language.** Python (handoff possible, WebSocket by hand) vs Bun (PTY and WebSocket
+  built in, no handoff). Both were built and measured, and **throughput did not separate them** —
+  CPU and bytes per second are effectively identical. Two things did: Python genuinely stops
+  reading the PTY when the browser falls behind and Bun cannot, and RSS is 31MB against 87MB.
+- **Daemon restart strategy.** Handoff / never restart plus `--resume` / the agent's own daemon
+  (`claude attach` and friends).
+- **Reconnect restore.** Is shaking SIGWINCH enough for an alt-screen agent? What about the
+  Classic renderer?
+- **Placement.** Five apps solved this five ways, and that is written up (`own-runtime.md`,
+  "canvas"). Push-away is chosen; what happens when there is nowhere to push is not.
+- **Whether camera zoom comes back later.** It is cut, but the research is done — three branches
+  to pick from if it does.
+- **When to ship the app.** Shipping turns "one-line install" into "download and run".
+- **Whether it actually feels smooth still needs a person.** What was measured was an automated
+  drag and a shell loop — a human hand, real agent output, and an integrated-GPU machine are all
+  still ahead.
+- How to guide hook installation, the codex trust gate, opencode SSE running for real.
+
+## Documents
+
+- [`README.ko.md`](README.ko.md) — this document in Korean
+- `AGENTS.md` — the working agreement. The rules when handing work to an agent
+- `docs/own-runtime.md` — measurements of our own runtime plus a research summary
+  (fd passing, hook timing, PTY per language, restore, the competition)
+- `docs/research/2026-09-07-own-runtime.md` — that day's raw research (five agents, with sources
+  and confidence grades)
+- `docs/herdr-api.md` — the herdr investigation. Now the comparison baseline and a list of what a
+  runtime has to provide
+- `docs/spikes/<date>/` — the measurement scripts written that day
+- `docs/decisions.md` — what is decided, what was reversed, and **what is deliberately open**
+- `docs/roadmap.md` — **the order, and what blocks what.** Four phases, dependencies, where we are
+- `docs/backlog.md` — task seeds from the herdr era. History now; no new tasks go here
+
+**The living list is the [issues](https://github.com/maengyo/palmer/issues) and the
+[board](https://github.com/users/maengyo/projects/3) (private).**
+
+## Language
+
+**English is the default for this repo's README and commit messages.** The Korean edition
+([`README.ko.md`](README.ko.md)) is kept in step with it. The rest of `docs/` is Korean — it is
+working material for one reader.
+
+## License
+
+MIT (the LICENSE file lands with the first code)
