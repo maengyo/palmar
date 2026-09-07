@@ -1,6 +1,11 @@
 # 일정표
 
-**보드:** https://github.com/users/maengyo/projects/3 · **이슈:** https://github.com/maengyo/palmer/issues
+**보드:** [저장소의 Projects 탭](https://github.com/maengyo/palmer/projects) · [직접 열기](https://github.com/users/maengyo/projects/3)
+**이슈:** https://github.com/maengyo/palmer/issues
+
+보드에 **Target**(목표일) 날짜 필드가 있고, 각 항목의 마일스톤 마감이 들어가 있다.
+Target 으로 정렬하거나 로드맵 뷰로 보면 보드 안에서 일정이 보인다. 날짜를 바꿀 때는
+**마일스톤을 먼저 고치고** 항목의 Target 을 맞춘다 — 마일스톤이 정본이다.
 
 정본은 보드다. 이 문서는 **순서와 무엇이 무엇을 막는지**를 적는다 — 보드는 그걸 못 보여 준다.
 결정이 바뀌면 `decisions.md` 를 먼저 고치고 여기를 따라 고친다.
