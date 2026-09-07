@@ -183,6 +183,7 @@ pane 당 컨트롤러 6MB(1회 측정). 그리고 화면 정규식 감지가 실
 - `docs/spikes/<날짜>/` — 그날 쓴 측정 스크립트
 - `docs/decisions.md` — 정한 것, 뒤집은 것, **일부러 안 정한 것**
 - `docs/roadmap.md` — **순서와 무엇이 무엇을 막는지.** 네 단계, 의존 관계, 지금 어디인지
+- `docs/autopilot.md` — 사람이 없을 때 에이전트 루프가 따르는 골. 사이클, 정해진 것, 정하면 안 되는 것
 - `docs/backlog.md` — herdr 시절 할 일의 씨앗. 지금은 기록이다. 여기에 새 할 일을 적지 않는다
 
 **살아 있는 목록은 [이슈](https://github.com/maengyo/palmer/issues)와

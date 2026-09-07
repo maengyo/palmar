@@ -216,6 +216,7 @@ wrong.
 - `docs/spikes/<date>/` — the measurement scripts written that day
 - `docs/decisions.md` — what is decided, what was reversed, and **what is deliberately open**
 - `docs/roadmap.md` — **the order, and what blocks what.** Four phases, dependencies, where we are
+- `docs/autopilot.md` — the brief an unattended agent loop works from: cycle, what is decided, what it must not decide
 - `docs/backlog.md` — task seeds from the herdr era. History now; no new tasks go here
 
 **The living list is the [issues](https://github.com/maengyo/palmer/issues) and the
