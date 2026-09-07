@@ -1,0 +1,4 @@
+web/xterm.js
+web/xterm.css
+web/addon-*.js
+__pycache__/

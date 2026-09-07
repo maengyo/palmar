@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>palmer 파이프라인 스파이크</title>
+<link rel="stylesheet" href="xterm.css">
+<style>
+  :root {
+    --bg: #14181f; --canvas: #1a1f28; --line: #232a35; --surface: #0e1116;
+    --bar: #232a36; --ink: #e6e7ea; --dim: #8a90a0; --accent: #7d8ede;
+    --ok: #7fbf5f; --warn: #d7af5f; --bad: #ff8787;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 13px/1.5 -apple-system, "Apple SD Gothic Neo", system-ui, sans-serif;
+  }
+  #top {
+    height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 12px;
+    border-bottom: 1px solid var(--line); background: var(--bg);
+  }
+  #top b { font-size: 13px; font-weight: 600; }
+  button, select {
+    font: 12px ui-monospace, monospace; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--line); border-radius: 4px; padding: 5px 10px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.on { background: var(--accent); color: #0e1116; border-color: var(--accent); font-weight: 600; }
+  .sep { width: 1px; height: 22px; background: var(--line); }
+  .hint { color: var(--dim); font-size: 12px; margin-left: auto; }
+  kbd {
+    font: 11px ui-monospace, monospace; border: 1px solid var(--line);
+    border-bottom-width: 2px; border-radius: 3px; padding: 1px 5px; color: var(--ink);
+  }
+
+  #canvas {
+    position: absolute; inset: 44px 0 0 0; overflow: hidden;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 40px 40px; background-color: var(--canvas);
+  }
+  .win {
+    position: absolute; display: flex; flex-direction: column;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 9px;
+    overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,.45);
+  }
+  .win.focus { border-color: var(--accent); }
+  .win .bar {
+    height: 26px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px;
+    background: var(--bar); cursor: grab; font: 11px ui-monospace, monospace; color: var(--dim);
+    user-select: none;
+  }
+  .win .bar b { color: var(--ink); font-weight: 500; }
+  .win .body { flex: 1; min-height: 0; padding: 4px 6px; }
+  .win .grip {
+    position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize;
+    background: linear-gradient(135deg, transparent 55%, var(--dim) 55%, var(--dim) 65%, transparent 65%);
+    opacity: .6;
+  }
+  #hud {
+    position: absolute; right: 12px; top: 56px; z-index: 50; width: 232px;
+    background: rgba(14,17,22,.94); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 14px; font: 11px/1.65 ui-monospace, monospace;
+  }
+  #hud h3 { margin: 0 0 8px; font-size: 10px; letter-spacing: .12em; color: var(--dim); font-weight: 600; }
+  #hud .row { display: flex; justify-content: space-between; gap: 10px; }
+  #hud .row span:last-child { font-variant-numeric: tabular-nums; }
+  #hud .g { color: var(--ok); } #hud .w { color: var(--warn); } #hud .b { color: var(--bad); }
+  #hud hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; }
+</style>
+</head>
+<body>
+  <div id="top">
+    <b>파이프라인 스파이크</b>
+    <select id="panes">
+      <option value="1">pane 1</option>
+      <option value="4">pane 4</option>
+      <option value="8" selected>pane 8</option>
+      <option value="16">pane 16</option>
+    </select>
+    <select id="renderer">
+      <option value="webgl" selected>WebGL</option>
+      <option value="dom">DOM</option>
+    </select>
+    <button id="spawn">띄우기</button>
+    <div class="sep"></div>
+    <button id="flood">한 pane 에 부하</button>
+    <button id="floodall">전부에 부하</button>
+    <button id="drag">드래그 자동 왕복</button>
+    <div class="sep"></div>
+    <button id="reset">지우기</button>
+    <span class="hint"><kbd>Ctrl</kbd>+<kbd>-</kbd> 로 줄이면 캔버스가 더 들어옵니다</span>
+  </div>
+
+  <div id="canvas"></div>
+
+  <div id="hud">
+    <h3>프레임</h3>
+    <div class="row"><span>fps</span><span id="fps">—</span></div>
+    <div class="row"><span>frame p50</span><span id="p50">—</span></div>
+    <div class="row"><span>frame p95</span><span id="p95">—</span></div>
+    <div class="row"><span>frame 최악</span><span id="pmax">—</span></div>
+    <div class="row"><span>긴 작업</span><span id="long">—</span></div>
+    <hr>
+    <h3>입력</h3>
+    <div class="row"><span>키→화면 p50</span><span id="lat50">—</span></div>
+    <div class="row"><span>키→화면 최악</span><span id="latmax">—</span></div>
+    <hr>
+    <h3>처리량</h3>
+    <div class="row"><span>pane</span><span id="npane">0</span></div>
+    <div class="row"><span>WebGL</span><span id="ngl">0</span></div>
+    <div class="row"><span>받은 바이트</span><span id="bytes">0</span></div>
+    <div class="row"><span>초당</span><span id="bps">0</span></div>
+  </div>
+
+  <script src="xterm.js"></script>
+  <script src="addon-fit.js"></script>
+  <script src="addon-webgl.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
