@@ -184,8 +184,9 @@ wrong.
   built in, no handoff). Both were built and measured, and **throughput did not separate them** —
   CPU and bytes per second are effectively identical. Two things did: Python genuinely stops
   reading the PTY when the browser falls behind and Bun cannot, and RSS is 31MB against 87MB.
-- **Daemon restart strategy.** Handoff / never restart plus `--resume` / the agent's own daemon
-  (`claude attach` and friends).
+- ~~Daemon restart strategy~~ — **settled 2026-09-07: the daemon does not restart.** Updates restart
+  it; agents come back with `--resume` and shell panes die. Handoff was built and worked (spike G)
+  but was not chosen — it would pin the language to Python and has to be designed in from the start.
 - **Reconnect restore.** Is shaking SIGWINCH enough for an alt-screen agent? What about the
   Classic renderer?
 - **Placement.** Five apps solved this five ways, and that is written up (`own-runtime.md`,
