@@ -42,7 +42,10 @@ function flush(ws: any, p: Pane) {
   p.unacked += buf.length;
   ws.send(buf);
   if (p.unacked >= HIGH_WATER && !p.paused) {
-    p.paused = true; // Bun.Terminal 에는 pause 가 없다(이슈 #41410) — 모으기만 하고 안 보낸다
+    p.paused = true; // Bun.Terminal 에 pause 가 없어(이슈 #41410) 표시만 해 둔다.
+    // 이 플래그는 아무것도 막지 않는다 — 위의 ws.send 는 그대로 나간다.
+    // 보내는 것을 막아도 PTY 는 계속 읽히므로 메모리에 쌓이는 것은 같다(RSS 87MB).
+    // 진짜로 멈추려면 자식에게 SIGSTOP 을 보내야 하고, 그건 다른 종류의 값이다.
   }
 }
 
