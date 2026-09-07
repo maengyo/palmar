@@ -22,6 +22,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import hmac
+import secrets
 import fcntl
 import hashlib
 import json
@@ -36,6 +38,11 @@ from urllib.parse import parse_qs, urlparse
 
 WS_MAGIC = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
+#: 이 데몬이 뜰 때 만든 토큰. 페이지가 같은 출처에서 받아 되보낸다.
+#: 127.0.0.1 에 묶는 것은 보호가 아니다 — 브라우저는 웹소켓에 CORS 를 적용하지 않으므로
+#: 사용자가 방문한 아무 사이트나 ws://127.0.0.1:8801/pty 를 열 수 있다(#29).
+TOKEN = secrets.token_urlsafe(32)
+
 #: 미확인 바이트가 이만큼 쌓이면 PTY 읽기를 멈춘다. ttyd 는 100KB x 10, VS Code 는 100KB.
 HIGH_WATER = 100_000
 #: 여기까지 내려오면 다시 읽는다. VS Code 는 5KB.
@@ -45,7 +52,8 @@ PUMP_BUDGET = 256 * 1024
 #: PTY 바이트를 이만큼 모았다 보낸다. macOS PTY 는 1KB 씩 읽히므로 안 모으면 프레임이 폭주한다(조사).
 COALESCE_MS = 5
 
-WEB = Path(__file__).resolve().parent.parent / "web"
+WEB = (Path(__file__).resolve().parent.parent / "web").resolve()
+PORT = [8801]                      # Origin 검사에 쓰려고 전역으로 둔다
 
 
 def set_winsize(fd: int, rows: int, cols: int) -> None:
@@ -207,7 +215,22 @@ async def handle(reader, writer):
             headers[k.strip().lower()] = v.strip()
 
     url = urlparse(path)
+    q = parse_qs(url.query)
+
+    def allowed_origin() -> bool:
+        """Origin 이 없거나(같은 출처 fetch·curl) 우리가 내준 것이어야 한다."""
+        o = headers.get("origin")
+        return o is None or o in (f"http://127.0.0.1:{PORT[0]}", f"http://localhost:{PORT[0]}")
+
+    def has_token() -> bool:
+        return hmac.compare_digest(q.get("token", [""])[0], TOKEN)
+
     if url.path == "/pty" and headers.get("upgrade", "").lower() == "websocket":
+        if not (allowed_origin() and has_token()):
+            writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            await writer.drain()
+            writer.close()
+            return
         key = headers["sec-websocket-key"].encode()
         accept = base64.b64encode(hashlib.sha1(key + WS_MAGIC).digest()).decode()
         writer.write(
@@ -215,11 +238,15 @@ async def handle(reader, writer):
             b"Upgrade: websocket\r\nConnection: Upgrade\r\n"
             b"Sec-WebSocket-Accept: " + accept.encode() + b"\r\n\r\n"
         )
-        q = parse_qs(url.query)
-        cols = int(q.get("cols", ["80"])[0])
-        rows = int(q.get("rows", ["24"])[0])
-        cmd = q.get("cmd", [os.environ.get("SHELL", "/bin/sh")])[0].split(" ")
-        pane = Pane(reader, writer, cmd, cols, rows, q.get("cwd", [os.path.expanduser("~")])[0])
+        cols = min(500, max(1, int(q.get("cols", ["80"])[0])))
+        rows = min(200, max(1, int(q.get("rows", ["24"])[0])))
+        # 명령은 클라이언트가 못 고른다. palmer 는 셸만 연다 — 그래서 파라미터가 아예 없다(#29).
+        cmd = [os.environ.get("SHELL", "/bin/sh")]
+        # cwd 도 홈 아래로만. 스파이크라 뿌리가 하나다.
+        home = Path.home().resolve()
+        want = Path(q.get("cwd", [str(home)])[0]).expanduser().resolve()
+        cwd = str(want) if want == home or home in want.parents else str(home)
+        pane = Pane(reader, writer, cmd, cols, rows, cwd)
         pane.start_reading()
         try:
             while True:
@@ -244,6 +271,12 @@ async def handle(reader, writer):
         return
 
     if url.path == "/report" and method == "POST":
+        # 계측 전용이다. 제품에는 없다(#29). 그래도 토큰은 본다.
+        if not (allowed_origin() and has_token()):
+            writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            await writer.drain()
+            writer.close()
+            return
         n = int(headers.get("content-length", "0"))
         body = await reader.readexactly(n) if n else b"{}"
         with open(os.environ.get("PALMER_REPORT", "/tmp/palmer-report.jsonl"), "a") as fh:
@@ -256,10 +289,13 @@ async def handle(reader, writer):
     # 정적 파일
     name = url.path.lstrip("/") or "index.html"
     f = (WEB / name).resolve()
-    if not str(f).startswith(str(WEB)) or not f.is_file():
+    # startswith 는 형제 디렉터리를 통과시킨다(/x/web 기준 /x/web-evil). is_relative_to 를 쓴다(#29).
+    if not f.is_relative_to(WEB) or not f.is_file():
         writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
     else:
         body = f.read_bytes()
+        if f.suffix == ".html":
+            body = body.replace(b"</head>", f'<script>window.PALMER_TOKEN="{TOKEN}"</script></head>'.encode(), 1)
         ctype = {".html": "text/html", ".js": "text/javascript", ".css": "text/css"}.get(
             f.suffix, "application/octet-stream"
         )
@@ -276,9 +312,11 @@ async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8801)
     args = ap.parse_args()
+    PORT[0] = args.port
     # 127.0.0.1 밖으로 열지 않는다 — host 를 바꾸는 옵션을 두지 않는 것이 규칙이다.
     server = await asyncio.start_server(handle, "127.0.0.1", args.port)
     print(f"python  http://127.0.0.1:{args.port}  pid {os.getpid()}", flush=True)
+    print(f"        토큰은 페이지에 심어 내보낸다. 직접 붙으려면 ?token={TOKEN}", flush=True)
     async with server:
         await server.serve_forever()
 

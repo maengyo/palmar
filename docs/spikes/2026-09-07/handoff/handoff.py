@@ -40,7 +40,10 @@ import termios
 import time
 
 HOST, PORT = "127.0.0.1", 8811
-HANDOFF_SOCK = "/tmp/palmer-handoff.sock"
+# 공유 /tmp 에 두면 같은 기계의 다른 사용자가 데몬 교체를 걸 수 있다(#29).
+# 0700 인 사용자 전용 디렉터리에 둔다.
+RUN_DIR = os.path.join(os.path.expanduser("~"), ".palmer", "run")
+HANDOFF_SOCK = os.path.join(RUN_DIR, "handoff.sock")
 RING = 1 << 20          # pane 당 1MB. 셸 pane 기준이다(스파이크 F).
 COLS, ROWS = 100, 30
 SELF = os.path.abspath(__file__)
@@ -54,6 +57,18 @@ PANE_CMD = SLOW
 
 def set_winsize(fd: int, rows: int, cols: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+
+def peer_uid(conn: socket.socket) -> int | None:
+    """소켓 반대편의 uid. 못 읽으면 None — 그때는 디렉터리 0700 이 유일한 방어다(#29)."""
+    try:
+        if sys.platform == "darwin":                       # struct xucred: version, uid, …
+            raw = conn.getsockopt(0, 0x001, 8)             # SOL_LOCAL, LOCAL_PEERCRED
+            return struct.unpack("II", raw[:8])[1]
+        raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)  # struct ucred
+        return struct.unpack("III", raw)[1]
+    except (OSError, AttributeError, struct.error):
+        return None
 
 
 def log(gen, *a):
@@ -108,6 +123,11 @@ def serve(gen: int, inherited: tuple | None = None) -> None:
     lsock.bind((HOST, PORT))
     lsock.listen(4)
 
+    os.makedirs(RUN_DIR, mode=0o700, exist_ok=True)
+    os.chmod(RUN_DIR, 0o700)
+    st = os.stat(RUN_DIR)
+    if st.st_uid != os.getuid() or st.st_mode & 0o077:
+        raise SystemExit(f"{RUN_DIR} 는 내 것이어야 하고 0700 이어야 한다 (#29)")
     hsock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     if os.path.exists(HANDOFF_SOCK):
         os.unlink(HANDOFF_SOCK)
@@ -149,6 +169,10 @@ def serve(gen: int, inherited: tuple | None = None) -> None:
         if hsock in r:
             # ── 교체 요청 ─────────────────────────────────────
             conn, _ = hsock.accept()
+            if peer_uid(conn) not in (None, os.getuid()):
+                log(gen, "handoff refused — 다른 사용자다")
+                conn.close()
+                continue
             conn.recv(64)
             log(gen, "handoff requested")
 
