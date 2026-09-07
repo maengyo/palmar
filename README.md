@@ -171,9 +171,11 @@ pane 당 컨트롤러 6MB(1회 측정). 그리고 화면 정규식 감지가 실
 - `docs/herdr-api.md` — herdr 조사 기록. 이제 비교 기준과 "런타임이 제공해야 할 것" 목록으로 남는다
 - `docs/spikes/<날짜>/` — 그날 쓴 측정 스크립트
 - `docs/decisions.md` — 정한 것, 뒤집은 것, **일부러 안 정한 것**
-- `docs/backlog.md` — 할 일의 씨앗. **살아 있는 목록은
-  [이슈](https://github.com/maengyo/palmer/issues)와
-  [보드](https://github.com/users/maengyo/projects/3)(비공개)다**
+- `docs/roadmap.md` — **순서와 무엇이 무엇을 막는지.** 네 단계, 의존 관계, 지금 어디인지
+- `docs/backlog.md` — herdr 시절 할 일의 씨앗. 지금은 기록이다. 여기에 새 할 일을 적지 않는다
+
+**살아 있는 목록은 [이슈](https://github.com/maengyo/palmer/issues)와
+[보드](https://github.com/users/maengyo/projects/3)(비공개)다.**
 
 ## 라이선스
 
