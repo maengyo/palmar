@@ -480,7 +480,19 @@ class Tile {
       // `ev.isComposing` 만 믿지 않는다 — **사파리는 그 칸을 안 채울 때가 있다**(한글이 안 되는
       // 것이 사파리에서만이었다, 2026-09-09). 조합 시작·끝은 textarea 가 확실히 알려 주므로
       // 그것으로 우리가 직접 센다(아래 term.open 뒤).
-      if (this.composing || ev.isComposing || ev.keyCode === 229) return false;
+      // 조합 중인 키는 xterm 이 손대면 안 된다 — 조합 중 keydown 의 keyCode 가 229 가 아니면
+      // xterm 이 조합을 통째로 버린다(`_compositionHelper.keydown` → `_finalizeComposition(false)`).
+      if (ev.keyCode === 229) return false;
+      // **홀로 눌린 조정 키는 아무것도 끝내지 않는다.** ㄲ·ㅃ 같은 된소리는 Shift 를 거치는데,
+      // 그것을 "IME 가 손을 뗐다" 로 읽으면 조합 중인 글자가 그 자리에서 튀어나간다
+      // (실측 로그에 `keydown key="Shift"` 가 ㄲ 직전에 있다).
+      if (ev.key === 'Shift' || ev.key === 'Control' || ev.key === 'Alt' ||
+          ev.key === 'Meta' || ev.key === 'CapsLock') return true;
+      // 229 가 아닌 진짜 키가 왔다 = IME 가 손을 뗐다. **아직 안 보낸 글자를 먼저 보낸다** —
+      // 안 그러면 Enter 가 글자보다 먼저 가서 마지막 글자를 잃는다.
+      this.kdSeen = true;
+      if (this.imePending) this.imeFlush();
+      if (this.composing || ev.isComposing) return false;
       const mod = ev.metaKey || (ev.ctrlKey && ev.shiftKey);
       if (!mod || ev.altKey) return true;
       const k = (ev.key || '').toLowerCase();
@@ -503,19 +515,61 @@ class Tile {
     // 채워 주는 정도가 다르고, 사파리에서 한글이 깨진 것이 그 차이였다.
     // compositionend 에서 **곧바로** 내린다: 늦게 내리면 조합을 끝낸 다음 키(Enter 같은 것)까지 삼킨다.
     this.composing = false;
+    this.sawComposition = false;   // 이 브라우저가 조합 이벤트를 쓰나
+    this.imePending = '';          // 아직 확정 안 된 글자 (조합 이벤트가 없는 브라우저용)
+    this.kdSeen = false;
     const ta = this.termEl.querySelector('textarea');
     if (ta) {
-      ta.addEventListener('compositionstart', () => { this.composing = true; });
+      ta.addEventListener('compositionstart', () => { this.composing = true; this.sawComposition = true; });
       ta.addEventListener('compositionend', () => { this.composing = false; });
       // 안전핀. compositionstart 만 오고 end 가 영영 안 오면 그 판이 키를 통째로 삼킨다 —
       // 그 상태로 갇히느니 포커스가 떠날 때 푼다.
-      ta.addEventListener('blur', () => { this.composing = false; });
+      ta.addEventListener('blur', () => { this.composing = false; this.imeFlush(); });
     }
+    // ── 조합 이벤트를 안 내는 브라우저 (사파리) ─────────────────────────
+    // 실측(2026-09-09, Safari 18.6, 한글): `compositionstart`·`compositionend` 가 **한 번도 안 온다.**
+    // 대신 `input` 으로만 말한다 — `insertText` 는 새 글자를 시작하고, `insertReplacementText` 는
+    // 조합 중인 마지막 글자를 갈아 끼운다. xterm 은 `insertText` 만 보내므로 **조합 중인 자모만 나가고
+    // 완성된 글자는 영영 안 나간다**: "안녕하십니까" 가 "ㅇㄴㅇㄴㅎㄴ까" 가 된 것이 이것이다.
+    //
+    // **부모에서 캡처로 받는다.** xterm 의 input 리스너는 textarea 위에 있고 우리보다 먼저 붙어 있어서,
+    // 같은 자리에 붙으면 언제나 저쪽이 먼저 돈다. 부모의 캡처 단계는 그보다 앞이라 여기서 멈출 수 있다.
+    this.termEl.addEventListener('input', (ev) => {
+      if (this.sawComposition) return;        // 조합 이벤트를 쓰는 브라우저 — xterm 에 맡긴다
+      const it = ev.inputType;
+      if (it !== 'insertText' && it !== 'insertReplacementText') return;
+      // **평범한 키와 IME 키를 차례로 가른다.** 평범한 키는 keydown → (xterm이 보냄) → input 이고,
+      // IME 키는 input → keydown 이다(실측: 스페이스는 keydown 이 먼저, 한글은 input 이 먼저).
+      // keyCode 229 인 keydown 은 표시를 안 세우므로, 여기서 표시가 없으면 IME 다.
+      const plain = this.kdSeen;
+      this.kdSeen = false;
+      if (plain) return;                      // xterm 이 이미 keydown 에서 보냈다
+      ev.stopPropagation();                   // xterm 의 _inputEvent 를 막는다 — 우리가 보낸다
+      const d = ev.data || '';
+      if (it === 'insertReplacementText') {
+        this.imePending = d;                  // 조합 중인 글자가 바뀌었다 — 아직 안 보낸다
+      } else {
+        if (this.imePending) this.sendText(this.imePending);   // 앞 글자가 확정됐다
+        this.imePending = d;
+      }
+    }, true);
     this.gl = tryWebgl(this.term, () => { this.gl = null; updateStatusBar(); });
     // 안 보이는 동안(다른 캔버스) 재면 열 수가 0 으로 나온다 — 보이게 될 때 refit() 이 잰다
     this.fitted = false;
     if (this.visible()) { this.fit.fit(); this.fitted = true; }
 
+    // 아직 확정 안 된 글자를 내보낸다. IME 가 손을 떼는 자리마다 부른다.
+    this.imeFlush = () => {
+      if (!this.imePending) return;
+      const d = this.imePending;
+      this.imePending = '';
+      this.sendText(d);
+      const t2 = this.termEl.querySelector('textarea');
+      if (t2 && t2.value) t2.value = '';   // 사파리는 이 값을 안 비운다 — 끝없이 자란다
+    };
+    this.sendText = (d) => {
+      if (this.ws && this.ws.readyState === 1) this.ws.send(enc.encode(d));
+    };
     this.term.onData((d) => {
       if (this.ws && this.ws.readyState === 1) this.ws.send(enc.encode(d));
       if (this.s.status === 'done') sendSeen(this.id);   // 치고 있으면 본 것이다
