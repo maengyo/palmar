@@ -694,6 +694,7 @@ class Tile {
       if (!mode) return;
       const was = mode; mode = null;
       this.el.classList.remove('drag');
+      paintTidy();          // 창을 옮기면 거둘 것이 생기거나 없어진다
       if (was === 'size') this.refit();   // 크기 조절을 놓았을 때만 PTY 에 알린다 (스파이크 D)
       this.persist();
       renderMinimap();                    // 세계가 자랐을 수 있다 — 배율을 다시 잡는다
@@ -753,6 +754,25 @@ function lastLine(term) {
 // 보이는 창이 튄다(실측: 남은 창이 206px 뛰었다). 창을 놓아 둔 자리는 이 프로그램의 약속이라,
 // 남의 창이 닫혔다고 내 창이 움직이면 안 된다. 그래서 **사람이 시킬 때만** 한다 — 시킨 사람에게는
 // 움직이는 것이 놀랄 일이 아니다.
+// 이 캔버스에 거둘 빈 자리가 있나. 단추를 흐리게 할지 정한다 — 눌러도 아무 일이 없으면
+// 단추가 거짓말을 하는 것이다.
+function tidySlack(canvasId) {
+  const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
+  if (!mine.length) return 0;
+  return Math.max(0, Math.min(...mine.map((t) => layout[t.id].x)) - GAP)
+       + Math.max(0, Math.min(...mine.map((t) => layout[t.id].y)) - GAP);
+}
+
+function paintTidy() {
+  const b = document.getElementById('tidy');
+  if (!b) return;
+  const slack = current === null ? 0 : tidySlack(current);
+  b.disabled = !slack;
+  b.title = slack
+    ? 'tidy this canvas — pull the windows back to the corner'
+    : 'tidy this canvas — nothing to close up, it already starts at the corner';
+}
+
 function tidyCanvas(canvasId) {
   const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
   if (!mine.length) return false;
@@ -778,6 +798,7 @@ function tidyCanvas(canvasId) {
   cvScroll.scrollTop = Math.max(0, t0 - sy);
   renderMinimap();
   refreshOff();
+  paintTidy();
   return true;
 }
 
@@ -869,6 +890,12 @@ addEventListener('resize', () => {
 // 같은 값을 따로 적고 있어서 한쪽만 고치면 위 줄과 아래 몸이 어긋났다.
 // **레일이 좁아지면 캔버스가 넓어진다.** 창이 그대로여도 보이는 자리가 달라지므로, 창 크기가
 // 바뀔 때와 **똑같은 뒷정리**가 필요하다(펼친 창 refit · 미니맵 눈금 · 화면 밖 표시).
+//: 자동 정리. **꺼진 채로 시작한다** — 보이는 창을 움직이는 일이라, 남의 창이 닫혔다고 내 창이
+//: 뛰면 안 된다. 켜 두면 그 대가를 알고 켠 것이다.
+const LS_AUTOTIDY = 'palmar.autotidy';
+let autoTidy = false;
+try { autoTidy = localStorage.getItem(LS_AUTOTIDY) === '1'; } catch (e) {}
+
 const LS_RAILS = 'palmar.rails';
 const RAIL_DEF = { l: 256, r: 232 };
 const RAIL_MIN = { l: 180, r: 160 };   // 이보다 좁으면 왼쪽은 이름표가, 오른쪽은 위 줄 단추가 깨진다
@@ -1102,6 +1129,7 @@ function switchCanvas(id) {
   if (!canvases.has(id) || id === current) return;
   current = id;
   applyCanvas();
+  paintTidy();      // 단추는 **지금 보고 있는 캔버스**를 말한다
   // 숨어 있는 동안 창 크기가 달라졌을 수 있다 — 그려진 다음에 한 번 더 맞춘다
   requestAnimationFrame(() => { for (const t of tiles.values()) if (t.visible()) t.refit(); });
 }
@@ -1842,6 +1870,7 @@ function upsert(s) {
 }
 function remove(id) {
   const t = tiles.get(id);
+  const wasIn = t && t.s ? t.s.canvas : null;   // 정리는 그 캔버스에만 한다
   if (t) { if (maxed === t) setMax(t, false); t.dispose(); tiles.delete(id); }
   sessions.delete(id);
   notifyQueue.delete(id);
@@ -1856,6 +1885,10 @@ function remove(id) {
   delete layout[id];   // id 는 다시 쓰이지 않는다 — 남기면 쌓인다
   saveLayout();
   if (focused === id) focused = null;
+  // 켜 뒀으면 자동으로 거둔다. 아니면 **단추만 켜서** 거둘 것이 생겼다고 말한다 —
+  // 창을 움직이는 일이라 시키지 않았으면 안 움직인다.
+  if (wasIn && autoTidy) tidyCanvas(wasIn);
+  paintTidy();
   renderTabs();
   renderList();
   renderMinimap();
@@ -2096,13 +2129,18 @@ function boot() {
     keysEl.addEventListener('click', (e) => e.stopPropagation());
     addEventListener('click', () => { if (!keysEl.hidden) showKeys(false); });
     addEventListener('keydown', (e) => { if (e.key === 'Escape' && !keysEl.hidden) showKeys(false); });
-    const tidyBtn = document.getElementById('tidy');
-    if (tidyBtn) tidyBtn.addEventListener('click', () => {
-      const moved = tidyCanvas(current);
-      showKeys(false);
-      if (!moved) toast(['nothing to tidy — this canvas already starts at the corner']);
-    });
+    const sw = document.getElementById('autotidy');
+    if (sw) {
+      sw.checked = autoTidy;
+      sw.addEventListener('change', () => {
+        autoTidy = sw.checked;
+        try { if (autoTidy) localStorage.setItem(LS_AUTOTIDY, '1'); else localStorage.removeItem(LS_AUTOTIDY); } catch (e) {}
+      });
+    }
   }
+  const tidyBtn = document.getElementById('tidy');
+  if (tidyBtn) tidyBtn.addEventListener('click', () => tidyCanvas(current));
+  paintTidy();
   window.palmar.tidyCanvas = tidyCanvas;
   loadRails();
   rzGrip(document.getElementById('rz-l'), 'l');
