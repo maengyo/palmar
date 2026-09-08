@@ -2,9 +2,17 @@
 
 *Read this in [한국어](README.ko.md).*
 
-A spatial canvas for coding agents. Terminals sit where you put them, at the size you gave them,
-on canvases you tab between. Each one shows whether it is **working**, **waiting on you**, **done**,
-or **idle** — and it works out which without being told anything about the agent inside.
+A light way to keep a lot of terminals in one place.
+
+> **palmar is not an AI tool.** It runs no model, calls no API, and sends your work nowhere.
+> It opens shells and shows you where they are. The agents are the ones you already run, in the
+> terminals you already use — palmar only makes a screenful of them easy to live with.
+
+Run several coding agents at once and you have several terminals that look alike, one of which
+stopped a minute ago and is waiting on an answer you have not given. palmar puts them on a canvas.
+Each terminal keeps the place and the size you gave it, and each carries a light: **working**,
+**waiting on you**, **done**, **idle**. It works out which without being told anything about the
+agent inside.
 
 Close the browser tab and the sessions keep running.
 
@@ -93,7 +101,8 @@ takes you to that terminal.
 | Python | 3.9 and up. |
 | Browser | Vanilla JavaScript, no framework, no build step. xterm.js draws the terminals. |
 | Runs on | macOS, Linux, and WSL (run the daemon inside WSL, browse from Windows). |
-| Security | Binds `127.0.0.1` only. A token in a `0600` file, plus `Origin` and `Host` checks, on every request that changes anything. |
+| Network | **Nothing goes out.** The daemon has no HTTP client and the page loads nothing from anywhere — no CDN, no font host, no telemetry. It binds `127.0.0.1` to serve the page and that is the only socket it opens. |
+| Security | A token in a `0600` file, plus `Origin` and `Host` checks, on every request that changes anything. |
 
 ## What is not built yet
 
