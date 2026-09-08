@@ -261,4 +261,9 @@ pane 당 컨트롤러 6MB(1회 측정). 그리고 화면 정규식 감지가 실
 
 ## 라이선스
 
-MIT (LICENSE 파일은 첫 코드와 함께 넣는다)
+palmer 는 MIT 다 — [`LICENSE`](LICENSE).
+
+이 저장소가 함께 싣는 남의 코드는 xterm.js(`@xterm/xterm`, `@xterm/addon-fit`,
+`@xterm/addon-webgl`) 하나뿐이다. 실행할 때 네트워크가 필요 없도록 `web/vendor/` 에 넣어 두었다.
+그것도 MIT 이고 고지는 [`web/vendor/LICENSE-xterm`](web/vendor/LICENSE-xterm) 에 있다 — 줄인 빌드에는
+자체 머리말이 없어서 파일 옆에 따로 둔다.

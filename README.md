@@ -301,4 +301,9 @@ working material for one reader.
 
 ## License
 
-MIT (the LICENSE file lands with the first code)
+palmer is MIT — see [`LICENSE`](LICENSE).
+
+The only third-party code shipped in this repo is xterm.js (`@xterm/xterm`,
+`@xterm/addon-fit`, `@xterm/addon-webgl`) under `web/vendor/`, vendored so palmer needs no
+network at runtime. It is MIT too; its notice is [`web/vendor/LICENSE-xterm`](web/vendor/LICENSE-xterm),
+kept beside the files because the minified builds carry no header of their own.
