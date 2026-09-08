@@ -89,6 +89,11 @@ changes twice in three seconds is a spinner by definition. Spinning is *working*
 stops is *done*; a title that never spun stays *idle*, so a text editor parked in a pane is not
 mistaken for a finished job.
 
+**An agent that sets no title at all still lights up.** palmar falls back to what is running and
+whether it is printing: nothing running means idle, printing means working, and printing that stops
+means it wants you. The first of those is what keeps an ordinary shell prompt dark. The honest limit
+is an agent that thinks for a long time in complete silence — that is indistinguishable from finished.
+
 **Where an agent offers hooks, palmar uses those instead**, because a hook is exact where a title
 is inferred — it can tell an approval prompt from a finished turn. Hooks attach themselves: every
 shell palmar opens gets a small shim in front of `PATH`, so there is still nothing for you to set

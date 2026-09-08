@@ -88,6 +88,16 @@ TITLE_WINDOW_S = 3.0
 TITLE_BUSY_N = 2
 OSC_CARRY_MAX = 512          # 종결자 없는 ESC] 가 계속 와도 carry 가 자라지 않게 하는 상한
 
+#: 제목을 아예 안 쓰는 에이전트를 위한 되돌림 (#22). aelix 가 그 경우다 — 실측(2026-09-08, 사용자의
+#: 회사 WSL, `dev/probe-agent.py`): `window title (OSC 0/1/2): 0 changes`. opencode 는 한 번만 세운다.
+#: 근거 둘을 묶는다:
+#:   · `tcgetpgrp(master)` — 앞에서 도는 것이 셸 자신이면 **아무것도 안 돈다**(실측으로 정확히 갈렸다).
+#:     이것이 맨 셸을 신호등에서 빼 준다. 없으면 프롬프트만 떠 있는 판이 "끝났다" 로 켜진다.
+#:   · 출력 활동 — 도는 것이 있고 최근에 찍었으면 일하는 중, 찍다가 멎었으면 사람을 부른다.
+#: **한계는 적어 둔다:** 아무것도 안 찍으면서 오래 생각하는 에이전트는 끝난 것과 구분되지 않는다.
+#: 그건 이 근거로는 원리상 알 수 없다 — 훅이나 제목이 있는 에이전트에서 그 둘이 이기는 이유다.
+OUT_QUIET_S = 5.0
+
 # ── 경로 ──────────────────────────────────────────────────────────────────────────
 HOME = Path.home().resolve()
 PALMAR_DIR = Path.home() / ".palmar"        # shim 의 "$HOME/.palmar" 와 같은 글자여야 한다
@@ -424,7 +434,10 @@ class Session:
         self.title_hits = []         # 최근 제목 변경 시각(monotonic). TITLE_WINDOW_S 밖은 버린다
         self.title_timer = None
         self.osc_carry = b""         # 조각 경계에 걸린 OSC 후보
-        self.derived = "idle"        # 훅이 없을 때 제목으로 읽은 상태
+        self.derived = "idle"        # 훅이 없을 때 제목·출력으로 읽은 상태
+        self.title_seen = False      # 이 세션이 제목을 한 번이라도 세웠나 (#22)
+        self.last_out = 0.0          # 마지막으로 바이트가 나온 시각(monotonic)
+        self.out_timer = None
 
         self.ring = Ring(RING)
         self.produced = 0            # 지금까지 클라이언트에 나간 총 바이트 (절대 오프셋)
@@ -545,6 +558,7 @@ class Session:
     def _emit(self, data: bytes) -> None:
         """링버퍼에 넣고(alt 구간은 빼고) 붙어 있는 모두에게 한 프레임으로 보낸다."""
         self._scan_title(data)          # 제목은 **바이트를 건드리지 않고** 지켜보기만 한다 (#38)
+        self._out_scan()                # 제목을 안 쓰는 에이전트는 출력으로 읽는다 (#22)
         alt_changed = self._absorb(data)
         frame = Frame.build(data)
         for a in list(self.attached):
@@ -570,6 +584,7 @@ class Session:
             if t != self.title:        # 같은 제목을 다시 세우는 것은 변화가 아니다
                 self.title = t
                 self.title_hits.append(time.monotonic())
+                self.title_seen = True     # 이 세션은 제목을 쓴다 — 되돌림은 이제 안 본다
                 hit = True
         rest = buf[last:]
         i = rest.rfind(b"\x1b]")
@@ -611,6 +626,54 @@ class Session:
             self._arm_settle()
         else:
             self._title_tick()
+
+    # ── 출력으로 상태 읽기 — 제목을 안 쓰는 에이전트용 되돌림 (#22) ──────────
+    def _out_scan(self) -> None:
+        """바이트가 나올 때마다 부른다. 제목을 쓰는 세션에서는 아무 일도 안 한다 —
+        제목이 더 정확하고, 둘이 같은 값을 놓고 다투면 신호등이 떤다."""
+        self.last_out = time.monotonic()
+        if self.title_seen:
+            return
+        self._out_tick()
+        self._arm_out()
+
+    def _arm_out(self) -> None:
+        """멎는 순간에는 바이트가 안 온다 — 제목 쪽과 같은 이유로 시계가 필요하다."""
+        if self.out_timer is not None:
+            self.out_timer.cancel()
+        delay = max(0.05, OUT_QUIET_S - (time.monotonic() - self.last_out) + 0.05)
+        self.out_timer = asyncio.get_running_loop().call_later(delay, self._out_settle)
+
+    def _out_settle(self) -> None:
+        self.out_timer = None
+        if self.closed or self.title_seen:
+            return
+        if time.monotonic() - self.last_out < OUT_QUIET_S:
+            self._arm_out()                 # 그 사이 또 찍었다
+        else:
+            self._out_tick()
+
+    def _at_prompt(self) -> bool:
+        """앞에서 도는 프로세스 그룹이 셸 자신인가 = 아무것도 안 돈다.
+        `pty.fork` 가 자식을 세션 리더로 만들므로 셸의 pgid 는 곧 그 pid 다."""
+        try:
+            return os.tcgetpgrp(self.master) == self.pid
+        except OSError:
+            return False                    # 못 물어보면 모르는 것이지 프롬프트인 것이 아니다
+
+    def _out_tick(self) -> None:
+        """프롬프트면 idle. 뭔가 돌고 최근에 찍었으면 working. **찍다가** 멎었으면 done —
+        찍은 적도 없는데 done 이 되지는 않는다(제목 쪽과 같은 규율)."""
+        if self._at_prompt():
+            want = "idle"
+        elif time.monotonic() - self.last_out < OUT_QUIET_S:
+            want = "working"
+        else:
+            want = "done" if self.derived == "working" else self.derived
+        if want != self.derived:
+            self.derived = want
+            if self.status == "unknown":
+                registry.changed(self)
 
     def eff_status(self) -> str:
         """훅이 말해 주면 그 말을 쓴다 — 훅은 정확하고 제목은 짐작이다. 훅이 없는 에이전트만
@@ -806,6 +869,9 @@ class Session:
         if self.title_timer is not None:
             self.title_timer.cancel()
             self.title_timer = None
+        if self.out_timer is not None:
+            self.out_timer.cancel()
+            self.out_timer = None
         self.stop_reading()
         if self.writing:                     # add_writer 를 fd 닫기 전에 뗀다 (#1)
             try:
