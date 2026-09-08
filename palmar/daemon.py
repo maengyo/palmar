@@ -1904,12 +1904,44 @@ def doctor(port: int) -> int:
     out("  홈        %s" % PALMAR_DIR)
     out("")
 
-    if not TOKEN_FILE.exists():
-        out("도는 데몬   **없다** — 토큰 파일이 없다(%s)" % TOKEN_FILE)
+    # **도는 데몬이 있나** — 락으로 가린다. 토큰 파일은 죽은 데몬의 것도 남으므로 근거가 못 된다.
+    # 데몬은 사는 동안 run/lock 에 배타적 flock 을 쥐고, 그 안에 pid 와 진짜 주소를 적어 둔다.
+    lock_path = RUN_DIR / "lock"
+    running, note = None, ""
+    if lock_path.exists():
+        try:
+            fd = os.open(str(lock_path), os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                running = False                 # 우리가 잡았다 = 아무도 안 쥐고 있다
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                running = True                  # 누가 쥐고 있다 = 데몬이 산다
+                try:
+                    note = os.read(fd, 256).decode("utf-8", "replace").strip()
+                except OSError:
+                    note = ""
+            os.close(fd)
+        except OSError:
+            pass
+
+    if running is False or not TOKEN_FILE.exists():
+        out("도는 데몬   **없다**")
+        if TOKEN_FILE.exists():
+            out("  (%s 는 남아 있지만 지난 번 데몬의 것이다 — 살아 있다는 뜻이 아니다)" % TOKEN_FILE.name)
         out("")
-        out("→ 먼저 `python3 -m palmar` 로 띄우고 다시 이 명령을 돌려라.")
+        out("→ `python3 -m palmar` 로 띄우고 다시 이 명령을 돌려라.")
         return 1
+
     token = TOKEN_FILE.read_text().strip()
+    if note:
+        out("도는 데몬   %s" % note)
+        m = re.search(r":(\d+)", note)
+        if m and int(m.group(1)) != port:
+            out("  ! 그 데몬은 **포트 %s** 다. 지금 물어본 것은 %d 였다." % (m.group(1), port))
+            out("    → `python3 -m palmar --doctor --port %s` 로 다시." % m.group(1))
+            out("")
+            port = int(m.group(1))
     base = "http://127.0.0.1:%d" % port
 
     def get(path):
@@ -1921,13 +1953,12 @@ def doctor(port: int) -> int:
     try:
         sessions = get("/api/sessions")
     except Exception as e:
-        out("도는 데몬   127.0.0.1:%d 에 못 붙었다 — %s" % (port, e))
-        out("")
-        out("→ 다른 포트로 띄웠으면 `--doctor --port <그 포트>` 로 다시.")
+        out("  ! 락은 잡혀 있는데 127.0.0.1:%d 에 못 붙었다 — %s" % (port, e))
+        out("    데몬이 뜨는 중이거나, 막 죽었거나, 다른 주소에 묶였다.")
         return 1
 
     ver = _daemon_hello_version(port, token)
-    out("도는 데몬")
+    out("")
     if ver is None:
         out("  버전      **말하지 않는다** — 프로토콜 판 이전의 낡은 데몬이다")
         out("  ! 지금 받아 둔 코드로 다시 띄워야 한다(그 데몬은 옛 코드다)")
