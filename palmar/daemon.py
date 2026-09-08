@@ -539,6 +539,7 @@ class Session:
         self.logged = "unknown"      # 마지막으로 있었던 일에 적은 상태 (registry.changed 가 본다)
         self.last_out = 0.0          # 마지막으로 바이트가 나온 시각(monotonic)
         self.out_start = 0.0         # 지금 이어지는 출력 묶음이 시작된 시각
+        self.out_break = False       # 사람이 입력했다 — 다음 바이트가 새 묶음을 연다
         self.out_timer = None
         #: 앞 프로세스 그룹이 셸과 **달랐던 적이 있나**. 직업 제어가 없는 셸(`/bin/sh` 비대화형)에서는
         #: 자식이 셸과 같은 그룹에 있어 `tcgetpgrp` 이 영영 셸을 가리킨다 — 그것을 "아무것도 안 돈다"
@@ -766,8 +767,9 @@ class Session:
         if not self._has_content(data):
             return                       # 커서 관리 틱 — 안 온 것으로 친다
         now = time.monotonic()
-        if now - self.last_out > OUT_QUIET_S:
-            self.out_start = now         # 조용하다가 다시 찍기 시작했다 — 새 묶음
+        if self.out_break or now - self.last_out > OUT_QUIET_S:
+            self.out_start = now         # 사람이 무언가 했거나, 조용하다가 다시 찍는다 — 새 묶음
+            self.out_break = False
         self.last_out = now
         if self.title_spun:
             return
@@ -926,6 +928,15 @@ class Session:
         if len(data) > space:
             log(f"session {self.id}: input queue near full, dropping {len(data) - space} bytes")
             data = data[:space]
+        # **사람이 무언가 했다 = 다음에 나오는 바이트부터 새 출력 묶음이다.** `out_start` 는 "지금
+        # 이어지는 출력이 언제 시작했나" 인데, 그것을 OUT_QUIET_S(5초) 로만 끊으면 **상관없는 두
+        # 출력이 한 덩이로 붙는다**: 판이 열릴 때 찍힌 프롬프트와 3초 뒤 내가 친 글자의 메아리가
+        # 그렇게 붙어 "1초 넘게 이어서 찍었다" 가 되고, 아무것도 안 도는 판이 working → 5초 뒤
+        # done 으로 켜졌다(2026-09-09 실측: `echo hi` 하나로 재현).
+        # **여기서 `out_start = now` 로 적으면 안 된다** — 그러면 입력과 다음 출력 **사이의 빈 시간**
+        # 까지 "이어서 찍은 시간" 에 들어간다(그렇게 고쳤다가 갓 연 판이 working 이 됐다).
+        # 표시만 세우고, 실제 시작은 다음 바이트가 정한다.
+        self.out_break = True
         self.inq += data
         self._pump_input()
 
