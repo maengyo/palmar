@@ -400,6 +400,10 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .cv-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
 .cv-scroll::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 4px; }
 .cv.has-max .cv-scroll { overflow: hidden; }
+/* 빈 자리를 쥐고 끌 수 있다는 것을 커서로 먼저 말한다. 타일 위에서는 타일의 커서가 이긴다. */
+.cv-scroll { cursor: grab; }
+.cv-scroll.panning { cursor: grabbing; user-select: none; }
+.cv-scroll > * { cursor: auto; }
 .tile {
   position: absolute; display: flex; flex-direction: column;
   background: var(--tile); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;

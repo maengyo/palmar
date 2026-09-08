@@ -877,6 +877,39 @@ function refreshOff() {
 }
 cvScroll.addEventListener('scroll', refreshOff, { passive: true });
 
+// ── 캔버스를 쥐고 끌기 ────────────────────────────────────
+// 빈 자리를 눌러 끌면 화면이 손을 따라온다(지도와 같다). 스크롤 막대와 휠은 그대로 있고, 이건
+// 그 위에 얹는 길이다 — 캔버스는 끝없이 자라므로(⑩) 멀리 가는 길이 하나뿐이면 좁다.
+// **빈 자리에서만** 시작한다: 타일 위에서 눌린 것은 타일의 것이다(제목줄 끌기·글자 선택·터미널 입력).
+const PAN_SLOP = 3;      // 이만큼 움직이기 전에는 끌기가 아니다 — 그래야 그냥 누르기가 살아 있다
+cvScroll.addEventListener('pointerdown', (ev) => {
+  if (ev.button !== 0 || ev.target !== cvScroll) return;   // 빈 바닥에서만
+  const x0 = ev.clientX, y0 = ev.clientY;
+  const l0 = cvScroll.scrollLeft, t0 = cvScroll.scrollTop;
+  let on = false;
+  const move = (e2) => {
+    const dx = e2.clientX - x0, dy = e2.clientY - y0;
+    if (!on) {
+      if (Math.abs(dx) < PAN_SLOP && Math.abs(dy) < PAN_SLOP) return;
+      on = true;
+      cvScroll.classList.add('panning');
+      try { cvScroll.setPointerCapture(ev.pointerId); } catch (e) {}
+    }
+    // 쥔 자리가 손을 따라오도록 **반대로** 스크롤한다. 브라우저가 알아서 양끝에서 멈춘다.
+    cvScroll.scrollLeft = l0 - dx;
+    cvScroll.scrollTop = t0 - dy;
+  };
+  const up = () => {
+    cvScroll.classList.remove('panning');
+    removeEventListener('pointermove', move);
+    removeEventListener('pointerup', up);
+    removeEventListener('pointercancel', up);
+  };
+  addEventListener('pointermove', move);
+  addEventListener('pointerup', up);
+  addEventListener('pointercancel', up);
+});
+
 // ── 캔버스 탭 (⑪) ──────────────────────────────────────
 // 탭은 **전환기**다. 안 놓치는 일은 왼쪽 목록이 맡는다(decisions.md ⑪) — 그래서 탭에 붙는 것은 점 하나뿐이고
 // 개수도 닫기 단추도 없다. 순서의 주인은 데몬이라(protocol.md "순서는 데몬이 갖는다") 끌어 놓으면 지금 있는
