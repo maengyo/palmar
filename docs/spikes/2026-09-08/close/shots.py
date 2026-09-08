@@ -29,7 +29,7 @@ try:
     log = os.path.join(os.environ.get("TMPDIR", "/tmp"), "palmar-close-shots.log")
     env = {"HOME": os.path.expanduser("~"), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
            "SHELL": "/bin/bash", "TERM": "dumb", "LANG": "en_US.UTF-8"}
-    d = subprocess.Popen(["/usr/bin/python3", os.path.join(REPO, "server/palmard.py"), "--port", str(PORT)],
+    d = subprocess.Popen(["/usr/bin/python3", os.path.join(REPO, "palmar/daemon.py"), "--port", str(PORT)],
                          env=env, stdout=open(log, "wb"), stderr=subprocess.STDOUT, cwd=REPO)
     for _ in range(200):
         try:

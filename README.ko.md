@@ -53,7 +53,7 @@
 ## 해 보기
 
 ```
-python3 server/palmard.py
+python3 -m palmar
 ```
 
 마지막 줄에 `http://127.0.0.1:8801` 을 찍는다. 그 주소를 열면 된다.
@@ -136,7 +136,7 @@ palmar 는 셸만 연다 — 도구 목록도 없고, 무엇을 돌릴지에 대
 ## 개발
 
 데몬을 띄우고 찍힌 주소를 열면 된다. 브라우저 파일은 `web/` 에서 그대로 나가므로 고치고 새로고침하면
-바로 보인다. `web/dev-stub.py` 는 같은 페이지를 가짜 세션과 함께 내주는 가짜 데몬이다 — 진짜 셸을
+바로 보인다. `dev/dev-stub.py` 는 같은 페이지를 가짜 세션과 함께 내주는 가짜 데몬이다 — 진짜 셸을
 띄우지 않고 화면만 손볼 때 쓴다.
 
 - [`AGENTS.md`](AGENTS.md) — 작업 약속. 주장을 어떻게 확인하는지, 측정에 무엇을 적는지,
@@ -152,6 +152,6 @@ palmar 는 셸만 연다 — 도구 목록도 없고, 무엇을 돌릴지에 대
 palmar 는 MIT 다 — [`LICENSE`](LICENSE).
 
 이 저장소가 함께 싣는 남의 코드는 xterm.js(`@xterm/xterm`, `@xterm/addon-fit`,
-`@xterm/addon-webgl`) 하나뿐이다. 실행할 때 아무것도 받아 오지 않도록 `web/vendor/` 에 넣어 두었다.
-그것도 MIT 이고 고지는 [`web/vendor/LICENSE-xterm`](web/vendor/LICENSE-xterm) 에 있다 — 줄인 빌드에는
+`@xterm/addon-webgl`) 하나뿐이다. 실행할 때 아무것도 받아 오지 않도록 `palmar/web/vendor/` 에 넣어 두었다.
+그것도 MIT 이고 고지는 [`palmar/web/vendor/LICENSE-xterm`](palmar/web/vendor/LICENSE-xterm) 에 있다 — 줄인 빌드에는
 자체 머리말이 없어서 파일 옆에 따로 둔다.

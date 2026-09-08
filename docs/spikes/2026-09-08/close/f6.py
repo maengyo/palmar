@@ -11,10 +11,10 @@ STUB = os.path.join(TMP, "palmar-stub0.py")
 
 
 def make_stub():
-    """`web/dev-stub.py` 를 임시로 베껴 **캔버스를 하나도 안 보내게** 고친다.
+    """`dev/dev-stub.py` 를 임시로 베껴 **캔버스를 하나도 안 보내게** 고친다.
     제품 데몬으로는 이 길(renderByStatus)에 닿을 수 없기 때문이다 — 계약상 캔버스는 0개가 못 된다.
     저장소의 스텁은 건드리지 않는다. `PALMAR_APPJS` 로 app.js 를 갈아 끼울 수 있게도 해 둔다."""
-    s = open(os.path.join(REPO, "web/dev-stub.py")).read()
+    s = open(os.path.join(REPO, "dev/dev-stub.py")).read()
     s = s.replace('WEB = Path(__file__).resolve().parent',
                   'WEB = Path(%r) / "web"\nimport os as _os\nAPPJS = _os.environ.get("PALMAR_APPJS")' % REPO)
     s = s.replace('"canvases": [c.json() for c in CANVASES],', '"canvases": [],')

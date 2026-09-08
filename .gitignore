@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# 패키징이 지어 내는 것 (#23)
+/dist/
+*.egg-info/

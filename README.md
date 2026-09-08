@@ -56,7 +56,7 @@ terminal gets more rows and columns at once.
 ## Quick start
 
 ```
-python3 server/palmard.py
+python3 -m palmar
 ```
 
 It prints `http://127.0.0.1:8801` on its last line. Open that.
@@ -147,7 +147,7 @@ implements that document and nothing beyond it.
 ## Development
 
 Run the daemon and open the printed URL; the browser files are served straight from `web/`, so a
-reload picks up an edit. `web/dev-stub.py` is a fake daemon that serves the same page with invented
+reload picks up an edit. `dev/dev-stub.py` is a fake daemon that serves the same page with invented
 sessions, for working on the UI without spawning real shells.
 
 - [`AGENTS.md`](AGENTS.md) — the working agreement: how claims are checked, what goes in a
@@ -163,6 +163,6 @@ The living list is the [issues](https://github.com/maengyo/palmar/issues).
 palmar is MIT — see [`LICENSE`](LICENSE).
 
 The only third-party code in this repo is xterm.js (`@xterm/xterm`, `@xterm/addon-fit`,
-`@xterm/addon-webgl`) under `web/vendor/`, vendored so palmar fetches nothing at runtime. It is MIT
-too; its notice is [`web/vendor/LICENSE-xterm`](web/vendor/LICENSE-xterm), kept beside the files
+`@xterm/addon-webgl`) under `palmar/web/vendor/`, vendored so palmar fetches nothing at runtime. It is MIT
+too; its notice is [`palmar/web/vendor/LICENSE-xterm`](palmar/web/vendor/LICENSE-xterm), kept beside the files
 because the minified builds carry no header of their own.

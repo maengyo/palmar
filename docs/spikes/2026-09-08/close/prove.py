@@ -79,7 +79,7 @@ try:
     env = {"HOME": os.path.expanduser("~"), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
            "SHELL": "/bin/bash", "TERM": "dumb", "LANG": "en_US.UTF-8"}
     f = open(log, "wb")
-    d = subprocess.Popen([PY3, os.path.join(REPO, "server/palmard.py"), "--port", str(PORT)],
+    d = subprocess.Popen([PY3, os.path.join(REPO, "palmar/daemon.py"), "--port", str(PORT)],
                          env=env, stdout=f, stderr=subprocess.STDOUT, cwd=REPO)
     for _ in range(200):
         try:
@@ -115,7 +115,7 @@ for uid in (real(), 0, 999):
     os.getuid = (lambda u: (lambda: u))(uid)
     print(uid, [str(p) for p in m.roots()])
 os.getuid = real
-""" % (os.path.join(REPO, "server"), os.path.join(REPO, "server/palmard.py"))],
+""" % (os.path.join(REPO, "palmar"), os.path.join(REPO, "palmar/daemon.py"))],
                            capture_output=True, text=True, env=dict(os.environ, PALMAR_NO_RUN="1"))
     print("  roots() by uid:\n   ", probe.stdout.strip().replace("\n", "\n    ") or probe.stderr[-500:])
     chk("uid 를 root 로 두면 /Users/Shared 가 들어온다(규칙이 소유자다)",

@@ -15,7 +15,7 @@ def start_daemon(port, home=None, log=None):
     env = {"HOME": home, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "SHELL": "/bin/bash",
            "TERM": "dumb", "LANG": "en_US.UTF-8"}
     f = open(log, "wb")
-    p = subprocess.Popen(["/usr/bin/python3", os.path.join(REPO, "server/palmard.py"),
+    p = subprocess.Popen(["/usr/bin/python3", os.path.join(REPO, "palmar/daemon.py"),
                           "--port", str(port)], env=env, stdout=f, stderr=subprocess.STDOUT,
                          cwd=REPO)
     for _ in range(200):

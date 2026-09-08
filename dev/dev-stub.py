@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""dev-stub — 개발용 가짜 데몬. **제품이 아니다.** 제품은 server/palmard.py 다.
+"""dev-stub — 개발용 가짜 데몬. **제품이 아니다.** 제품은 palmar/daemon.py 다.
 
 브라우저 쪽(web/)을 데몬 없이 띄워 보려고 docs/protocol.md 의 겉모양만 흉내 낸다:
     GET  /, /app.js …            web/ 정적 파일. index.html 에 window.PALMAR_TOKEN 을 심는다
@@ -38,7 +38,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 WS_MAGIC = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-WEB = Path(__file__).resolve().parent
+WEB = (Path(__file__).resolve().parent.parent / "palmar" / "web").resolve()
+
+# 스텁도 데몬 자리에 선다(protocol.md) — 판도 진짜와 같아야 한다. **베껴 적지 않는다**:
+# 베끼면 한쪽만 올라갔을 때 스텁이 조용히 거짓말을 한다.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from palmar import PROTOCOL
 TOKEN = secrets.token_urlsafe(32)
 PORT = [8801]
 HOME = Path.home().resolve()
@@ -311,7 +316,7 @@ def respond(writer, status, body=b"", ctype="application/json; charset=utf-8", e
     reason = {200: "OK", 201: "Created", 204: "No Content", 400: "Bad Request", 403: "Forbidden",
               404: "Not Found", 405: "Method Not Allowed", 409: "Conflict",
               501: "Not Implemented"}.get(status, "OK")
-    # protocol.md "인증": 모든 HTTP 응답에 붙는다. 제품(server/palmard.py http())과 같은 두 줄이다 —
+    # protocol.md "인증": 모든 HTTP 응답에 붙는다. 제품(palmar/daemon.py http())과 같은 두 줄이다 —
     # 스텁도 index.html 에 토큰을 심으므로 iframe 으로 감싸이면 잃을 것이 제품과 같다(#10).
     head = (f"HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\n"
             f"Cache-Control: no-store\r\n"
@@ -538,7 +543,7 @@ async def handle(reader, writer):
             b = await body_json()
             c = canvas_by_id(path[len("/api/canvases/"):])
             # **몸에 있는 키만 바꾼다.** 옛 판은 키가 없어도 clean_name(None) 을 거쳐 이름을 지웠다 —
-            # 데몬은 안 그런다(server/palmard.py 의 `if "name" in obj`). 스텁이 데몬과 다르면 여기서
+            # 데몬은 안 그런다(palmar/daemon.py 의 `if "name" in obj`). 스텁이 데몬과 다르면 여기서
             # 되던 것이 진짜에서 안 된다. (2026-09-08 통합에서 맞춤)
             has_name = isinstance(b, dict) and "name" in b
             ok_name, name = clean_name(b.get("name")) if has_name else (True, None)
@@ -617,7 +622,7 @@ async def handle(reader, writer):
 async def serve_events(reader, writer):
     EVENT_CLIENTS.add(writer)
     # 한 프레임 안에서 모든 session.canvas 가 이 canvases 안에 있다 (protocol.md)
-    writer.write(Frame.text({"t": "hello",
+    writer.write(Frame.text({"t": "hello", "v": PROTOCOL,
                              "canvases": [c.json() for c in CANVASES],
                              "sessions": [s.json() for s in SESSIONS.values()]}))
     try:

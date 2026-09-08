@@ -29,7 +29,7 @@ python3 prove.py                     # 진짜 8801, 진짜 HOME. 42/42 를 찍�
 python3 f1.py 8832                   # 각각 자기 포트에 격리된 HOME 으로 데몬을 띄운다
 python3 f2.py 8834
 python3 f3.py 8833
-python3 f6.py 8836 ../../../../web/app.js
+python3 f6.py 8836 ../../../../palmar/web/app.js
 python3 shots.py                     # 스크린샷 둘을 다시 만든다 (8801)
 ```
 
@@ -37,7 +37,7 @@ python3 shots.py                     # 스크린샷 둘을 다시 만든다 (880
 - `prove.py` 는 환경변수를 셋 받는다: `PALMAR_TEST_PORT`, `PALMAR_CDP`, `PALMAR_NO_SHOTS=1`,
   그리고 `PALMAR_PY` 로 **데몬을 띄울 인터프리터**를 고른다 —
   `PALMAR_PY=/opt/anaconda3/bin/python3` 이 `AGENTS.md` 가 요구하는 "새 파이썬에서 한 번 더" 다.
-- `f6.py` 는 `web/dev-stub.py` 를 **임시 디렉터리에 베껴** `canvases: []` 를 보내게 고쳐 쓴다.
+- `f6.py` 는 `dev/dev-stub.py` 를 **임시 디렉터리에 베껴** `canvases: []` 를 보내게 고쳐 쓴다.
   저장소의 스텁은 안 건드린다. 두 번째 인자로 준 `app.js` 를 그 스텁이 대신 내주므로
   **고치기 전 판과 고친 뒤 판을 같은 조건에서 견줄 수 있다.**
 

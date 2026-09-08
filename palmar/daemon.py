@@ -11,7 +11,7 @@ PTY 를 띄우고, 바이트를 옮기고, 훅을 받고, 폴더를 읽는다. �
 - 캔버스(⑪)와 이름(⑫)은 2026-09-08 에 계약에 붙었다. 데몬이 갖는 것은 id·이름·순서와
   세션의 소속뿐이다 — 미니맵도 목록 접기도 "지금 보고 있는 탭" 도 여기 없다(브라우저만의 것).
 
-    python3 server/palmard.py            # 127.0.0.1:8801. --port 만 받는다. host 옵션은 없다(#29).
+    python3 -m palmar            # 127.0.0.1:8801. --port 만 받는다. host 옵션은 없다(#29).
 
 자식 종료 감지는 SIGCHLD → `waitpid(WNOHANG)` 다. kqueue NOTE_EXIT 는 macOS 전용이라 리눅스
 폴백이 따로 필요하고, 0.5초 폴링은 유휴를 먹는다(원칙 6). asyncio 가 시그널을 self-pipe 로
@@ -40,6 +40,8 @@ import termios
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
+
+from . import PROTOCOL, __version__
 
 if sys.version_info < (3, 9):
     sys.exit("palmard: 파이썬 3.9 이상이 필요하다 (/usr/bin/python3 가 3.9.6 이다)")
@@ -94,7 +96,9 @@ ZDOT_DIR = PALMAR_DIR / "zsh"      # zsh 래퍼 rc
 BASHRC = PALMAR_DIR / "bash" / "bashrc"   # bash 래퍼 rc (--rcfile 로 물린다)      # zsh 를 감싸는 rc. 사용자 rc 뒤에 PATH 를 다시 앞세운다
 RUN_DIR = PALMAR_DIR / "run"
 TOKEN_FILE = RUN_DIR / "token"
-WEB = (Path(__file__).resolve().parent.parent / "web").resolve()
+# web/ 는 이 파일 **옆에** 있다. 저장소에서 `python3 -m palmar` 로 돌 때와 휠에서 설치돼 돌 때가
+# 같은 경로다 — 둘이 다르면 한쪽에서만 되는 종류의 버그가 생긴다.
+WEB = (Path(__file__).resolve().parent / "web").resolve()
 
 PORT = [8801]        # Origin·Host 검사와 훅 URL 에 쓰려고 전역으로 둔다
 TOKEN = [""]         # 뜰 때 만든다 — secrets.token_urlsafe(32)
@@ -197,13 +201,13 @@ f="$HOME/.palmar/run/$PALMAR_PANE.json"
 exec "$real" "$@"
 """
 
-# web/index.html 이 아직 없을 때 GET / 가 그래도 200 과 토큰을 돌려주도록 하는 자리표.
+# palmar/web/index.html 이 아직 없을 때 GET / 가 그래도 200 과 토큰을 돌려주도록 하는 자리표.
 # web/ 은 다른 사람이 쓰고 있다 — 여기서 만들지 않는다.
 PLACEHOLDER_INDEX = b"""<!doctype html>
 <html><head><meta charset="utf-8"><title>palmar</title></head>
 <body style="font-family:system-ui,sans-serif;margin:2rem;max-width:40rem">
 <h1>palmar</h1>
-<p>The daemon is running, but <code>web/index.html</code> is not there yet.</p>
+<p>The daemon is running, but <code>palmar/web/index.html</code> is not there yet.</p>
 <p>The API is up: <code>GET /api/sessions</code>, <code>POST /api/sessions</code>,
 <code>PATCH /api/sessions/&lt;id&gt;</code>, <code>/api/canvases</code>,
 <code>GET /api/dirs</code>, <code>ws /events</code>, <code>ws /pty/&lt;id&gt;</code>.
@@ -1328,7 +1332,9 @@ async def ws_events(reader, writer, headers: dict) -> None:
         return
     registry.event_clients.add(writer)
     # 한 프레임 안에서 참조 무결 — 여기 실린 모든 session.canvas 는 같이 실린 canvases 안에 있다.
-    writer.write(Frame.text({"t": "hello",
+    # `v` 는 **프로토콜** 판이지 패키지 판이 아니다. 배포되기 시작하면 캐시된 새 페이지가 낡은
+    # 데몬을 만난다 — 그때 서로 모르고 이상하게 구는 대신, 페이지가 대놓고 말하게 한다.
+    writer.write(Frame.text({"t": "hello", "v": PROTOCOL, "daemon": __version__,
                              "canvases": [c.to_json() for c in registry.canvas_list()],
                              "sessions": [s.to_json() for s in registry.list()]}))
     try:
@@ -1754,8 +1760,11 @@ async def main(port: int) -> None:
         pass
 
 
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="palmar 데몬. 127.0.0.1 에만 묶인다.")
+def cli() -> None:
+    """`palmar` 명령과 `python3 -m palmar` 가 둘 다 여기로 온다."""
+    ap = argparse.ArgumentParser(prog="palmar", description="palmar 데몬. 127.0.0.1 에만 묶인다.")
     ap.add_argument("--port", type=int, default=8801)
+    ap.add_argument("--version", action="version", version="palmar " + __version__)
     args = ap.parse_args()
     asyncio.run(main(args.port))
+

@@ -17,7 +17,7 @@
 //      PROVISIONAL 둘: 이름 없는 캔버스의 이름표를 무엇으로 만드는지(⑪ 미정 → canvasLabel 하나에 있다),
 //      새 세션이 어느 캔버스에 뜨는지(⑪ "지금 캔버스인가 그 폴더의 캔버스인가" 미정 → launch 하나에 있다).
 //
-// 흐름 제어·재접속은 스파이크 D(docs/spikes/2026-09-07/pipeline/web/app.js)의 꼴을 그대로 가져왔다:
+// 흐름 제어·재접속은 스파이크 D(docs/spikes/2026-09-07/pipeline/palmar/web/app.js)의 꼴을 그대로 가져왔다:
 // 바이너리 프레임 → term.write(bytes, cb) → cb 안에서 {"t":"ack","n":len}.
 
 (() => {
@@ -1514,6 +1514,27 @@ if (bellEl) {
   });
 }
 
+// ── 프로토콜 판 ─────────────────────────────────────────
+// 이 페이지가 아는 판. 데몬의 palmar/__init__.py PROTOCOL 과 짝이다.
+// **한 곳에서 클론해 쓰는 동안은 어긋날 수가 없다** — 데몬과 페이지가 같은 커밋이니까.
+// 배포되기 시작하면 달라진다: 브라우저가 캐시한 새 페이지가 안 올린 데몬을 만난다.
+// 그때 조용히 이상하게 구는 대신 **말한다**. 막지는 않는다 — 대개는 그래도 돌아가고,
+// 막아 버리면 고칠 방법(새로고침·데몬 재시작)까지 같이 막힌다.
+const PROTOCOL = 1;
+let protocolWarned = false;
+function checkProtocol(m) {
+  const v = m.v;
+  if (v === undefined || v === PROTOCOL || protocolWarned) return;
+  protocolWarned = true;
+  const older = v < PROTOCOL;
+  toast([
+    'this page speaks protocol ' + PROTOCOL + ', the daemon speaks ' + (v === null ? '?' : v),
+    older ? 'the daemon is older — restart it after pulling'
+          : 'this page is older — reload with a hard refresh',
+    m.daemon ? 'daemon ' + m.daemon : '',
+  ].filter(Boolean));
+}
+
 // ── 세션 반영 ───────────────────────────────────────────
 function upsert(s) {
   const old = sessions.get(s.id);
@@ -1587,7 +1608,7 @@ function connectEvents() {
     try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (!m) return;
     // hello 한 프레임 안에서 모든 session.canvas 가 이 canvases 안에 있다(protocol.md) — 캔버스를 먼저 넣는다
-    if (m.t === 'hello') { setCanvases(m.canvases || []); reconcile(m.sessions || []); }
+    if (m.t === 'hello') { checkProtocol(m); setCanvases(m.canvases || []); reconcile(m.sessions || []); }
     else if (m.t === 'session' && m.s) upsert(m.s);
     else if (m.t === 'gone' && m.id) remove(m.id);
     else if (m.t === 'canvas' && m.c) putCanvas(m.c);           // 생겼거나 이름이 바뀌었다
@@ -1770,7 +1791,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
 // ── 시작 ────────────────────────────────────────────────
 function boot() {
   if (!window.Terminal || !window.FitAddon) {
-    toast(['xterm.js is missing under web/vendor/ — see web/vendor/VERSIONS']);
+    toast(['xterm.js is missing under palmar/web/vendor/ — see palmar/web/vendor/VERSIONS']);
     return;
   }
   // 단축키 안내는 이 기계의 글쇠를 말해야 한다. 처리 쪽은 진작 metaKey 와 ctrlKey 를 둘 다 받고
