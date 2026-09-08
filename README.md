@@ -52,6 +52,12 @@ window at the same moment.
 
 **A minimap** sits bottom-right for the canvas you are on. Click or drag in it to move the viewport.
 
+**Nothing moves a window except you.** Closing the last terminal at the bottom shrinks the canvas on
+its own, but closing the one at the top leaves the space above the rest — because taking that space
+back means moving windows, and a window you can see should not jump because a different one closed.
+**Tidy this canvas**, in the shortcuts panel, does it when you ask: everything slides back to the
+corner keeping its spacing.
+
 **Copy and paste.** Select with the mouse, then `Ctrl+Shift+C` (`⌘C` on a Mac); paste with
 `Ctrl+Shift+V` (`⌘V`), or the browser's own paste. **`Ctrl+C` is left alone** — in a terminal that
 is the interrupt, and taking it away because something happened to be selected would stop the wrong

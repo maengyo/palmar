@@ -745,6 +745,42 @@ function lastLine(term) {
 // ⑩ 임시: 빈 자리 훑기. 밀어내기는 #23. **같은 캔버스의 창만 본다** — 캔버스는 서로 다른 종이다(⑪).
 // 자리는 DOM 이 아니라 좌표 스토어에서 읽는다: 다른 캔버스의 타일은 display:none 이라 offsetLeft 가 0 이고,
 // DOM 을 믿으면 새 창이 원점에 몰린다. (AGENTS.md "창은 스토어에서 직접 읽는다" 와 같은 이유이기도 하다.)
+// 창을 닫으면 그 자리는 빈다. **아래·오른쪽은 브라우저가 알아서 거둔다** — 스크롤 넓이를 가장 먼
+// 타일까지로 재기 때문이다. 위·왼쪽은 안 거둬진다: 원점이 0 에 고정이라 첫 타일 앞의 빈 자리도
+// 여전히 '내용' 으로 친다. 그래서 맨 아래 창을 닫으면 공간이 줄고 맨 위 창을 닫으면 안 줄었다.
+//
+// **자동으로는 안 한다.** 원점 앞의 빈 자리는 내용을 움직여야만 없앨 수 있고, 화면 위쪽에 있을 때는
+// 보이는 창이 튄다(실측: 남은 창이 206px 뛰었다). 창을 놓아 둔 자리는 이 프로그램의 약속이라,
+// 남의 창이 닫혔다고 내 창이 움직이면 안 된다. 그래서 **사람이 시킬 때만** 한다 — 시킨 사람에게는
+// 움직이는 것이 놀랄 일이 아니다.
+function tidyCanvas(canvasId) {
+  const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
+  if (!mine.length) return false;
+  const dx = Math.min(...mine.map((t) => layout[t.id].x)) - GAP;
+  const dy = Math.min(...mine.map((t) => layout[t.id].y)) - GAP;
+  if (dx <= 0 && dy <= 0) return false;
+  const sx = Math.max(0, dx), sy = Math.max(0, dy);
+  const l0 = cvScroll.scrollLeft, t0 = cvScroll.scrollTop;
+  // **되돌려 읽지 않고 의도한 값을 적는다.** `persist()` 는 `offsetLeft` 를 읽는데, 자리에 전환이
+  // 걸려 있어 그 값은 옮기는 **중간값**이다 — 그대로 저장하면 옛 자리가 다시 들어가 아무 일도 안
+  // 일어난 것이 된다(실측: 눌러도 자리가 그대로였다). 끄는 길은 `drag` 클래스로 전환을 꺼서 이 함정을
+  // 비껴가고 있었다.
+  for (const t of mine) {
+    const r = layout[t.id];
+    t.el.style.left = (r.x - sx) + 'px';
+    t.el.style.top = (r.y - sy) + 'px';
+    layout[t.id] = Object.assign({}, r, { x: r.x - sx, y: r.y - sy });
+  }
+  saveLayout();
+  // 보던 자리를 같이 당긴다. 내용이 화면보다 짧아지면 브라우저가 0 으로 깎는데, 그때는 어차피
+  // 전부가 한 화면에 들어온 것이라 볼 것을 놓치지 않는다.
+  cvScroll.scrollLeft = Math.max(0, l0 - sx);
+  cvScroll.scrollTop = Math.max(0, t0 - sy);
+  renderMinimap();
+  refreshOff();
+  return true;
+}
+
 function firstFree(w, h, canvasId) {
   const W = cvScroll.clientWidth, H = cvScroll.clientHeight;
   const rects = [];
@@ -2060,7 +2096,14 @@ function boot() {
     keysEl.addEventListener('click', (e) => e.stopPropagation());
     addEventListener('click', () => { if (!keysEl.hidden) showKeys(false); });
     addEventListener('keydown', (e) => { if (e.key === 'Escape' && !keysEl.hidden) showKeys(false); });
+    const tidyBtn = document.getElementById('tidy');
+    if (tidyBtn) tidyBtn.addEventListener('click', () => {
+      const moved = tidyCanvas(current);
+      showKeys(false);
+      if (!moved) toast(['nothing to tidy — this canvas already starts at the corner']);
+    });
   }
+  window.palmar.tidyCanvas = tidyCanvas;
   loadRails();
   rzGrip(document.getElementById('rz-l'), 'l');
   rzGrip(document.getElementById('rz-r'), 'r');
