@@ -244,11 +244,18 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .scroll::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 4px; }
 
 /* ── sessions (left) ────────────────────────── */
+/* 묶음 머리글. **자기 내용보다 흐리면 머리글로 안 읽힌다** — 전에는 --ink-3 이라 아래 줄들보다
+   뒤로 물러나 있었고, 묶음 사이를 가르는 것도 없어 어디서 끊기는지 안 보였다(사용자 보고).
+   셋으로 고친다: 위에 실선 하나, 스크롤해도 머리글이 남게(sticky), 이름은 한 단계 진하게. */
 .grp {
-  display: flex; align-items: center; gap: 7px; padding: 10px 14px 4px;
+  display: flex; align-items: center; gap: 7px; padding: 9px 14px 5px;
   font-size: 10.5px; color: var(--ink-3); letter-spacing: .06em; text-transform: uppercase;
   cursor: pointer; user-select: none;
+  position: sticky; top: 0; z-index: 2;
+  background: var(--rail);            /* 안 깔면 스크롤할 때 밑의 줄이 비쳐 겹친다 */
+  border-top: 1px solid var(--line); margin-top: 5px;
 }
+.grp:first-child { border-top: 0; margin-top: 0; }
 .grp:hover { color: var(--ink-2); }
 /* #31 ③ 접히지 않는 묶음(상태 묶음의 waiting). 누를 것이 아니므로 손가락도 hover 도 안 준다 —
    "여기는 접을 수 없다" 를 커서로 먼저 말한다. 캐럿 자리는 빈 채로 남겨 줄이 안 밀리게 한다. */
@@ -259,7 +266,10 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .grp .ct { margin-left: auto; color: var(--ink-3); letter-spacing: 0; }
 /* #31 ③ 캔버스 묶음의 머리글. 이름은 사람이 지은 것이라 대문자로 바꾸지 않는다 — 상태 묶음(대문자)과
    눈으로 갈린다. 지금 보고 있는 캔버스의 머리글만 글자가 진하다(.tab.cur / .ses.cur 와 같은 뜻). */
-.grp.cvg .nm { text-transform: none; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grp.cvg .nm {
+  text-transform: none; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11.5px; font-weight: 500; color: var(--ink-2);   /* 아래 줄들보다 흐리지 않게 */
+}
 .grp.cvg.cur .nm { color: var(--ink); }
 .grp.cvg .dot { margin-left: 2px; }
 /* 접힌 묶음이 감춘 개수. 눌러도 펴진다 — 감춘 것에 닿는 길이 머리글 말고도 하나 더 있게. */
@@ -285,6 +295,9 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 /* #31 ③ 접힌 캔버스 묶음 안에서도 남아 있는 줄 — 기다리는 것이다. 왼쪽에 --st-wait 선 하나로 표시한다.
    새 색이 아니다(⑥ 은 여전히 미정). "왜 접었는데 이건 보이나" 에 답하는 표시다. */
 .ses.pinned { box-shadow: inset 2px 0 0 var(--st-wait); }
+/* 캔버스 묶음에 속한 줄은 한 칸 들어간다 — 머리글에 딸린 것이 눈으로 보이게. 상태로 묶는 옛 길
+   (renderByStatus)에는 안 붙인다: 거기서는 묶음이 캔버스가 아니라 상태라 들여쓸 것이 없다. */
+.ses.cvrow { margin-left: 14px; }
 .ses.cur { background: var(--accent-2); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 .ses .who { font-size: 12.5px; font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ses .who span { color: var(--ink-3); font-weight: 400; }

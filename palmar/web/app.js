@@ -1272,7 +1272,9 @@ function buildItem(s, pinned) {
   const ago = el('span', 'ago');
   // ⑪ 다른 캔버스의 것에는 캔버스 이름표가 붙는다 — "↗ off" 와 **같은 칸**이다. 둘이 같이 붙지는 않는다:
   // 다른 캔버스에 있는 창이 이 캔버스에서 화면 밖인지는 물음이 아니다.
-  if (current !== null && s.canvas !== current) {
+  // **캔버스로 묶어 그리는 중이면 안 붙인다** — 바로 위 머리글이 이미 그 캔버스를 말한다.
+  // 같은 말을 두 번 하면 머리글과 줄의 경계가 흐려진다(사용자 보고 2026-09-08).
+  if (!inCanvasGroup && current !== null && s.canvas !== current) {
     const label = canvasLabel(canvasById(s.canvas));
     const b = el('span', 'cvb', label);
     b.title = 'in ' + label + ' — click to go there';
@@ -1332,6 +1334,7 @@ function toggleCvGroup(id) {
 //      묶음 아래 "+N more, collapsed" 한 줄로 말한다. 머리글의 수는 언제나 **캔버스 전체**다.
 // 그래서 접어 두어도 기다리는 줄은 목록 맨 위 근처에 남는다 — 두 겹 다 없어야 파묻힌다.
 // 줄은 한 세션에 하나다(위에 따로 복사해 두지 않는다) — 같은 것이 둘로 보이면 수가 거짓말을 한다.
+let inCanvasGroup = false;    // 캔버스로 묶어 그리는 중인가 — 줄의 캔버스 이름표를 뺄지 정한다
 function renderByCanvas() {
   const buckets = new Map();
   for (const id of canvasOrder) buckets.set(id, []);
@@ -1367,7 +1370,14 @@ function renderByCanvas() {
     g.appendChild(el('span', 'ct', String(arr.length)));       // 접혀도 **캔버스 전체**의 수다
     g.addEventListener('click', () => toggleCvGroup(k));
     listEl.appendChild(g);
-    for (const s of shown) { const it = buildItem(s, off); items.set(s.id, it); listEl.appendChild(it); }
+    for (const s of shown) {
+      inCanvasGroup = true;
+      const it = buildItem(s, off);
+      inCanvasGroup = false;
+      it.classList.add('cvrow');        // 캔버스 묶음에 딸린 줄 — 한 칸 들여쓴다
+      items.set(s.id, it);
+      listEl.appendChild(it);
+    }
     if (arr.length > shown.length) {
       // 접힘이 감춘 것 중 **나를 부르는 것이 몇인지** 여기서 말한다. 접힌 묶음 안에서 done 은 줄로
       // 남지 않으므로(줄로 남기면 접힘이 쓸모없어진다) 이 수와 머리글의 점이 그 자리를 대신한다.
