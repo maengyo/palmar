@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="palmer mark D">
+  <rect x="2.2" y="14.4" width="4" height="9.4" rx="1.8" fill="currentColor" opacity=".4" transform="rotate(-34 4.2 19.1)"/>
+  <rect x="7.6" y="19.4" width="19.4" height="8.6" rx="3" fill="currentColor"/>
+  <rect x="8.3" y="10.6" width="4" height="10" rx="1.5" fill="currentColor" opacity=".4"/>
+  <rect x="13.7" y="6" width="4" height="14.6" rx="1.5" fill="currentColor" opacity=".62"/>
+  <rect x="19.1" y="6.8" width="4" height="13.8" rx="1.5" fill="currentColor" opacity=".4"/>
+  <rect x="24.5" y="10.6" width="4" height="10" rx="1.5" fill="currentColor" opacity=".4"/>
+  <circle cx="15.7" cy="9.2" r="1.9" fill="#d99a2b"/>
+</svg>

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0.0 0.0 481.5 128.0" width="482" height="128" role="img" aria-label="palmer">
+  <g transform="translate(6.0, 6.0) scale(3.6250)">
+    <rect x="6.2" y="6.2" width="5.4" height="21.6" rx="1.6" fill="currentColor"/>
+  <rect x="12.8" y="6.2" width="13.2" height="13.6" rx="4.2" fill="none" stroke="currentColor" stroke-width="4.6"/>
+  <circle cx="19.4" cy="13" r="2" fill="#d99a2b"/>
+  </g>
+  <g transform="translate(148.00, -12.00)">
+  <g fill="none" stroke="currentColor" stroke-width="11.0" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M 13.50 57.50 V 128.50"/>
+  <path d="M 13.50 76.00 a 18.50 18.50 0 1 0 37.00 0 a 18.50 18.50 0 1 0 -37.00 0"/>
+  <path d="M 73.50 76.00 a 18.50 18.50 0 1 0 37.00 0 a 18.50 18.50 0 1 0 -37.00 0"/>
+  <path d="M 110.50 57.50 V 94.50"/>
+  <path d="M 137.50 23.50 V 84.00 A 10.50 10.50 0 0 0 148.00 94.50"/>
+  <path d="M 173.00 57.50 V 94.50"/>
+  <path d="M 173.00 66.75 A 9.25 9.25 0 0 1 191.50 66.75 V 94.50"/>
+  <path d="M 191.50 66.75 A 9.25 9.25 0 0 1 210.00 66.75 V 94.50"/>
+  <path d="M 272.00 76.00 A 18.50 18.50 0 1 0 267.25 88.38"/>
+  <path d="M 235.00 76.00 H 272.00"/>
+  <path d="M 297.00 57.50 V 94.50"/>
+  <path d="M 297.00 68.00 A 10.50 10.50 0 0 1 307.50 57.50 H 322.00"/>
+  </g>
+  </g>
+</svg>

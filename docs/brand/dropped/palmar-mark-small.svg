@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="palmar">
+  <path d="M 5 9 V 17 A 11 11 0 0 0 27 17 V 13" fill="none" stroke="currentColor" stroke-width="4.2" stroke-linecap="round"/>
+  <rect x="10.2" y="13.4" width="11.6" height="4.4" rx="1.5" fill="currentColor"/>
+  <rect x="10.2" y="19" width="11.6" height="3.4" rx="1.4" fill="#d99a2b"/>
+</svg>
