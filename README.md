@@ -2,7 +2,9 @@
 
 *Read this in [한국어](README.ko.md).*
 
-> ⚠️ Nothing is built yet. This document is **the plan, and the facts checked before writing code**.
+> ⚠️ **Early.** The daemon (`server/palmerd.py`) and the browser UI (`web/`) now run — see **Try it**
+> below. This document is still **the plan and the facts checked before code**, and several decisions
+> are the human's to make (web stack, coordinate storage, colours, codex status, app release).
 
 A spatial canvas for coding agents that are already running. Terminals sit where you put them,
 at the size you gave them, and each one shows whether it is **working · waiting on you · done**.
@@ -35,6 +37,71 @@ if that window got pushed aside, even if it is off screen.
 │  Each a real PTY. Hooks/SSE report status.     │
 └────────────────────────────────────────────────┘
 ```
+
+## Try it
+
+```
+python3 server/palmerd.py            # prints http://127.0.0.1:8801 on its last line — open that
+```
+
+One command, no arguments, no install: it needs `/usr/bin/python3` (3.9.6), which is present wherever
+`git` is. It binds only `127.0.0.1`. Open the printed URL in a browser.
+
+**What you see:** three columns — a terminal list on the left, a dot-grid canvas in the middle, a
+directory rail on the right. Pick a folder on the right, press **Open terminal here**, and a shell
+opens on the canvas at that path. Drag the title bar to move a window, the corner to resize (the
+shell's rows and columns follow). Click the expand box to blow one up to the whole canvas; **Esc**,
+or a click on the "back to canvas" pill, returns — and so does switching to a canvas the expanded
+window does not live on. Close the tab and reopen the URL — the sessions are still there (the daemon
+owns the PTYs, the browser just attaches).
+
+**Canvases, above the canvas.** A tab strip sits over the canvas, OneNote-style. **＋** makes a new
+canvas and asks for its name right away; double-click a tab (or press F2 on it) to rename it later;
+drag tabs to reorder them. A tab carries **one small dot** when something in that canvas is waiting
+on you — nothing else goes on a tab. The dot does not go out because you looked at it; the next hook
+turns it off. Every open browser sees the same tabs in the same order, because the daemon owns them.
+The strip stays honest while you work in it: a status change arriving mid-drag no longer disturbs the
+tab you are holding, the dots keep updating while a rename box is open, and when you land on a canvas
+whose tab is scrolled out of sight the strip brings that tab into view.
+
+**The left list is never filtered by canvas.** Everything is there, grouped by status, waiting first,
+whichever canvas it lives in. A session in another canvas carries a small canvas badge — click the
+row and palmer switches to that canvas and focuses that window. Click a group header to collapse it;
+the count stays, and the collapse survives a reload. While you are searching, collapsed groups open
+so nothing hides from the filter.
+
+**Names.** Both canvases and terminals can be named. On a window, the rename box next to the title —
+or a double-click on the name — takes it; empty clears it and the path label comes back.
+
+**Minimap.** Bottom-right of the canvas, for the canvas you are looking at, and only that one. The
+canvas grows without limit as you add windows, so it answers "where am I in here"; click or drag in
+it to move the viewport.
+
+**What does not work yet:**
+- **There is no button that deletes a canvas, and none that moves a terminal to another canvas.**
+  The daemon does both (`DELETE /api/canvases/<id>`, `PATCH /api/sessions/<id>`) and every open
+  browser follows along correctly — where those handles belong in the UI is still an open product
+  question (⑪), so nothing was invented for them.
+- **Many canvases push the ＋ off the end of the tab strip.** At 20 canvases the strip is more than
+  twice as wide as its box and its scrollbar is hidden, so the ＋ is out of reach until you scroll
+  sideways. The *current* tab is scrolled into view for you; the ＋ is not, and no overflow or
+  truncation rule has been chosen yet.
+- **There is no close button on a window either.** Type `exit` in the shell and the window goes away
+  (measured: the session leaves the list and its per-pane settings file is swept). The browser never
+  sends a DELETE — a window is a view of a session, and a session outlives the UI.
+- **Nothing survives restarting the daemon** — not canvases, not names, not the shells. That is
+  ⑦=b (no handoff) plus "nothing is written to disk"; it is what `docs/protocol.md` says.
+- **Hooks attach in zsh, not yet in bash or fish.** Putting the shim first on `PATH` was not enough —
+  the user's own `.zshrc` runs afterwards and re-prepends its directories. palmer now wraps zsh with
+  `ZDOTDIR`, so its rc runs *last* and puts the shim back in front; the user's files are only read.
+  Measured: a real `claude` in a pane reported `working` in three seconds with nothing installed.
+  **bash and fish are not wrapped yet**, so their dots can stay grey.
+- **Dragging one window onto another overlaps them** — the push-aside (#23) is not built yet.
+- **The JetBrains Mono webfont is not downloaded** (no network at runtime): if it is not installed
+  locally the UI falls back to your system monospace.
+- No settings panel, no ⌘K-to-command, no codex/opencode hooks (⑧ undecided).
+
+Stop it with Ctrl-C.
 
 ## Where this came from
 

@@ -1,0 +1,5 @@
+{"mode":"none","panes":16,"fps":60,"p50":16.7,"p95":16.7,"max":16.8,"longTasks":0,"scrollEvents":0,"frames":360}
+{"mode":"transform","panes":16,"fps":60,"p50":16.7,"p95":16.8,"max":16.8,"longTasks":0,"scrollEvents":360,"frames":360}
+{"mode":"layout","panes":16,"fps":60,"p50":16.7,"p95":16.7,"max":16.8,"longTasks":0,"scrollEvents":360,"frames":360}
+{"mode":"transform","panes":40,"fps":60,"p50":16.7,"p95":16.7,"max":16.8,"longTasks":0,"scrollEvents":360,"frames":360}
+{"mode":"layout","panes":40,"fps":60,"p50":16.7,"p95":16.7,"max":16.8,"longTasks":0,"scrollEvents":360,"frames":360}

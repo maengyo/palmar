@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>palmer</title>
+<link rel="icon" href="data:,">   <!-- 브라우저의 /favicon.ico 자동 요청(404)을 막는다 -->
+<!-- 런타임에 외부 서비스를 부르지 않는다(AGENTS 원칙 7·autopilot "외부 서비스 호출" 금지·vendor/VERSIONS
+     "no network at runtime"). 그래서 Google Fonts 링크를 뺐다(#14). JetBrains Mono 는 style.css 의 --mono
+     첫 자리에 그대로 있어 로컬에 깔려 있으면 쓰이고, 없으면 뒷 목록(ui-monospace, Menlo…)으로 떨어진다.
+     웹폰트로 심으려면 JetBrains Mono woff2(OFL)를 web/vendor/ 에 넣어 @font-face 로 self-host 한다 —
+     디자인 정본(decisions.md:121)은 글자체를 정했지 출처를 정한 게 아니라, 그 걸음은 사람이 고른다. -->
+
+<link rel="stylesheet" href="vendor/xterm.css">
+<link rel="stylesheet" href="style.css">
+<!-- 데몬은 index.html 을 낼 때 head 가 닫히는 자리 바로 앞에 토큰을 심는 script 한 줄을 넣는다 (protocol.md "뜨기" 4).
+     그래서 이 파일에 head 닫는 태그는 정확히 하나여야 한다 — 주석에도 그 글자를 적지 마라(첫 것을 바꿔 끼운다). -->
+</head>
+<body>
+<div class="win">
+  <div class="top">
+    <div class="l">
+      <!-- 목업의 .lights(macOS 창 버튼)는 넣지 않았다 — style.css 의 주석 참고. -->
+      <span class="brand">palmer</span>
+    </div>
+    <div class="c">
+      <label class="search">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="search" type="search" placeholder="Search sessions and folders" autocomplete="off" spellcheck="false">
+        <span class="k"><kbd>⌘</kbd><kbd>K</kbd></span>
+      </label>
+    </div>
+    <div class="r">
+      <span class="hint"><kbd>Ctrl</kbd><kbd>−</kbd> more canvas</span>
+      <span class="theme" id="theme" role="button" tabindex="0" title="theme: system"><i></i></span>
+      <span class="gear" title="settings — not built yet"></span>
+    </div>
+  </div>
+
+  <div class="body">
+    <!-- ── left: sessions ─────────────────────── -->
+    <aside class="rail left">
+      <div class="rh">Terminals <span class="n" id="count">0</span><span class="sp"></span></div>
+      <div class="scroll" id="list"></div>
+      <!-- 훅은 shim 이 붙이고, shim 은 claude 만 있다 (protocol.md "shim": codex·opencode 는 ⑧ 미정).
+           이 줄은 그 사실을 적은 것이고 데몬에 물어 얻은 값이 아니다. -->
+      <div class="rf"><b>hooks</b> <i>claude</i> <i class="no">codex</i> <i class="no">opencode</i></div>
+    </aside>
+
+    <!-- ── canvas ─────────────────────────────── -->
+    <!-- ⑪: 탭 줄은 캔버스 **위**에 있고 양옆 레일에는 걸치지 않는다 — 그래서 가운데 칸을 .cvcol 이
+         다시 세로로 나눈다. 탭과 미니맵의 속은 JS 가 채운다(app.js "캔버스 탭" · "미니맵"). -->
+    <section class="cvcol">
+      <div class="tabs" id="tabs" role="tablist" aria-label="canvases"></div>
+      <main class="cv" id="cv">
+        <div class="cv-scroll" id="cv-scroll"></div>
+        <!-- 미니맵은 지금 보고 있는 캔버스 것 하나뿐이다(⑪).
+             데몬은 이게 있는 줄도 모른다(protocol.md "없는 것"). -->
+        <div class="mm" id="mm" hidden title="drag to move the viewport">
+          <div class="mm-w" id="mm-w"></div>
+          <div class="mm-vp" id="mm-vp"></div>
+        </div>
+        <div class="esc"><kbd>Esc</kbd> back to canvas</div>
+        <div class="toast" id="toast"></div>
+      </main>
+    </section>
+
+    <!-- ── right: directories ─────────────────── -->
+    <aside class="rail right">
+      <div class="rh">Directories<span class="sp"></span><span class="ib" id="mkdir" title="new folder">＋</span><span class="ib" id="refresh" title="refresh">↻</span></div>
+      <div class="scroll">
+        <div class="tree" id="tree"></div>
+        <div class="hint2">folders only · read when expanded</div>
+      </div>
+      <div class="launch">
+        <div class="path" id="launch-path">select a folder</div>
+        <button class="btn" id="launch" type="button" disabled>Open terminal here <kbd>⏎</kbd></button>
+      </div>
+    </aside>
+  </div>
+
+  <div class="sb">
+    <span class="live down" id="sb-daemon">daemon <i id="sb-host"></i></span>
+    <span><i id="sb-n">0</i> sessions</span>
+    <span class="sp"></span>
+    <span id="sb-right"></span>
+  </div>
+</div>
+
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
+<script src="vendor/addon-webgl.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

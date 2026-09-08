@@ -1,0 +1,444 @@
+/* palmer — 화면 스타일.
+ *
+ * 정본은 디자인 목업(대화 아티팩트 "palmer", decisions.md "디자인" 절)이다. 토큰·레이아웃·컴포넌트는
+ * 거기서 그대로 옮겼다. 덧붙인 것은 아래 "xterm 호스팅" 과 "동작용" 절만이다.
+ *
+ * 임시(⑥ 미정): --st-work / --st-wait / --st-done / --st-idle 은 상태 색이다. JS 는 status 문자열을
+ * 클래스(wait/work/done/idle)로만 바꾸고, 색은 이 파일 밖에 없다. 매핑이 정해지면 여기만 고친다.
+ *
+ * 2026-09-08 에 붙은 것(⑪ ⑫): 캔버스 탭 줄(.tabs), 미니맵(.mm), 목록 그룹 접기(.grp), 이름 고치기(.ed).
+ * **새 색을 만들지 않았다** — 탭의 점도 미니맵 사각형도 위 --st-* 를 그대로 쓴다(⑥ 은 여전히 미정).
+ */
+
+/* ── tokens: light is the base, dark overrides ── */
+:root {
+  color-scheme: light dark;
+  --ground:   #f3f1ec;
+  --canvas:   #ecebe5;
+  --dot:      #d3cfc5;
+  --rail:     #f7f5f0;
+  --tile:     #fcfbf8;
+  --tile-bar: #f3f1ec;
+  --line:     #dcd8cf;
+  --line-2:   #c9c4b9;
+  --ink:      #1f2229;
+  --ink-2:    #4f5563;
+  --ink-3:    #858a97;
+  --accent:   #4a58b8;
+  --on-accent:#fcfbf8;
+  --accent-2: rgba(74,88,184,.12);
+  --hover:    rgba(31,34,41,.035);
+  --btn:      #fcfbf8;
+  --kbd:      #fcfbf8;
+  --kbd-ink:  #4f5563;
+  --float:    rgba(252,251,248,.94);
+  --topbar:   rgba(247,245,240,.75);
+  --search:   rgba(252,251,248,.8);
+  --term-ink: #2a2d36;
+  --term-box: #8b8f9b;
+  --st-work:  #2f7d3a;
+  --st-wait:  #a8730f;
+  --st-done:  #c0392f;
+  --st-idle:  #a4a8b3;
+  --atmo-1:   rgba(70,140,150,.10);
+  --atmo-2:   rgba(190,140,80,.10);
+  --shadow:   0 1px 0 rgba(255,255,255,.6) inset, 0 10px 28px -14px rgba(31,34,41,.28);
+  --shadow-2: 0 14px 36px -14px rgba(31,34,41,.35);
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:   #0a0c11;
+    --canvas:   rgba(22,31,54,.78);
+    --dot:      #2b3654;
+    --rail:     #0c0f15;
+    --tile:     #050608;
+    --tile-bar: #0a0c11;
+    --line:     #1a1f2b;
+    --line-2:   #262d3b;
+    --ink:      #dfe2e8;
+    --ink-2:    #9aa1b0;
+    --ink-3:    #5d6575;
+    --accent:   #8b9cf9;
+    --on-accent:#0a0c11;
+    --accent-2: rgba(139,156,249,.16);
+    --hover:    rgba(255,255,255,.025);
+    --btn:      #0f1218;
+    --kbd:      #10131a;
+    --kbd-ink:  #9aa1b0;
+    --float:    rgba(10,12,17,.92);
+    --topbar:   rgba(12,15,21,.7);
+    --search:   rgba(5,6,8,.6);
+    --term-ink: #c9cdd6;
+    --term-box: #7d8598;
+    --st-work:  #62b56a;
+    --st-wait:  #e2a63a;
+    --st-done:  #e0574f;
+    --st-idle:  #4a5262;
+    --atmo-1:   rgba(70,130,225,.20);
+    --atmo-2:   rgba(95,125,215,.12);
+    --shadow:   0 1px 0 rgba(255,255,255,.02) inset, 0 12px 32px -12px rgba(0,0,0,.8);
+    --shadow-2: 0 16px 40px -12px rgba(0,0,0,.9);
+  }
+}
+:root[data-theme="dark"] {
+  --ground:   #0a0c11;
+  --canvas:   rgba(22,31,54,.78);
+  --dot:      #2b3654;
+  --rail:     #0c0f15;
+  --tile:     #050608;
+  --tile-bar: #0a0c11;
+  --line:     #1a1f2b;
+  --line-2:   #262d3b;
+  --ink:      #dfe2e8;
+  --ink-2:    #9aa1b0;
+  --ink-3:    #5d6575;
+  --accent:   #8b9cf9;
+  --on-accent:#0a0c11;
+  --accent-2: rgba(139,156,249,.16);
+  --hover:    rgba(255,255,255,.025);
+  --btn:      #0f1218;
+  --kbd:      #10131a;
+  --kbd-ink:  #9aa1b0;
+  --float:    rgba(10,12,17,.92);
+  --topbar:   rgba(12,15,21,.7);
+  --search:   rgba(5,6,8,.6);
+  --term-ink: #c9cdd6;
+  --term-box: #7d8598;
+  --st-work:  #62b56a;
+  --st-wait:  #e2a63a;
+  --st-done:  #e0574f;
+  --st-idle:  #4a5262;
+  --atmo-1:   rgba(70,130,225,.20);
+  --atmo-2:   rgba(95,125,215,.12);
+  --shadow:   0 1px 0 rgba(255,255,255,.02) inset, 0 12px 32px -12px rgba(0,0,0,.8);
+  --shadow-2: 0 16px 40px -12px rgba(0,0,0,.9);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font: 12px/1.5 var(--mono); -webkit-font-smoothing: antialiased;
+  overflow: auto;
+}
+::selection { background: var(--accent-2); }
+
+/* ── window ─────────────────────────────────── */
+.win {
+  position: relative; min-width: 1120px; height: 100vh; min-height: 680px;
+  display: grid; grid-template-rows: 44px 1fr 26px;
+  background:
+    radial-gradient(1200px 700px at 8% -10%, var(--atmo-1), transparent 60%),
+    radial-gradient(1000px 600px at 100% 110%, var(--atmo-2), transparent 60%),
+    var(--ground);
+}
+
+/* ── top bar ────────────────────────────────── */
+.top {
+  display: grid; grid-template-columns: 256px 1fr 232px; align-items: center;
+  border-bottom: 1px solid var(--line); background: var(--topbar);
+  -webkit-app-region: drag;
+}
+.top .l { display: flex; align-items: center; gap: 14px; padding: 0 16px; }
+/* .lights: 목업의 macOS 창 버튼. 브라우저 탭에서는 기능이 없고, 그 빨강·노랑·초록 세 색은 신호등의
+   것이라 여기 두면 안 된다(AGENTS.md "macOS 식 …버튼을 달지 마라"). DOM 에도 없다(index.html). 그래서
+   죽은 규칙(#19)을 지웠다 — Tauri 로 감쌀 때 창 버튼이 필요하면 그때 신호등 아닌 색으로 다시 넣는다. */
+.brand { font-weight: 600; font-size: 13px; letter-spacing: -.01em; }
+.top .c { display: flex; justify-content: center; }
+.search {
+  display: flex; align-items: center; gap: 8px; width: 380px; height: 28px;
+  padding: 0 10px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--search); color: var(--ink-3); font-size: 12px;
+  -webkit-app-region: no-drag;
+}
+.search .k { margin-left: auto; }
+.search input {
+  flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
+  font: inherit; color: var(--ink); padding: 0;
+}
+.search input::placeholder { color: var(--ink-3); }
+.search:focus-within { border-color: var(--accent); }
+kbd {
+  font: 10.5px var(--mono); color: var(--kbd-ink); background: var(--kbd);
+  border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 4px;
+  padding: 1px 5px 0; line-height: 15px; display: inline-block;
+}
+.top .r { display: flex; align-items: center; gap: 12px; justify-content: flex-end; padding: 0 14px; color: var(--ink-3); font-size: 11.5px; }
+.top .r .hint { display: flex; align-items: center; gap: 5px; }
+.gear { width: 16px; height: 16px; border: 1.5px solid var(--ink-3); border-radius: 50%; position: relative; }
+.gear::after { content: ""; position: absolute; inset: 4px; border-radius: 50%; border: 1.5px solid var(--ink-3); }
+.theme {
+  width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--btn);
+  display: grid; place-items: center; cursor: pointer; color: var(--ink-2);
+  -webkit-app-region: no-drag;
+}
+.theme:hover { border-color: var(--accent); color: var(--ink); }
+.theme i {
+  width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid currentColor; display: block;
+  background: linear-gradient(90deg, currentColor 50%, transparent 50%);
+}
+/* 세 상태 표시: system 은 반원(위 기본), light 는 빈 원, dark 는 꽉 찬 원 */
+.theme[data-mode="light"] i { background: transparent; }
+.theme[data-mode="dark"] i { background: currentColor; }
+
+/* ── body grid ──────────────────────────────── */
+.body { display: grid; grid-template-columns: 256px 1fr 232px; min-height: 0; }
+.rail { background: var(--rail); display: flex; flex-direction: column; min-height: 0; }
+.rail.left  { border-right: 1px solid var(--line); }
+.rail.right { border-left:  1px solid var(--line); }
+.rh {
+  display: flex; align-items: center; gap: 8px; padding: 14px 14px 8px;
+  font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); font-weight: 500;
+}
+.rh .n { color: var(--ink-2); letter-spacing: 0; }
+.rh .sp { flex: 1; }
+.ib {
+  width: 22px; height: 22px; border-radius: 5px; border: 1px solid var(--line-2);
+  background: var(--btn); color: var(--ink-2); display: grid; place-items: center;
+  font-size: 13px; letter-spacing: 0; cursor: pointer;
+}
+.ib:hover { border-color: var(--accent); color: var(--ink); }
+.scroll { overflow-y: auto; min-height: 0; flex: 1; }
+.scroll::-webkit-scrollbar { width: 8px; }
+.scroll::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 4px; }
+
+/* ── sessions (left) ────────────────────────── */
+.grp {
+  display: flex; align-items: center; gap: 7px; padding: 10px 14px 4px;
+  font-size: 10.5px; color: var(--ink-3); letter-spacing: .06em; text-transform: uppercase;
+  cursor: pointer; user-select: none;
+}
+.grp:hover { color: var(--ink-2); }
+/* 접기 캐럿은 오른쪽 트리(.row .car)와 같은 글리프·같은 폭이다 — 두 곳에서 다르게 생기지 않게 */
+.grp .car { color: var(--ink-3); font-size: 9px; width: 8px; flex: none; letter-spacing: 0; }
+.grp .ct { margin-left: auto; color: var(--ink-3); letter-spacing: 0; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dot.work { background: var(--st-work); box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-work) 16%, transparent); }
+.dot.wait { background: var(--st-wait); box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-wait) 18%, transparent); }
+.dot.done { background: var(--st-done); box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-done) 16%, transparent); }
+.dot.idle { background: var(--st-idle); }
+.ses {
+  display: grid; grid-template-columns: 7px 1fr auto; column-gap: 9px; row-gap: 2px;
+  align-items: center; padding: 8px 14px 9px; margin: 0 6px; border-radius: 6px;
+  cursor: pointer; border: 1px solid transparent;
+}
+.ses:hover { background: var(--hover); }
+.ses.cur { background: var(--accent-2); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.ses .who { font-size: 12.5px; font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ses .who span { color: var(--ink-3); font-weight: 400; }
+.ses .ago { font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
+.ses .msg { grid-column: 2 / 4; font-size: 11px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ses.wait .msg { color: var(--st-wait); }
+/* ⑪: 다른 캔버스의 세션에 붙는 이름표. "↗ off" 와 **같은 칸·같은 생김새**다 — 둘 다 "여기 안 보인다" 는 말이다.
+   (한 세션에 둘이 같이 붙지는 않는다: 다른 캔버스면 이 캔버스에서 화면 밖인지를 따지지 않는다.) */
+.ses .off, .ses .cvb {
+  font-size: 9.5px; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 3px;
+  padding: 0 4px; margin-right: 4px;
+}
+.ses .cvb { display: inline-block; max-width: 84px; overflow: hidden; text-overflow: ellipsis; vertical-align: -1px; }
+.ses.hide, .grp.hide, .row.hide { display: none; }
+.empty { padding: 18px 20px; font-size: 11px; color: var(--ink-3); line-height: 1.7; }
+.rf {
+  border-top: 1px solid var(--line); padding: 10px 14px; font-size: 11px; color: var(--ink-3);
+  display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center;
+}
+.rf b { color: var(--ink-2); font-weight: 500; }
+.rf i { font-style: normal; color: var(--ink-2); }
+/* #18: 훅 설치 표시(✓)와 아래 상태바 데몬 점(●)은 세션 상태가 아니다 — 신호등 초록(--st-work)을 쓰면
+   AGENTS "신호등 색을 다른 데 쓰지 마라" 위반이라 --accent 로 바꿨다. 목업은 초록을 썼으니 디자인 정본과
+   규칙 정본의 충돌이다 — 어느 쪽으로 갈지는 사람이 decisions.md 디자인 절에 적어 정한다. */
+.rf i::before { content: "✓ "; color: var(--accent); }
+.rf i.no { color: var(--ink-3); } .rf i.no::before { content: "– "; color: var(--ink-3); }
+
+/* ── canvas tabs (⑪) ────────────────────────── */
+/* 탭은 캔버스 **위**에 붙고 레일에는 걸치지 않는다(protocol.md "캔버스"). 그래서 가운데 칸 안에서
+   .cvcol 이 세로로 나누고, 탭 줄은 그 첫 줄이다. */
+.cvcol { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.tabs {
+  flex: none; height: 32px; display: flex; align-items: flex-end; gap: 4px;
+  padding: 0 8px; background: var(--rail); border-bottom: 1px solid var(--line);
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { height: 0; }
+/* display:flex 가 [hidden] 의 display:none 을 이기므로 여기서 다시 내린다 (캔버스를 모르는 데몬) */
+.tabs[hidden] { display: none; }
+.tab {
+  flex: none; display: flex; align-items: center; gap: 6px; max-width: 190px;
+  height: 25px; padding: 0 9px; margin-bottom: -1px;
+  border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0;
+  color: var(--ink-2); font-size: 11.5px; cursor: pointer; user-select: none;
+}
+.tab:hover { background: var(--hover); }
+/* 고른 것을 표시하는 법은 목록·트리와 같다(.ses.cur / .row.sel) — 새 표현을 만들지 않는다 */
+.tab.cur {
+  background: var(--accent-2); color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.tab .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 탭에 붙는 것은 점 하나뿐이다(decisions.md ⑪ "그 이상 안 넣는다"). 색은 --st-wait — 새 색이 아니다 */
+.tab .dot { width: 6px; height: 6px; margin-left: 1px; }
+.tab.drag { opacity: .55; }
+.tabs .ib { margin: 0 0 2px 4px; }
+
+/* ── canvas ─────────────────────────────────── */
+.cv {
+  position: relative; overflow: hidden; background-color: var(--canvas);
+  flex: 1; min-height: 0;
+}
+/* 동작용: 타일은 이 스크롤 층 안에 놓인다. 빈 자리가 없어 아래에 놓인 타일까지 스크롤로 닿는다
+   (⑩ 미정 — 이건 "밀 자리 없을 때" 의 결정이 아니라 아래에 놓인 것을 볼 최소한이다).
+   점 격자는 내용과 함께 움직인다(background-attachment: local). */
+.cv-scroll {
+  position: absolute; inset: 0; overflow: auto;
+  /* 타일의 z-index 는 포커스마다 ++ 되어 끝이 없다. 여기서 쌓임 맥락을 하나 만들어 그것을 이 층 안에
+     가둔다 — 그래야 위에 뜨는 것들(미니맵·토스트·Esc 알약)이 몇 번을 눌러도 타일에 안 덮인다. */
+  isolation: isolate;
+  background-image: radial-gradient(var(--dot) 1px, transparent 1.2px);
+  background-size: 22px 22px; background-position: 11px 11px; background-attachment: local;
+}
+.cv-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.cv-scroll::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 4px; }
+.cv.has-max .cv-scroll { overflow: hidden; }
+.tile {
+  position: absolute; display: flex; flex-direction: column;
+  background: var(--tile); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  box-shadow: var(--shadow);
+  transition: left .35s cubic-bezier(.2,.8,.2,1), top .35s cubic-bezier(.2,.8,.2,1),
+              width .35s cubic-bezier(.2,.8,.2,1), height .35s cubic-bezier(.2,.8,.2,1);
+}
+.tile.drag { transition: none; }                 /* 동작용: 끌거나 크기 조절하는 동안은 즉시 따라온다 */
+.tile.focus { border-color: color-mix(in srgb, var(--accent) 60%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent), var(--shadow-2); }
+.tile.fresh { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+/* 다른 캔버스의 타일. **세션도 웹소켓도 살아 있고 화면에만 없다** — 원칙 2("세션은 UI 보다 오래 산다"). */
+.tile.other { display: none; }
+.tile.max { left: 10px !important; top: 10px !important; width: calc(100% - 20px) !important; height: calc(100% - 20px) !important; z-index: 1000 !important; }
+.tb {
+  display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px 0 11px;
+  background: var(--tile-bar); border-bottom: 1px solid var(--line); cursor: grab; user-select: none; flex: none;
+}
+.tile.drag .tb { cursor: grabbing; }
+.tb .name { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tb .name span { color: var(--ink-3); font-weight: 400; }
+.tb .sz { margin-left: auto; font-size: 10.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; flex: none; }
+.tb .st { font-size: 10.5px; padding: 1px 6px; border-radius: 3px; flex: none; }
+.tb .st.wait { color: var(--st-wait); background: color-mix(in srgb, var(--st-wait) 14%, transparent); }
+.tb .st.work { color: var(--st-work); background: color-mix(in srgb, var(--st-work) 14%, transparent); }
+.tb .st.done { color: var(--st-done); background: color-mix(in srgb, var(--st-done) 14%, transparent); }
+.xp, .rn {
+  width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--line-2); flex: none;
+  display: grid; place-items: center; cursor: pointer; color: var(--ink-3); background: transparent;
+}
+.xp::before { content: ""; width: 7px; height: 7px; border: 1.5px solid currentColor; border-radius: 1px; }
+/* ⑫ 이름 바꾸기. 상자는 확대 상자(.xp)와 같은 몸이고 안의 그림만 다르다 — 획 하나(연필).
+   글리프(✎)를 안 쓴 이유는 신호등과 같다: 폰트마다 다르게 그려진다(AGENTS.md). */
+.rn::before {
+  content: ""; width: 10px; height: 10px;
+  background: linear-gradient(135deg, transparent 0 40%, currentColor 40% 60%, transparent 60%);
+}
+.xp:hover, .rn:hover, .tile.focus .xp, .tile.focus .rn {
+  color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+/* 제자리에서 이름을 고치는 칸. 탭과 타일 제목이 같이 쓴다 — 글꼴은 놓인 자리에서 물려받는다 */
+.ed {
+  font: inherit; color: var(--ink); background: var(--btn); min-width: 60px; width: 100%;
+  border: 1px solid var(--accent); border-radius: 4px; padding: 0 4px; outline: 0;
+}
+.tile.max .xp { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+/* 목업의 .term 은 글자를 직접 담았다. 여기서는 xterm.js 가 그 안에 그린다 — 글꼴·색은 JS 가 CSS 변수를
+   읽어 xterm 테마로 넘긴다(색이 두 곳에 있지 않게). 여백 9px 12px 은 .xterm 에 둔다 — FitAddon 이
+   그 여백을 빼고 행·열을 센다. */
+.term {
+  flex: 1; min-height: 0; overflow: hidden; position: relative;
+  font-size: 11.5px; color: var(--term-ink);
+}
+.term .xterm { height: 100%; padding: 9px 12px; }
+/* xterm.css 는 뷰포트를 #000 으로 칠하고, 뷰포트는 .xterm 의 여백까지 덮는다 — 밝은 테마에서 검은 테가 생겼다(실측).
+   타일 색으로 맞춘다. 색은 여기 한 곳. */
+.term .xterm .xterm-viewport { background-color: var(--tile); }
+.term .xterm .xterm-viewport::-webkit-scrollbar { width: 6px; }
+.term .xterm .xterm-viewport::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
+.grip {
+  position: absolute; right: 3px; bottom: 3px; width: 12px; height: 12px; opacity: .5; cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 55%, var(--ink-3) 55%, var(--ink-3) 62%, transparent 62%),
+              linear-gradient(135deg, transparent 78%, var(--ink-3) 78%, var(--ink-3) 85%, transparent 85%);
+}
+.toast {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  background: var(--float); border: 1px solid var(--line-2); border-radius: 7px;
+  padding: 6px 12px; font-size: 11px; color: var(--ink-2); display: flex; gap: 10px; align-items: center;
+  box-shadow: var(--shadow-2); z-index: 20;
+  opacity: 0; pointer-events: none; transition: opacity .25s;
+}
+.toast.show { opacity: 1; pointer-events: auto; }
+.toast b { color: var(--ink); font-weight: 500; }
+.toast .d { color: var(--ink-3); }
+.toast .undo { color: var(--accent); cursor: pointer; }
+/* ── minimap (⑩ ⑪, 스파이크 J) ──────────────────
+   **지금 보고 있는 캔버스 것 하나뿐이다.** 사각형의 자리는 JS 의 좌표 스토어에서 오고, 스크롤할 때
+   움직이는 것은 .mm-vp 의 transform 하나뿐이다 — DOM 레이아웃을 읽지 않는다(AGENTS.md).
+   색은 상태 점과 같은 --st-* 다. 미니맵을 위한 새 색은 없다. */
+.mm {
+  position: absolute; right: 12px; bottom: 12px; width: 168px; height: 108px; z-index: 15;
+  background: var(--float); border: 1px solid var(--line-2); border-radius: 8px;
+  box-shadow: var(--shadow-2); overflow: hidden; cursor: crosshair;
+}
+.mm[hidden] { display: none; }
+.mm-w { position: absolute; inset: 0; }
+.mm-t { position: absolute; border-radius: 1px; background: var(--st-idle); }
+.mm-t.work { background: var(--st-work); }
+.mm-t.wait { background: var(--st-wait); }
+.mm-t.done { background: var(--st-done); }
+.mm-t.idle { background: var(--st-idle); }
+.mm-t.cur { box-shadow: 0 0 0 1px var(--accent); }
+.mm-vp {
+  position: absolute; left: 0; top: 0; border: 1.5px solid var(--accent); border-radius: 2px;
+  background: var(--accent-2); pointer-events: none; will-change: transform;
+}
+.cv.has-max .mm { display: none; }   /* 하나를 펼쳐 보는 동안엔 "어디 있나" 가 질문이 아니다 */
+
+.esc {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 1001;
+  background: var(--float); border: 1px solid var(--line-2); border-radius: 7px;
+  padding: 5px 10px; font-size: 11px; color: var(--ink-2); display: none; gap: 8px; align-items: center;
+  cursor: pointer;   /* #21: 눌러도 캔버스로 돌아간다 — 펼친 타일은 터미널에 포커스라 Esc 가 안 먹을 수 있다 */
+}
+.esc:hover { border-color: var(--accent); color: var(--ink); }
+.cv.has-max .esc { display: flex; }
+
+/* ── directories (right) ────────────────────── */
+.tree { padding: 2px 8px; font-size: 12px; line-height: 26px; }
+.row { display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 5px; color: var(--ink-2); white-space: nowrap; cursor: pointer; }
+.row:hover { background: var(--hover); }
+.row .car { color: var(--ink-3); font-size: 9px; width: 8px; flex: none; }
+.row .car.none { visibility: hidden; }
+.row .nm { overflow: hidden; text-overflow: ellipsis; }
+.row.root { color: var(--ink); font-weight: 500; }
+.row.sel { background: var(--accent-2); color: var(--ink); }
+.row .br { margin-left: auto; font-size: 10.5px; color: var(--ink-3); max-width: 78px; overflow: hidden; text-overflow: ellipsis; flex: none; }
+.row .br::before { content: "⎇ "; }
+.row.sel .br { color: var(--accent); }
+.row.dim { color: var(--ink-3); }
+.row.loading .car { opacity: .4; }
+.i1 { padding-left: 22px; } .i2 { padding-left: 38px; }
+.hint2 { padding: 4px 16px 10px; font-size: 10.5px; color: var(--ink-3); }
+.launch { border-top: 1px solid var(--line); padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 9px; }
+.launch .path { font-size: 11.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.launch .path b { color: var(--ink); font-weight: 500; }
+.btn {
+  height: 30px; border-radius: 6px; border: 1px solid transparent; font: 500 12px var(--mono);
+  display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;
+  background: var(--accent); color: var(--on-accent);
+}
+.btn:disabled { opacity: .45; cursor: default; }
+.btn kbd { color: var(--on-accent); background: rgba(0,0,0,.14); border-color: rgba(0,0,0,.2); }
+
+/* ── status bar ─────────────────────────────── */
+.sb {
+  display: flex; align-items: center; gap: 18px; padding: 0 14px; border-top: 1px solid var(--line);
+  background: var(--rail); font-size: 10.5px; color: var(--ink-3);
+}
+.sb .sp { flex: 1; }
+.sb i { font-style: normal; color: var(--ink-2); }
+.sb .live::before { content: "●"; color: var(--accent); margin-right: 6px; font-size: 8px; vertical-align: 1px; }  /* #18: 신호등 초록 아님 */
+.sb .live.down::before { color: var(--ink-3); }

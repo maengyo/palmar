@@ -1,0 +1,87 @@
+<!doctype html><meta charset="utf-8"><title>minimap cost</title>
+<style>
+ body{margin:0;background:#0d1017;color:#dfe2e8;font:13px ui-monospace,monospace}
+ #cv{position:absolute;inset:0 0 120px 0;overflow:auto;
+     background-image:radial-gradient(#2b3654 1px,transparent 1.2px);background-size:22px 22px;background-attachment:local}
+ #world{position:relative}
+ .t{position:absolute;background:#050608;border:1px solid #1e242f;border-radius:8px}
+ .t .b{height:26px;background:#0f131a;border-bottom:1px solid #1e242f}
+ /* 미니맵 */
+ #mm{position:absolute;right:12px;bottom:132px;width:200px;height:130px;background:rgba(15,19,26,.94);
+     border:1px solid #2b3341;border-radius:8px;overflow:hidden}
+ #mmw{position:absolute;inset:0}
+ .m{position:absolute;background:#39415a;border-radius:1px}
+ #vp{position:absolute;left:0;top:0;border:1.5px solid #8b9cf9;background:rgba(139,156,249,.10);
+     will-change:transform;pointer-events:none}
+ #hud{position:fixed;left:0;right:0;bottom:0;height:120px;padding:10px 14px;background:#0a0c11;
+      border-top:1px solid #1e242f;font-variant-numeric:tabular-nums;white-space:pre;line-height:1.7}
+</style>
+<div id="cv"><div id="world"></div><div id="mm"><div id="mmw"></div><div id="vp"></div></div></div>
+<div id="hud">준비 중…</div>
+<script>
+const P = new URLSearchParams(location.search);
+const N     = +(P.get('panes') || 16);
+const MODE  = P.get('mode') || 'transform';   // transform | layout | none
+const SECS  = +(P.get('secs') || 6);
+const W = 6000, H = 4000, TW = 520, TH = 360;
+const cv=document.getElementById('cv'), world=document.getElementById('world');
+const mm=document.getElementById('mm'), mmw=document.getElementById('mmw'), vp=document.getElementById('vp');
+world.style.width=W+'px'; world.style.height=H+'px';
+
+// 창 N개 — 위치는 우리가 안다(스토어). DOM 에서 읽지 않는다.
+const tiles=[];
+for(let i=0;i<N;i++){
+  const x=(i%5)*(TW+60)+40, y=Math.floor(i/5)*(TH+60)+40;
+  tiles.push({x,y,w:TW,h:TH});
+  const e=document.createElement('div'); e.className='t';
+  e.style.cssText=`left:${x}px;top:${y}px;width:${TW}px;height:${TH}px`;
+  e.innerHTML='<div class="b"></div>'; world.appendChild(e);
+}
+// 미니맵 사각형 — 한 번만 만든다
+const SX=200/W, SY=130/H;
+if(MODE!=='none') for(const t of tiles){
+  const m=document.createElement('div'); m.className='m';
+  m.style.cssText=`left:${t.x*SX}px;top:${t.y*SY}px;width:${Math.max(2,t.w*SX)}px;height:${Math.max(2,t.h*SY)}px`;
+  mmw.appendChild(m);
+}
+vp.style.width=(cv.clientWidth*SX)+'px'; vp.style.height=(cv.clientHeight*SY)+'px';
+if(MODE==='none') mm.style.display='none';
+
+let redraws=0;
+function onScroll(){
+  if(MODE==='none') return;
+  redraws++;
+  if(MODE==='transform'){
+    // 우리가 아는 값만 쓴다 — 레이아웃을 안 읽는다. transform 은 합성만.
+    vp.style.transform=`translate(${cv.scrollLeft*SX}px, ${cv.scrollTop*SY}px)`;
+  } else {
+    // 틀린 길: 스크롤마다 DOM 에서 레이아웃을 읽고 left/top 을 쓴다 (cate 가 374/s 를 낸 종류)
+    let acc=0; for(const e of world.children) acc+=e.offsetLeft+e.offsetTop;
+    vp.style.left=(cv.scrollLeft*SX)+'px'; vp.style.top=(cv.scrollTop*SY)+'px';
+    vp.dataset.acc=acc;
+  }
+}
+cv.addEventListener('scroll', onScroll, {passive:true});
+
+// 프레임 시간
+const frames=[]; let last=performance.now(), longTasks=0;
+try{ new PerformanceObserver(l=>{longTasks+=l.getEntries().length;}).observe({entryTypes:['longtask']}); }catch(e){}
+function tick(t){ frames.push(t-last); last=t; if(frames.length>900) frames.shift(); requestAnimationFrame(tick); }
+requestAnimationFrame(tick);
+
+// 자동으로 스크롤을 왕복시킨다 — 사람이 끄는 것과 같은 부하
+let dir=1, pos=0;
+setInterval(()=>{ pos+=dir*40; if(pos>W-cv.clientWidth||pos<0){dir*=-1;pos=Math.max(0,Math.min(pos,W-cv.clientWidth));}
+                  cv.scrollLeft=pos; cv.scrollTop=(pos*0.6)%(H-cv.clientHeight); }, 8);
+
+setTimeout(()=>{ frames.length=0; redraws=0; longTasks=0;
+  setTimeout(()=>{
+    const s=[...frames].sort((a,b)=>a-b), p=q=>s[Math.floor(s.length*q)]||0;
+    const out={mode:MODE, panes:N, fps:+(1000/(s.reduce((a,b)=>a+b,0)/s.length)).toFixed(1),
+      p50:+p(.5).toFixed(1), p95:+p(.95).toFixed(1), max:+s[s.length-1].toFixed(1),
+      longTasks, scrollEvents:redraws, frames:s.length};
+    document.getElementById('hud').textContent=JSON.stringify(out,null,1);
+    fetch('/report',{method:'POST',body:JSON.stringify(out)});
+  }, SECS*1000);
+}, 1200);
+</script>

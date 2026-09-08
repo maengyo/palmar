@@ -1,0 +1,1578 @@
+#!/usr/bin/env python3
+"""palmerd — palmer 데몬 (#22). 계약은 `docs/protocol.md` 다. 이 파일은 그것만 구현한다.
+
+PTY 를 띄우고, 바이트를 옮기고, 훅을 받고, 폴더를 읽는다. 그 이상은 없다(AGENTS.md 원칙 1).
+
+- 표준 라이브러리만. 파이썬 3.9 문법만 — `/usr/bin/python3` 가 3.9.6 이고 그게 "설치 0" 의 근거다.
+- 단일 스레드 asyncio. `pty.fork` 는 스레드가 있으면 경고를 내고 교착 위험이 있다(스파이크 D 조사).
+- 웹소켓은 손으로 짠 RFC 6455 — `Frame`/`read_frame` 은 스파이크 D 그대로.
+- 흐름 제어 상수(100KB/10KB/256KB)와 병합 시간(5ms)은 스파이크 D 실측값.
+- 링버퍼(절대 오프셋 + `since`)는 스파이크 G 의 모양, alt-screen 감지와 SIGWINCH 흔들기는 스파이크 F.
+- 캔버스(⑪)와 이름(⑫)은 2026-09-08 에 계약에 붙었다. 데몬이 갖는 것은 id·이름·순서와
+  세션의 소속뿐이다 — 미니맵도 목록 접기도 "지금 보고 있는 탭" 도 여기 없다(브라우저만의 것).
+
+    python3 server/palmerd.py            # 127.0.0.1:8801. --port 만 받는다. host 옵션은 없다(#29).
+
+자식 종료 감지는 SIGCHLD → `waitpid(WNOHANG)` 다. kqueue NOTE_EXIT 는 macOS 전용이라 리눅스
+폴백이 따로 필요하고, 0.5초 폴링은 유휴를 먹는다(원칙 6). asyncio 가 시그널을 self-pipe 로
+루프 안에 넘겨 주므로 단일 스레드가 그대로 유지된다. PTY 가 EOF 를 내는 길도 같은 곳으로 간다.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import base64
+import collections
+import fcntl
+import hashlib
+import hmac
+import json
+import os
+import pty
+import re
+import secrets
+import signal
+import stat
+import struct
+import sys
+import termios
+import time
+from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
+
+if sys.version_info < (3, 9):
+    sys.exit("palmerd: 파이썬 3.9 이상이 필요하다 (/usr/bin/python3 가 3.9.6 이다)")
+
+WS_MAGIC = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+# ── 스파이크 D 실측값. 바꾸려면 protocol.md 를 먼저 고친다 ─────────────────────────────
+#: 미확인 바이트가 이만큼 쌓이면 그 pane 의 PTY 읽기를 멈춘다. ttyd 는 100KB x 10, VS Code 는 100KB.
+HIGH_WATER = 100_000
+#: 여기까지 내려오면 다시 읽는다. VS Code 는 5KB.
+LOW_WATER = 10_000
+#: 한 번 깨어났을 때 삼킬 최대 바이트. 없으면 끝없이 뱉는 프로그램이 이벤트 루프를 잡는다(polycanv).
+PUMP_BUDGET = 256 * 1024
+#: PTY 바이트를 이만큼 모았다 보낸다. macOS PTY 는 1KB 씩 읽히므로 안 모으면 프레임이 폭주한다.
+COALESCE_MS = 5
+#: ⑨ — 링버퍼는 pane 당 256KB.
+RING = 256 * 1024
+#: 링버퍼 조각 수 상한. alt 를 자주 넘나드는 앱이 조각을 무한히 늘리지 못하게.
+RING_MAX_SEGS = 64
+#: 스파이크 F — (rows, cols-1) → 50ms → (rows, cols).
+SHAKE_MS = 50
+#: 브라우저가 보낼 수 있는 웹소켓 메시지 상한. 길이 필드는 2^63 까지 적을 수 있으니 막아야 한다.
+MAX_WS_MESSAGE = 16 * 1024 * 1024
+#: HTTP 요청 몸 상한.
+MAX_BODY = 1024 * 1024
+#: pane 입력 큐 상한. PTY 슬레이브가 안 빠질 때 여기까지만 쌓고 넘으면 버린다(로그) (#1).
+INPUT_MAX = 1024 * 1024
+#: 요청 줄·헤더·몸을 이 안에 못 받으면 닫는다. 업그레이드 뒤 웹소켓 프레임에는 안 걸린다 (#6).
+REQUEST_TIMEOUT = 10
+#: 세션을 죽일 때 SIGHUP 뒤 이만큼 기다리고 SIGKILL. 오래 도는 데몬에 좀비·유령 셸을 남기지 않는다.
+KILL_GRACE_S = 2.0
+
+ALT_ON = b"\x1b[?1049h"
+ALT_OFF = b"\x1b[?1049l"
+
+# ── 경로 ──────────────────────────────────────────────────────────────────────────
+HOME = Path.home().resolve()
+PALMER_DIR = Path.home() / ".palmer"        # shim 의 "$HOME/.palmer" 와 같은 글자여야 한다
+BIN_DIR = PALMER_DIR / "bin"
+ZDOT_DIR = PALMER_DIR / "zsh"      # zsh 를 감싸는 rc. 사용자 rc 뒤에 PATH 를 다시 앞세운다
+RUN_DIR = PALMER_DIR / "run"
+TOKEN_FILE = RUN_DIR / "token"
+WEB = (Path(__file__).resolve().parent.parent / "web").resolve()
+
+PORT = [8801]        # Origin·Host 검사와 훅 URL 에 쓰려고 전역으로 둔다
+TOKEN = [""]         # 뜰 때 만든다 — secrets.token_urlsafe(32)
+LOCK_FH = [None]     # 단일 인스턴스 락 fd — 데몬이 사는 동안 연 채로 둔다(닫으면 락이 풀린다) (#2)
+
+#: 스파이크 D 의 크기 상한.
+MAX_COLS, MAX_ROWS = 500, 200
+
+#: 자식 셸에 물려주지 않는 환경변수 접두. Claude Code 안에서 데몬을 띄우면 자식 claude 가
+#: 이걸 물려받아 중첩 세션으로 뜬다(실측, AGENTS.md "검증").
+#: **접두는 데몬을 띄운 에이전트의 정체 전부를 덮는다**(2026-09-08 에 넓혔다). 옛 목록
+#: ("CLAUDECODE", "CLAUDE_CODE_", "CODEX_COMPANION_") 은 적힌 뜻보다 좁아, 진짜 pane 에 붙어
+#: `printenv` 를 돌리니 AI_AGENT·CLAUDE_EFFORT·CLAUDE_PID·CLAUDE_PLUGIN_DATA·CLAUDE_OFFICE_API_URL
+#: 다섯이 그대로 넘어가 있었다(실측 2026-09-08, pane 환경변수 55개). 아래 STRIP_ENV_EXACT 가
+#: "띄운 터미널의 정체는 물려주지 않는다" 를 하는 것과 같은 자리다 — 다섯 중 비밀을 담은 것은
+#: 없었지만(25자 id·"xhigh"·pid·localhost URL·~/.claude/plugins 아래 경로) pane 안의 에이전트가
+#: 물려받을 값도 아니다.
+#: **안 잰 것:** 저 다섯이 실제로 중첩 claude 의 시작을 바꾸는지는 재지 않았다. 재서가 아니라
+#: 규칙("띄운 쪽의 정체를 안 넘긴다")으로 뺀다.
+STRIP_ENV_PREFIXES = ("CLAUDECODE", "CLAUDE_", "CODEX_", "AI_AGENT")
+#: 접두에 걸리지만 남기는 것 — 사용자가 자기 셸에 직접 두는 설정이라 pane 에서도 그대로여야 한다.
+#: 접두를 넓히면서 옛 주석의 예외("사용자가 직접 두는 CLAUDE_CONFIG_DIR 류는 남긴다")를 여기로 옮겼다.
+KEEP_ENV_EXACT = ("CLAUDE_CONFIG_DIR",)
+#: 데몬을 띄운 터미널의 정체 — pane 에는 틀린 값이다. Terminal.app 에서 띄우면 pane 의 zsh 가
+#: /etc/zshrc_Apple_Terminal 을 타서 "Restored session:" 을 찍고, 띄운 터미널과 같은 TERM_SESSION_ID 로
+#: ~/.zsh_sessions 히스토리를 공유했다(2026-09-07 통합 실측, 1회). tmux 의 TMUX 도 같은 종류라 함께 뺀다(안 잼).
+STRIP_ENV_EXACT = ("TERM_SESSION_ID", "TERM_PROGRAM_VERSION", "ITERM_SESSION_ID", "TMUX", "TMUX_PANE")
+
+#: 훅 이벤트 → status (protocol.md "상태"). None 은 "바꾸지 않음". 화면을 읽어 정하지 않는다.
+HOOK_STATUS = {
+    "SessionStart": "idle",
+    "UserPromptSubmit": "working",
+    "PermissionRequest": "waiting",
+    "Notification": None,
+    "Stop": "done",
+    "SessionEnd": "unknown",
+}
+HOOK_EVENTS = list(HOOK_STATUS)
+
+# protocol.md "shim" 그대로. 데몬이 뜰 때마다 다시 쓴다(0755).
+# 자기 디렉터리를 PATH 에서 뺄 때 고정 문자열로 견주고(정규식 아님) 뒤 슬래시 철자도 함께 뺀다(#12):
+#   옛 `grep -vx "$d"` 는 $d 를 정규식으로 봐서 `.palmer` 의 `.` 가 아무 글자나 맞았고(예: /Xpalmer/bin),
+#   `/.palmer/bin/` 처럼 뒤 슬래시가 붙은 철자는 못 빼 `command -v claude` 가 자기(shim)를 다시 골라 무한 exec 했다.
+# ── zsh 래퍼 ────────────────────────────────────────────────────────────────────
+# PATH 를 앞세우는 것만으로는 진다 — 사용자 rc 가 나중에 돌며 자기 것을 다시 앞에 붙인다.
+# ZDOTDIR 을 우리 것으로 바꾸고, 우리 rc 가 사용자 rc 를 부른 **뒤에** PATH 를 다시 앞세운다.
+# 사용자 파일은 읽기만 한다. zsh 는 ZDOTDIR 의 .zshenv → .zprofile → .zshrc → .zlogin 을 본다.
+ZSHENV = """# palmer. 사용자 것을 먼저 부른다.
+[ -r "${PALMER_USER_ZDOTDIR:-$HOME}/.zshenv" ] && . "${PALMER_USER_ZDOTDIR:-$HOME}/.zshenv"
+"""
+
+ZPROFILE = """# palmer.
+[ -r "${PALMER_USER_ZDOTDIR:-$HOME}/.zprofile" ] && . "${PALMER_USER_ZDOTDIR:-$HOME}/.zprofile"
+"""
+
+ZLOGIN = """# palmer.
+[ -r "${PALMER_USER_ZDOTDIR:-$HOME}/.zlogin" ] && . "${PALMER_USER_ZDOTDIR:-$HOME}/.zlogin"
+"""
+
+ZSHRC = """# palmer 가 만든 것. 고치지 마라 — 데몬이 뜰 때마다 다시 쓴다.
+# 사용자 rc 를 먼저 부르고, 그 뒤에 shim 을 PATH 앞에 되돌린다.
+[ -r "${PALMER_USER_ZDOTDIR:-$HOME}/.zshrc" ] && . "${PALMER_USER_ZDOTDIR:-$HOME}/.zshrc"
+case ":$PATH:" in
+  ":$HOME/.palmer/bin:"*) ;;                       # 이미 맨 앞이면 그대로
+  *) PATH="$HOME/.palmer/bin:$PATH"; export PATH ;;
+esac
+# 사용자가 rc 안에서 ZDOTDIR 을 자기 홈으로 되돌렸을 수 있다 — 그건 그대로 둔다.
+# 이 파일은 이미 다 돌았고, 다음 셸은 palmer 가 다시 환경을 준다.
+"""
+
+SHIM = """#!/bin/sh
+# palmer shim: attaches hooks to a claude started inside a palmer terminal. Nothing else.
+d=$(cd "$(dirname "$0")" && pwd)
+new=
+IFS=:
+for e in $PATH; do
+  case "${e%/}" in
+    "$d") ;;                       # 자기 디렉터리 — 뒤 슬래시 있든 없든 뺀다 (고정 문자열 비교)
+    *) new="${new:+$new:}$e" ;;
+  esac
+done
+unset IFS
+PATH=$new
+real=$(command -v claude) || { echo "palmer: claude not found on PATH" >&2; exit 127; }
+f="$HOME/.palmer/run/$PALMER_PANE.json"
+[ -n "$PALMER_PANE" ] && [ -r "$f" ] && exec "$real" --settings "$f" "$@"
+exec "$real" "$@"
+"""
+
+# web/index.html 이 아직 없을 때 GET / 가 그래도 200 과 토큰을 돌려주도록 하는 자리표.
+# web/ 은 다른 사람이 쓰고 있다 — 여기서 만들지 않는다.
+PLACEHOLDER_INDEX = b"""<!doctype html>
+<html><head><meta charset="utf-8"><title>palmer</title></head>
+<body style="font-family:system-ui,sans-serif;margin:2rem;max-width:40rem">
+<h1>palmer</h1>
+<p>The daemon is running, but <code>web/index.html</code> is not there yet.</p>
+<p>The API is up: <code>GET /api/sessions</code>, <code>POST /api/sessions</code>,
+<code>PATCH /api/sessions/&lt;id&gt;</code>, <code>/api/canvases</code>,
+<code>GET /api/dirs</code>, <code>ws /events</code>, <code>ws /pty/&lt;id&gt;</code>.
+See <code>docs/protocol.md</code>.</p>
+</body></html>
+"""
+
+CONTENT_TYPES = {
+    ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css",
+    ".json": "application/json", ".map": "application/json", ".svg": "image/svg+xml",
+    ".png": "image/png", ".ico": "image/x-icon", ".woff2": "font/woff2", ".woff": "font/woff",
+    ".wasm": "application/wasm", ".txt": "text/plain",
+}
+
+REASONS = {
+    200: "OK", 201: "Created", 204: "No Content", 400: "Bad Request", 403: "Forbidden",
+    404: "Not Found", 405: "Method Not Allowed", 408: "Request Timeout", 409: "Conflict",
+    413: "Payload Too Large", 500: "Internal Server Error",
+}
+
+
+def log(*a) -> None:
+    print(time.strftime("%H:%M:%S"), *a, file=sys.stderr, flush=True)
+
+
+def set_winsize(fd: int, rows: int, cols: int) -> None:
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+
+def clamp_int(raw, default: int, lo: int, hi: int) -> int:
+    try:
+        v = int(raw)
+    except (TypeError, ValueError, OverflowError):   # int(float('inf')) 는 OverflowError (#3)
+        return default
+    return min(hi, max(lo, v))
+
+
+#: 이름 길이 상한 (protocol.md "캔버스"). **잰 값이 아니라 골라 잡은 값이다** — 데몬이 오래 도니(⑦=b)
+#: 길이 없는 문자열을 받아 두지 않으려는 것뿐이고, 한 곳에 있어 바꾸기 싸다.
+NAME_MAX = 64
+
+
+def clean_name(raw):
+    """이름 규칙(캔버스·세션 공통, protocol.md "캔버스"). 돌려주는 것이 저장할 값이다.
+
+    `null`·빈 문자열·공백뿐인 문자열은 **이름 없음**으로 같게 다뤄 None 을 돌려준다
+    (= 이름 지우기는 {"name": null} 이나 {"name": ""} 둘 다 된다).
+    문자열이면 앞뒤 공백을 떼고 1-64 글자, 제어문자(\x00-\x1f, \x7f) 금지. 어기면 ValueError.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ValueError("name must be a string or null")
+    s = raw.strip()
+    if not s:
+        return None
+    if len(s) > NAME_MAX:
+        raise ValueError("name must be 64 characters or fewer")
+    if any(ch < "\x20" or ch == "\x7f" for ch in s):
+        raise ValueError("name must not contain control characters")
+    return s
+
+
+def qget(q: dict, name: str, default=None):
+    v = q.get(name)
+    return v[0] if v else default
+
+
+# ── 웹소켓 프레이밍 (스파이크 D) ──────────────────────────────────────────────────────
+class Frame:
+    """RFC 6455 프레이밍. 서버는 마스킹하지 않고, 클라이언트 것은 언마스킹한다."""
+
+    @staticmethod
+    def build(payload: bytes, opcode: int = 0x2) -> bytes:
+        n = len(payload)
+        if n < 126:
+            head = struct.pack("!BB", 0x80 | opcode, n)
+        elif n < 65536:
+            head = struct.pack("!BBH", 0x80 | opcode, 126, n)
+        else:
+            head = struct.pack("!BBQ", 0x80 | opcode, 127, n)
+        return head + payload
+
+    @staticmethod
+    def text(obj) -> bytes:
+        return Frame.build(json.dumps(obj, separators=(",", ":")).encode(), 0x1)
+
+    @staticmethod
+    def close(code: int = 1000) -> bytes:
+        return Frame.build(struct.pack("!H", code), 0x8)
+
+
+async def read_frame(reader) -> tuple[bool, int, bytes]:
+    """프레임 하나. (fin, opcode, payload). 스파이크 D 에 길이 상한만 더했다."""
+    head = await reader.readexactly(2)
+    fin = bool(head[0] & 0x80)
+    opcode = head[0] & 0x0F
+    masked = head[1] & 0x80
+    n = head[1] & 0x7F
+    if n == 126:
+        n = struct.unpack("!H", await reader.readexactly(2))[0]
+    elif n == 127:
+        n = struct.unpack("!Q", await reader.readexactly(8))[0]
+    if n > MAX_WS_MESSAGE:
+        raise ValueError("websocket frame too large")
+    mask = await reader.readexactly(4) if masked else b""
+    payload = await reader.readexactly(n) if n else b""
+    if masked and n:
+        # 정수 XOR — 바이트별 파이썬 루프는 16MB 프레임에 1.17초로 이벤트 루프(모든 pane)를 잡는다 (#9).
+        full = (mask * (n // 4 + 1))[:n]
+        payload = (int.from_bytes(payload, "big") ^ int.from_bytes(full, "big")).to_bytes(n, "big")
+    return fin, opcode, payload
+
+
+async def read_message(reader, writer) -> tuple[int, bytes] | None:
+    """프레임을 메시지로 모은다. 조각(FIN=0)은 이어 붙이고, ping 에는 pong 을 돌려준다.
+    (opcode, payload). close 프레임이면 None."""
+    op = None
+    buf = bytearray()
+    while True:
+        fin, opcode, payload = await read_frame(reader)
+        if opcode == 0x8:
+            return None
+        if opcode == 0x9:
+            writer.write(Frame.build(payload, 0xA))
+            continue
+        if opcode == 0xA:
+            continue
+        if opcode == 0x0:
+            if op is None:
+                raise ValueError("continuation frame without a start")
+        else:
+            op = opcode
+            buf = bytearray()
+        buf += payload
+        if len(buf) > MAX_WS_MESSAGE:
+            raise ValueError("websocket message too large")
+        if fin:
+            return op, bytes(buf)
+
+
+# ── 링버퍼 (스파이크 G 의 Pane.since 를 절대 오프셋 조각으로 일반화) ───────────────────────
+class Ring:
+    """절대 오프셋이 붙은 바이트 조각들, 합쳐서 `cap` 바이트까지.
+
+    스파이크 G 는 `produced - len(ring)` 이 첫 바이트의 오프셋이라는 전제로 `since` 를 풀었다.
+    제품에서는 alt-screen 구간의 바이트가 클라이언트에는 나가되(오프셋은 오른다) 링에는 안
+    들어가므로(⑨ "alt 안에서는 버퍼를 키우지 않는다"), 링이 오프셋과 연속이 아닐 수 있다.
+    그래서 조각마다 시작 오프셋을 든다. alt 를 안 쓰는 셸이면 조각은 늘 하나다.
+    """
+
+    def __init__(self, cap: int):
+        self.cap = cap
+        self.segs: collections.deque = collections.deque()   # [start_offset, bytearray]
+        self.size = 0
+
+    def append(self, start: int, data: bytes) -> None:
+        if not data:
+            return
+        if self.segs and self.segs[-1][0] + len(self.segs[-1][1]) == start:
+            self.segs[-1][1] += data
+        else:
+            self.segs.append([start, bytearray(data)])
+        self.size += len(data)
+        while self.size > self.cap:
+            over = self.size - self.cap
+            first = self.segs[0]
+            if len(first[1]) <= over:
+                self.size -= len(first[1])
+                self.segs.popleft()
+            else:
+                del first[1][:over]
+                first[0] += over
+                self.size -= over
+        while len(self.segs) > RING_MAX_SEGS:
+            self.size -= len(self.segs[0][1])
+            self.segs.popleft()
+
+    def since(self, offset: int) -> bytes:
+        """offset 바이트째부터 링에 있는 것. 밀려났으면 있는 데부터(스파이크 G)."""
+        out = bytearray()
+        for start, buf in self.segs:
+            if start + len(buf) <= offset:
+                continue
+            out += buf[max(0, offset - start):]
+        return bytes(out)
+
+
+# ── 세션 = pane = PTY 하나 ──────────────────────────────────────────────────────────
+class Attach:
+    """pane 채널 하나 = 브라우저 하나. 미확인 바이트는 각자 센다(흐름 제어는 가장 뒤처진 것 기준)."""
+    __slots__ = ("writer", "unacked")
+
+    def __init__(self, writer):
+        self.writer = writer
+        self.unacked = 0
+
+
+class Session:
+    """PTY 하나 + 링버퍼 + 붙어 있는 브라우저들. 브라우저가 없어도 산다(원칙 2)."""
+
+    def __init__(self, sid: str, cwd: str, cols: int, rows: int, canvas: str, name=None):
+        self.id = sid
+        self.cwd = cwd
+        self.cols, self.rows = cols, rows
+        self.canvas = canvas    # 붙어 있는 캔버스 id. **null 이 아니다** — 세션은 늘 어딘가에 있다 (⑪)
+        self.name = name        # 사람이 준 이름. None 이면 브라우저가 경로로 이름표를 만든다 (⑫)
+        self.status = "unknown"
+        self.agent = None
+        self.last_event = None
+        self.alt = False
+        self.created = time.time()
+
+        self.ring = Ring(RING)
+        self.produced = 0            # 지금까지 클라이언트에 나간 총 바이트 (절대 오프셋)
+        self.carry = b""             # 조각 경계에 걸린 ESC[?1049 접두 후보 — 다음 flush 에서 판정한다
+        self.pending = bytearray()
+        self.flush_handle = None
+        self.reading = False
+        self.inq = bytearray()       # PTY 로 아직 다 못 쓴 입력. 슬레이브 큐가 차면 add_writer 로 뒤를 쓴다 (#1)
+        self.writing = False
+        self.closed = False
+        self.attached: list[Attach] = []
+        self.settings_path = RUN_DIR / f"{sid}.json"
+
+        self.pid, self.master = self._spawn()
+        set_winsize(self.master, rows, cols)
+        os.set_blocking(self.master, False)
+
+    def _spawn(self) -> tuple[int, int]:
+        # 데몬이 $SHELL 을 박아 쓴다. 클라이언트가 명령을 고를 길은 없다(#29, 원칙 4).
+        shell = os.environ.get("SHELL") or "/bin/sh"
+        env = {k: v for k, v in os.environ.items()
+               if k in KEEP_ENV_EXACT
+               or (not k.startswith(STRIP_ENV_PREFIXES) and k not in STRIP_ENV_EXACT)}
+        env["PATH"] = f"{BIN_DIR}:{env.get('PATH', '/usr/bin:/bin')}"   # shim 이 맨 앞
+        # PATH 를 앞세우는 것만으로는 진다 — 사용자 rc 가 나중에 실행돼 자기 것을 다시 앞에 붙인다
+        # (실측: ~/.zshrc 의 `export PATH="$HOME/.local/bin:$PATH"` 한 줄에 shim 이 밀렸다).
+        # zsh 는 ZDOTDIR 로 감싸 우리 rc 가 **마지막에** 돌게 한다. 사용자 파일은 안 건드린다.
+        if os.path.basename(shell) == "zsh" and (ZDOT_DIR / ".zshrc").exists():
+            env["PALMER_USER_ZDOTDIR"] = env.get("ZDOTDIR") or str(HOME)
+            env["ZDOTDIR"] = str(ZDOT_DIR)
+        env["PALMER_PANE"] = self.id
+        env["TERM"] = "xterm-256color"
+        env["TERM_PROGRAM"] = "palmer"     # tmux 가 TERM_PROGRAM=tmux 를 두는 것과 같은 자리. 띄운 터미널 이름을 덮는다
+        pid, master = pty.fork()
+        if pid == 0:  # 자식 — 여기서 돌아오지 않는다. 예외를 부모 쪽 asyncio 로 흘리면 안 된다.
+            try:
+                os.chdir(self.cwd)
+            except OSError:
+                try:
+                    os.chdir(str(HOME))
+                except OSError:
+                    pass
+            try:
+                os.execvpe(shell, [shell], env)
+            except OSError:
+                os.write(2, f"palmer: cannot exec {shell}\n".encode())
+            os._exit(127)
+        return pid, master
+
+    def to_json(self) -> dict:
+        return {
+            "id": self.id, "cwd": self.cwd, "cols": self.cols, "rows": self.rows,
+            "status": self.status, "agent": self.agent, "alt": self.alt,
+            "created": self.created, "last_event": self.last_event,
+            "canvas": self.canvas, "name": self.name,
+        }
+
+    # ── PTY → 브라우저 (스파이크 D) ──────────────────────────────
+    def start_reading(self) -> None:
+        if self.reading or self.closed:
+            return
+        asyncio.get_running_loop().add_reader(self.master, self._on_readable)
+        self.reading = True
+
+    def stop_reading(self) -> None:
+        if not self.reading:
+            return
+        asyncio.get_running_loop().remove_reader(self.master)
+        self.reading = False
+
+    def _backpressure(self) -> int:
+        """가장 뒤처진 브라우저의 미확인 + 아직 안 보낸 pending. 붙은 게 없으면 0 — 링버퍼가 받으니
+        계속 읽는다(protocol.md '아무도 없으면')."""
+        if not self.attached:
+            return 0
+        return max(a.unacked for a in self.attached) + len(self.pending)
+
+    def _on_readable(self) -> None:
+        got = 0
+        while got < PUMP_BUDGET:
+            if self._backpressure() >= HIGH_WATER:   # 안 보낸 pending 까지 세어 상한을 실제로 지킨다 (#5)
+                break
+            try:
+                chunk = os.read(self.master, 65536)
+            except BlockingIOError:
+                break
+            except OSError:
+                # 리눅스는 자식이 죽으면 EIO, macOS 는 빈 바이트다(조사).
+                self.die("pty closed")
+                return
+            if not chunk:
+                self.die("pty eof")
+                return
+            self.pending += chunk
+            got += len(chunk)
+        if self.pending and self.flush_handle is None:
+            self.flush_handle = asyncio.get_running_loop().call_later(COALESCE_MS / 1000, self._flush)
+        self._flow()
+
+    def _flush(self) -> None:
+        self.flush_handle = None
+        if not self.pending or self.closed:
+            return
+        data = bytes(self.pending)
+        self.pending.clear()
+        self._emit(data)
+
+    def _emit(self, data: bytes) -> None:
+        """링버퍼에 넣고(alt 구간은 빼고) 붙어 있는 모두에게 한 프레임으로 보낸다."""
+        alt_changed = self._absorb(data)
+        frame = Frame.build(data)
+        for a in list(self.attached):
+            try:
+                a.writer.write(frame)
+                a.unacked += len(data)
+            except Exception:
+                self.detach(a)
+        self._flow()
+        if alt_changed:
+            registry.changed(self)   # alt 가 바뀌면 /events 로 session 을 보낸다
+
+    def _absorb(self, data: bytes) -> bool:
+        """스파이크 F 의 alt 감지: ESC[?1049h → alt, ESC[?1049l → 해제. 마커 자체와 alt 안의 바이트는
+        링에 넣지 않는다 — 들어가기 전 바이트는 남는다. 조각 경계에 걸린 접두는 carry 로 넘긴다.
+        alt 상태가 바뀌었으면 True."""
+        changed = False
+        buf = self.carry + data
+        base = self.produced - len(self.carry)     # buf[0] 의 절대 오프셋
+        pos = 0
+        while True:
+            i_on = buf.find(ALT_ON, pos)
+            i_off = buf.find(ALT_OFF, pos)
+            hits = [i for i in (i_on, i_off) if i >= 0]
+            if not hits:
+                break
+            i = min(hits)
+            if not self.alt:
+                self.ring.append(base + pos, buf[pos:i])
+            new_alt = i == i_on
+            if new_alt != self.alt:
+                self.alt = new_alt
+                changed = True
+            pos = i + len(ALT_ON)
+        tail = buf[pos:]
+        hold = 0
+        for n in range(min(len(ALT_ON) - 1, len(tail)), 0, -1):
+            if ALT_ON.startswith(tail[-n:]):       # ALT_OFF 와 앞 7바이트가 같다
+                hold = n
+                break
+        body = tail[:len(tail) - hold] if hold else tail
+        if not self.alt:
+            self.ring.append(base + pos, body)
+        self.carry = tail[len(tail) - hold:] if hold else b""
+        self.produced += len(data)
+        return changed
+
+    def _flow(self) -> None:
+        """미확인(+안 보낸 pending) 바이트가 HIGH 이상이면 읽기를 멈추고 LOW 이하로 내려오면 다시 읽는다.
+        브라우저가 여럿이면 가장 뒤처진 것 기준. 아무도 없으면 계속 읽는다 — 링버퍼가 받는다."""
+        if self.closed:
+            return
+        worst = self._backpressure()
+        if self.reading and worst >= HIGH_WATER:
+            self.stop_reading()
+        elif not self.reading and worst <= LOW_WATER:
+            self.start_reading()
+
+    def ack(self, a: Attach, n: int) -> None:
+        a.unacked = max(0, a.unacked - max(0, n))
+        self._flow()
+
+    # ── 붙기·떼기 (protocol.md "pane 채널") ─────────────────────────
+    def attach(self, writer, cols: int | None, rows: int | None, frm: int) -> Attach:
+        a = Attach(writer)
+        frm = min(max(0, frm), self.produced)
+        replay = b""
+        if not self.alt:
+            replay = self.ring.since(frm)
+            if self.carry and frm < self.produced:
+                # carry 는 이미 나간 바이트인데 링에는 아직 안 들어갔다 — 재생에 붙인다.
+                carry_start = self.produced - len(self.carry)
+                replay += self.carry[max(0, frm - carry_start):]
+        hello = {"t": "hello", "offset": self.produced, "alt": self.alt, "replayed": len(replay)}
+        writer.write(Frame.text(hello))
+        if replay:
+            writer.write(Frame.build(replay))
+            a.unacked += len(replay)          # 브라우저는 이것도 ack 한다
+        self.attached.append(a)
+        if self.alt:
+            # 재생하지 않고 흔든다(스파이크 F). 붙을 때 준 크기가 다르면 그것이 곧 진짜 리사이즈다.
+            self.shake(cols or self.cols, rows or self.rows)
+        elif cols and rows:
+            self.resize(cols, rows)
+        self._flow()
+        return a
+
+    def detach(self, a: Attach) -> None:
+        if a in self.attached:
+            self.attached.remove(a)
+        try:
+            a.writer.close()
+        except Exception:
+            pass
+        self._flow()
+
+    # ── 브라우저 → PTY ────────────────────────────────
+    def send_input(self, data: bytes) -> None:
+        """PTY master 를 backpressure 있는 스트림으로 다룬다. os.write 는 짧게 쓸 수 있다 —
+        master 는 논블로킹이고 macOS 는 슬레이브 입력 큐(TTYHOG≈1024)가 차면 부분 카운트를 돌려준다
+        (#1 실측: 1024/8000/70000 바이트가 다 1022 로 잘렸다). 반환값을 버리면 1KB 넘는 붙여 넣기가 소리
+        없이 잘린다. 남은 것은 inq 에 두고 슬레이브가 빠져 fd 가 다시 쓸 수 있을 때 마저 쓴다."""
+        if self.closed or not data:
+            return
+        space = INPUT_MAX - len(self.inq)
+        if space <= 0:
+            log(f"session {self.id}: input queue full, dropping {len(data)} bytes")
+            return
+        if len(data) > space:
+            log(f"session {self.id}: input queue near full, dropping {len(data) - space} bytes")
+            data = data[:space]
+        self.inq += data
+        self._pump_input()
+
+    def _pump_input(self) -> None:
+        """inq 를 쓸 수 있는 만큼 쓰고, 남으면 add_writer 로 다음 기회를 기다린다. add_writer 콜백도 이걸 부른다."""
+        if self.closed:
+            return
+        if self.inq:
+            try:
+                n = os.write(self.master, self.inq)
+            except BlockingIOError:
+                n = 0
+            except OSError:
+                self.die("pty write failed")
+                return
+            if n:
+                del self.inq[:n]
+        loop = asyncio.get_running_loop()
+        if self.inq and not self.writing:
+            loop.add_writer(self.master, self._pump_input)
+            self.writing = True
+        elif not self.inq and self.writing:
+            loop.remove_writer(self.master)
+            self.writing = False
+
+    def resize(self, cols: int, rows: int, force: bool = False) -> None:
+        if self.closed:
+            return
+        changed = (cols, rows) != (self.cols, self.rows)
+        if not (changed or force):
+            return
+        try:
+            set_winsize(self.master, rows, cols)
+        except OSError:
+            return
+        self.cols, self.rows = cols, rows
+        if changed:
+            registry.changed(self)
+
+    def shake(self, cols: int, rows: int) -> None:
+        """SIGWINCH 흔들기: (rows, cols-1) → 50ms → (rows, cols). alt-screen 앱이 스스로 다시 그린다."""
+        if self.closed:
+            return
+        try:
+            set_winsize(self.master, rows, max(1, cols - 1))
+        except OSError:
+            return
+        asyncio.get_running_loop().call_later(SHAKE_MS / 1000, self.resize, cols, rows, True)
+
+    # ── 훅 (protocol.md "상태") ─────────────────────────
+    def on_hook(self, agent: str, payload) -> None:
+        ev = payload.get("hook_event_name") if isinstance(payload, dict) else None
+        if not isinstance(ev, str):
+            return
+        before = (self.status, self.agent, self.last_event)
+        self.last_event = ev
+        if ev == "SessionEnd":
+            self.status = "unknown"
+            self.agent = None
+        else:
+            new = HOOK_STATUS.get(ev)      # Notification 과 모르는 이벤트는 바꾸지 않는다
+            if new:
+                self.status = new
+            # 이 길로 온 훅은 그 에이전트 것이다. SessionStart 의 http 훅이 안 온 관측(스파이크 E, 1회)이
+            # 있어 SessionStart 에만 기대지 않는다 — 올리는 쪽은 약한 근거로도 된다.
+            self.agent = agent
+        if (self.status, self.agent, self.last_event) != before:
+            registry.changed(self)
+
+    def seen(self) -> None:
+        """브라우저가 봤다. done 만 idle 로 — waiting 은 쳐다본다고 안 꺼진다."""
+        if self.status == "done":
+            self.status = "idle"
+            registry.changed(self)
+
+    # ── 죽음 ────────────────────────────────────────
+    def die(self, reason: str) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        log(f"session {self.id} gone: {reason}")
+        if self.flush_handle is not None:
+            self.flush_handle.cancel()
+            self.flush_handle = None
+        self.stop_reading()
+        if self.writing:                     # add_writer 를 fd 닫기 전에 뗀다 (#1)
+            try:
+                asyncio.get_running_loop().remove_writer(self.master)
+            except Exception:
+                pass
+            self.writing = False
+        # 셸이 죽기 직전 낸 것(예: exit 에코)을 건진다.
+        while True:
+            try:
+                chunk = os.read(self.master, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            self.pending += chunk
+        if self.pending:
+            self._emit(bytes(self.pending))
+            self.pending.clear()
+        try:
+            os.close(self.master)
+        except OSError:
+            pass
+        try:
+            os.kill(self.pid, signal.SIGHUP)
+        except ProcessLookupError:
+            pass
+        asyncio.get_running_loop().call_later(KILL_GRACE_S, reaper.kill_if_alive, self.pid)
+        for a in list(self.attached):
+            try:
+                a.writer.write(Frame.close())
+            except Exception:
+                pass
+            self.detach(a)
+        try:
+            self.settings_path.unlink()          # pane 이 죽으면 <id>.json 을 지운다
+        except OSError:
+            pass
+        registry.gone(self)
+
+
+# ── 자식 종료 감지 ────────────────────────────────────────────────────────────────
+class Reaper:
+    """SIGCHLD 가 오면 아는 pid 전부에 waitpid(WNOHANG). 시그널은 합쳐질 수 있으니 하나만 보지 않는다."""
+
+    def __init__(self):
+        self.pids: dict[int, Session] = {}
+
+    def install(self, loop) -> None:
+        loop.add_signal_handler(signal.SIGCHLD, self.reap)
+
+    def watch(self, s: Session) -> None:
+        self.pids[s.pid] = s
+
+    def reap(self) -> None:
+        for pid in list(self.pids):
+            try:
+                got, status = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                got, status = pid, 0
+            if got == 0:
+                continue
+            s = self.pids.pop(pid)
+            if os.WIFEXITED(status):
+                how = f"exit {os.WEXITSTATUS(status)}"
+            elif os.WIFSIGNALED(status):
+                how = f"signal {os.WTERMSIG(status)}"
+            else:
+                how = f"status {status}"
+            s.die(f"shell {how}")
+
+    def kill_if_alive(self, pid: int) -> None:
+        if pid in self.pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+# ── 캔버스 (protocol.md "캔버스", ⑪ ⑫) ──────────────────────────────────────────────
+class Canvas:
+    """탭 하나. 세션은 반드시 캔버스 하나에 속한다.
+
+    데몬이 갖는 것은 id·이름·순서뿐이다 — 좌표도, 미니맵도, "지금 보고 있는 탭" 도 여기 없다
+    (protocol.md "없는 것"). id 는 세션 id 와 **같은 모양**이다. 캔버스 id 에는 권한이 걸려 있지
+    않지만(훅 URL 도 /pty 도 안 연다) id 모양을 하나로 두려고 같게 한다. 순번은 어느 쪽에도 안 쓴다.
+    """
+    __slots__ = ("id", "name", "order")
+
+    def __init__(self, cid: str, name=None):
+        self.id = cid
+        self.name = name
+        self.order = 0      # 레지스트리가 자리에서 다시 매긴다 — 0부터 빈틈없이, 작은 것이 왼쪽
+
+    def to_json(self) -> dict:
+        return {"id": self.id, "name": self.name, "order": self.order}
+
+
+# ── 세션 레지스트리 + /events 방송 ──────────────────────────────────────────────────
+class Registry:
+    def __init__(self):
+        self.sessions: dict[str, Session] = {}
+        #: 탭 줄에 보이는 순서 그대로. 파이썬 dict 는 삽입 순서를 지키므로 이것이 곧 order 다 —
+        #: order 를 따로 정렬해 두지 않으니 "0부터 빈틈없이" 가 깨질 자리가 없다.
+        self.canvases: dict[str, Canvas] = {}
+        self.event_clients: set = set()
+
+    # ── 세션 ─────────────────────────────────────────────
+    def list(self) -> list[Session]:
+        return sorted(self.sessions.values(), key=lambda s: s.created)
+
+    def create(self, cwd: str, canvas=None, name=None) -> Session:
+        sid = secrets.token_urlsafe(16)          # 22자, 추측 불가. 순번 금지(#29)
+        # 캔버스를 모르면(또는 안 줬으면) 기본 캔버스. 세션은 캔버스 없이 존재하지 않는다(⑪).
+        cid = canvas if canvas in self.canvases else self.default_canvas().id
+        write_pane_settings(sid)                 # 셸이 뜨기 전에 있어야 바로 친 claude 도 찾는다
+        s = Session(sid, cwd, 80, 24, cid, name)
+        self.sessions[sid] = s
+        reaper.watch(s)
+        s.start_reading()
+        self.changed(s)
+        log(f"session {sid} created  cwd={cwd} canvas={cid} pid={s.pid}")
+        return s
+
+    # ── 캔버스 ───────────────────────────────────────────
+    def canvas_list(self) -> list:
+        return list(self.canvases.values())      # 삽입 순서 = order 순
+
+    def default_canvas(self) -> Canvas:
+        """order 가 가장 앞인 캔버스. **캔버스가 없는 순간은 없다** — 데몬이 뜰 때 하나 만든다."""
+        if not self.canvases:                    # 방어. 정상 경로에서는 뜰 때 이미 있다
+            self.canvas_changed(self.new_canvas())
+        return next(iter(self.canvases.values()))
+
+    def _renumber(self) -> None:
+        for i, c in enumerate(self.canvases.values()):
+            c.order = i
+
+    def new_canvas(self, name=None) -> Canvas:
+        """**끝에 붙는다** — 있던 캔버스의 order 가 안 바뀌므로 방송은 canvas 하나면 된다."""
+        c = Canvas(secrets.token_urlsafe(16), name)
+        self.canvases[c.id] = c
+        self._renumber()
+        return c
+
+    def reorder_canvases(self, ids: list) -> None:
+        """지금 있는 **전부**를 새 순서로. 부르는 쪽이 정확한 재배열인지 먼저 본다.
+        하나씩 바꾸는 길을 안 두는 이유는 protocol.md "캔버스" 에 있다 — 중간 상태가 남으면
+        두 브라우저가 서로 다른 탭 줄을 그린다."""
+        self.canvases = {i: self.canvases[i] for i in ids}
+        self._renumber()
+
+    def drop_canvas(self, cid: str) -> None:
+        self.canvases.pop(cid, None)
+        self._renumber()                         # 남은 것의 order 를 0부터 다시 빈틈없이
+
+    def canvas_sessions(self, cid: str) -> list:
+        return [s for s in self.sessions.values() if s.canvas == cid]
+
+    def broadcast(self, obj) -> None:
+        frame = Frame.text(obj)
+        for w in list(self.event_clients):
+            if w.is_closing():
+                self.event_clients.discard(w)
+                continue
+            try:
+                w.write(frame)
+            except Exception:
+                self.event_clients.discard(w)
+
+    def changed(self, s: Session) -> None:
+        self.broadcast({"t": "session", "s": s.to_json()})
+
+    def gone(self, s: Session) -> None:
+        self.sessions.pop(s.id, None)
+        self.broadcast({"t": "gone", "id": s.id})
+
+    def canvas_changed(self, c: Canvas) -> None:
+        """생겼거나 이름이 바뀌었다. 만들기는 끝에 붙으므로 이 한 프레임으로 족하다."""
+        self.broadcast({"t": "canvas", "c": c.to_json()})
+
+    def canvases_changed(self) -> None:
+        """순서가 바뀌었다 — order 순 전체. canvas N 개로 쪼개면 받는 쪽이 중간에 어긋난 줄을 그린다."""
+        self.broadcast({"t": "canvases", "cs": [c.to_json() for c in self.canvas_list()]})
+
+    def canvas_gone(self, cid: str) -> None:
+        """**두 프레임의 순서는 계약이다** — canvas_gone 을 먼저 보내야 받는 쪽이 그 id 로 들고
+        있던 탭 상태를 지운 다음 새 order 를 받는다(protocol.md "/events")."""
+        self.broadcast({"t": "canvas_gone", "id": cid})
+        self.canvases_changed()
+
+
+registry = Registry()
+reaper = Reaper()
+
+
+# ── ~/.palmer 준비 (protocol.md "뜨기") ─────────────────────────────────────────────
+def ensure_private_dir(p: Path) -> None:
+    """0700 으로 만든다. 이미 있으면 내 것이어야 하고 group/other 쓰기 비트가 없어야 한다(#29).
+    심볼릭 링크는 거부한다 — 여기 shim 이 있고 PATH 맨 앞에 온다."""
+    try:
+        st = os.lstat(p)
+    except FileNotFoundError:
+        os.mkdir(p, 0o700)
+        st = os.lstat(p)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        raise SystemExit(f"palmerd: {p} 는 디렉터리여야 한다 (심볼릭 링크 불가, #29)")
+    if st.st_uid != os.getuid():
+        raise SystemExit(f"palmerd: {p} 의 소유자가 내가 아니다 (#29)")
+    if st.st_mode & 0o022:
+        raise SystemExit(f"palmerd: {p} 에 group/other 쓰기 비트가 있다 — chmod 700 뒤 다시 (#29)")
+    if st.st_mode & 0o077:
+        os.chmod(p, 0o700)        # 0755 처럼 읽기만 열린 것은 거부 대상이 아니라 조여 준다
+
+
+def write_private(path: Path, data: bytes, mode: int) -> None:
+    """mode 로 새로 쓴다. 임시 파일에 쓰고 rename — 실행 중인 shim 을 반쪽으로 두지 않는다."""
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    try:
+        os.fchmod(fd, mode)
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+
+
+def write_pane_settings(sid: str) -> None:
+    """pane 마다 ~/.palmer/run/<id>.json (0600). 여섯 이벤트 전부 같은 http 훅 하나."""
+    url = f"http://127.0.0.1:{PORT[0]}/hook/claude?pane={sid}&token={TOKEN[0]}"
+    hooks = {ev: [{"hooks": [{"type": "http", "url": url}]}] for ev in HOOK_EVENTS}
+    write_private(RUN_DIR / f"{sid}.json", json.dumps({"hooks": hooks}, indent=1).encode() + b"\n", 0o600)
+
+
+def acquire_single_instance_lock() -> None:
+    """~/.palmer/run/lock 에 배타적 flock. 못 잡으면 이미 다른 palmerd 가 이 HOME 을 쓰는 것이다 —
+    두 번째가 뜨면 아래에서 token 을 새로 쓰고 run/*.json 을 전부 지워 첫째의 pane 훅이 소리 없이 빠진다(#2,
+    AGENTS 원칙 3 '알아채고 알려 준다' 위반). 그래서 락을 잡은 데몬만 그 일을 하고, 못 잡으면 거부한다."""
+    fd = os.open(str(RUN_DIR / "lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        try:
+            prev = os.read(fd, 256).decode("utf-8", "replace").strip()
+        except OSError:
+            prev = ""
+        os.close(fd)
+        raise SystemExit(f"palmerd: 이미 다른 palmerd 가 {PALMER_DIR} 를 쓰고 있다"
+                         f"{' — ' + prev if prev else ''} (데몬은 HOME 당 하나)")
+    os.ftruncate(fd, 0)
+    os.write(fd, f"pid {os.getpid()} http://127.0.0.1:{PORT[0]}\n".encode())
+    LOCK_FH[0] = fd     # 데몬이 사는 동안 열어 둔다 — 닫히면 락이 풀린다
+
+
+def setup_palmer_dir() -> str:
+    """순서대로. 하나라도 실패하면 뜨지 않는다."""
+    for d in (PALMER_DIR, BIN_DIR, RUN_DIR):
+        ensure_private_dir(d)
+    acquire_single_instance_lock()   # 락을 잡은 데몬만 token 을 돌리고 *.json 을 지운다 (#2)
+    token = secrets.token_urlsafe(32)
+    write_private(TOKEN_FILE, token.encode() + b"\n", 0o600)
+    write_private(BIN_DIR / "claude", SHIM.encode(), 0o755)
+    ensure_private_dir(ZDOT_DIR)
+    for name, body in ((".zshenv", ZSHENV), (".zprofile", ZPROFILE),
+                       (".zshrc", ZSHRC), (".zlogin", ZLOGIN)):
+        write_private(ZDOT_DIR / name, body.encode(), 0o600)
+    # 고아 <id>.json — 지난 데몬의 pane 은 이제 없다(⑦=b, 핸드오프 없음).
+    for f in RUN_DIR.glob("*.json"):
+        try:
+            f.unlink()
+        except OSError:
+            pass
+    return token
+
+
+# ── 디렉터리 (protocol.md /api/dirs) ─────────────────────────────────────────────
+def roots() -> list[Path]:
+    """사용자 홈 + 읽을 수 있는 /Users/* /home/*. 요청마다 다시 본다 — scandir 둘이라 싸다."""
+    out = [HOME]
+    for base in ("/Users", "/home"):
+        try:
+            with os.scandir(base) as it:
+                for e in sorted(it, key=lambda e: e.name):
+                    try:
+                        if e.is_dir(follow_symlinks=True) and os.access(e.path, os.R_OK | os.X_OK):
+                            p = Path(e.path).resolve()
+                            if p not in out:
+                                out.append(p)
+                    except OSError:
+                        pass
+        except OSError:
+            continue
+    return out
+
+
+def under_roots(p: Path) -> bool:
+    """p 는 resolve() 된 것. 뿌리 중 하나이거나 그 아래여야 한다. startswith 금지(#29)."""
+    return any(p.is_relative_to(r) for r in roots())
+
+
+def git_branch(d: Path):
+    """<dir>/.git/HEAD 한 줄. .git 이 파일이면(worktree) gitdir: 을 따라간다. git 은 절대 안 돌린다.
+    분리 HEAD 면 짧은 해시(7자) — 브랜치 이름은 아니지만 '저장소가 아니다' 로 보이면 안 되니까."""
+    try:
+        g = d / ".git"
+        if g.is_file():
+            with open(g, "r", errors="replace") as fh:
+                first = fh.readline().strip()
+            if not first.startswith("gitdir:"):
+                return None
+            gd = Path(first[len("gitdir:"):].strip())
+            head = (gd if gd.is_absolute() else d / gd) / "HEAD"
+        else:
+            head = g / "HEAD"
+        with open(head, "r", errors="replace") as fh:
+            line = fh.readline().strip()
+    except OSError:
+        return None
+    if line.startswith("ref: "):
+        ref = line[5:]
+        return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+    return line[:7] or None
+
+
+def has_subdir(p: str) -> bool:
+    """점으로 시작하지 않는 하위 폴더가 하나라도 있는가. 첫 것에서 멈춘다."""
+    try:
+        with os.scandir(p) as it:
+            for e in it:
+                if e.name.startswith("."):
+                    continue
+                try:
+                    if e.is_dir(follow_symlinks=True):
+                        return True
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return False
+
+
+def dir_entry(name: str, path: str) -> dict:
+    return {"name": name, "git_branch": git_branch(Path(path)), "has_children": has_subdir(path)}
+
+
+def list_dirs(path: Path) -> list[dict]:
+    """폴더만, 점으로 시작하는 것은 빼고, 이름순. 이 한 폴더만 읽는다 — 트리를 훑지 않는다.
+    이벤트 루프 안에서 동기로 돈다(5000개 폴더에 120~250ms 블로킹, #7). run_in_executor 로 옮기지
+    않는 것은 그것이 스레드를 띄우고, 스레드가 있으면 이후 pty.fork 가 교착 위험이기 때문이다
+    (palmerd 는 그래서 단일 스레드다 — 파일 맨 위 주석·AGENTS). 보통 폴더는 문제없고, 사람이 펼칠 때
+    한 번 도는 일이라 #7 은 안 고치고 이렇게 남긴다."""
+    entries = []
+    with os.scandir(path) as it:
+        for e in it:
+            if e.name.startswith("."):
+                continue
+            try:
+                if not e.is_dir(follow_symlinks=True):
+                    continue
+            except OSError:
+                continue
+            entries.append(dir_entry(e.name, e.path))
+    entries.sort(key=lambda x: x["name"].casefold())
+    return entries
+
+
+def resolve_under_roots(raw) -> Path | None:
+    """절대 경로 문자열 → resolve() → 뿌리 아래의 디렉터리. 아니면 None."""
+    if not isinstance(raw, str) or not raw or "\x00" in raw:
+        return None
+    p = Path(raw)
+    if not p.is_absolute():
+        return None
+    try:
+        p = p.resolve()
+        if not p.is_dir():
+            return None
+    except OSError:
+        return None
+    return p if under_roots(p) else None
+
+
+# ── HTTP ─────────────────────────────────────────────────────────────────────
+def http(status: int, body: bytes = b"", ctype: str = "application/json; charset=utf-8",
+         head_only: bool = False) -> bytes:
+    # 4xx 의 몸은 {"error": "사람이 읽는 한 줄"} 이다(protocol.md HTTP 표 아래). 몸을 안 준 4xx 는
+    # 여기서 이유 문구로 채운다 — 브라우저가 토스트에 그대로 쓰므로 경로도 내부 사정도 담지 않는다.
+    if status >= 400 and not body:
+        body = json.dumps({"error": REASONS.get(status, "Error")}).encode()
+    # frame-ancestors 'none' + X-Frame-Options: DENY — 남의 페이지가 palmer UI 를 iframe 으로 감싸
+    # 클릭재킹/키 입력 유도를 못 하게(#10). HEAD 응답은 헤더만, Content-Length 는 남긴다(#8).
+    head = (f"HTTP/1.1 {status} {REASONS.get(status, 'Unknown')}\r\n"
+            f"Content-Length: {len(body)}\r\nCache-Control: no-store\r\nConnection: close\r\n"
+            "X-Frame-Options: DENY\r\nContent-Security-Policy: frame-ancestors 'none'\r\n")
+    if body:
+        head += f"Content-Type: {ctype}\r\n"
+    return head.encode() + b"\r\n" + (b"" if head_only else body)
+
+
+def http_json(status: int, obj) -> bytes:
+    return http(status, json.dumps(obj).encode())
+
+
+def http_error(status: int, msg: str) -> bytes:
+    return http_json(status, {"error": msg})
+
+
+def allowed_origin(headers: dict) -> bool:
+    """Origin 이 없거나(같은 출처 fetch·curl·훅) 우리가 내준 것이어야 한다."""
+    o = headers.get("origin")
+    return o is None or o in (f"http://127.0.0.1:{PORT[0]}", f"http://localhost:{PORT[0]}")
+
+
+def allowed_host(headers: dict) -> bool:
+    """Host 도 같은 둘만. DNS 리바인딩(공격자 도메인 → 127.0.0.1)으로 index.html 의 토큰을 읽어 가는
+    길을 막는다. protocol.md "인증" 절 참고(이 검사는 거기 올라가 있다)."""
+    h = headers.get("host")
+    return h is None or h in (f"127.0.0.1:{PORT[0]}", f"localhost:{PORT[0]}")
+
+
+def serve_static(path: str, head_only: bool = False) -> bytes:
+    name = unquote(path).lstrip("/") or "index.html"
+    try:
+        f = (WEB / name).resolve()
+        ok = f.is_relative_to(WEB) and f.is_file()   # startswith 는 형제 디렉터리를 통과시킨다(#29)
+    except (OSError, ValueError):
+        ok = False
+    if ok:
+        body = f.read_bytes()
+        suffix = f.suffix
+    elif name == "index.html":
+        body, suffix = PLACEHOLDER_INDEX, ".html"
+    else:
+        return http(404, head_only=head_only)
+    if suffix == ".html":
+        # 토큰은 이 길로만 브라우저에 간다.
+        tag = f'<script>window.PALMER_TOKEN="{TOKEN[0]}"</script>'.encode()
+        body = body.replace(b"</head>", tag + b"</head>", 1) if b"</head>" in body else tag + body
+    ctype = CONTENT_TYPES.get(suffix, "application/octet-stream")
+    if ctype.startswith("text/") or ctype.endswith(("json", "javascript", "xml")):
+        ctype += "; charset=utf-8"
+    return http(200, body, ctype, head_only=head_only)
+
+
+def parse_json_body(body: bytes):
+    try:
+        obj = json.loads(body.decode("utf-8")) if body else {}
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+async def ws_accept(reader, writer, headers: dict) -> bool:
+    key = headers.get("sec-websocket-key")
+    if not key:
+        writer.write(http(400))
+        await writer.drain()
+        return False
+    accept = base64.b64encode(hashlib.sha1(key.encode() + WS_MAGIC).digest()).decode()
+    writer.write(
+        b"HTTP/1.1 101 Switching Protocols\r\n"
+        b"Upgrade: websocket\r\nConnection: Upgrade\r\n"
+        b"Sec-WebSocket-Accept: " + accept.encode() + b"\r\n\r\n"
+    )
+    await writer.drain()
+    return True
+
+
+async def ws_events(reader, writer, headers: dict) -> None:
+    """제어 채널. 붙자마자 hello(전체 목록), 그 뒤 session/gone. 브라우저 → seen 만 받는다."""
+    if not await ws_accept(reader, writer, headers):
+        return
+    registry.event_clients.add(writer)
+    # 한 프레임 안에서 참조 무결 — 여기 실린 모든 session.canvas 는 같이 실린 canvases 안에 있다.
+    writer.write(Frame.text({"t": "hello",
+                             "canvases": [c.to_json() for c in registry.canvas_list()],
+                             "sessions": [s.to_json() for s in registry.list()]}))
+    try:
+        while True:
+            msg = await read_message(reader, writer)
+            if msg is None:
+                break
+            opcode, payload = msg
+            if opcode != 0x1:
+                continue
+            try:
+                obj = json.loads(payload)
+            except ValueError:
+                continue
+            if isinstance(obj, dict) and obj.get("t") == "seen":
+                s = registry.sessions.get(str(obj.get("id")))
+                if s:
+                    s.seen()
+    finally:
+        registry.event_clients.discard(writer)
+
+
+async def ws_pty(reader, writer, headers: dict, q: dict, s: Session) -> None:
+    """pane 채널. hello + 재생(또는 흔들기), 그 뒤 바이너리 = PTY 바이트. 브라우저 → 키·resize·ack."""
+    if not await ws_accept(reader, writer, headers):
+        return
+    cols = clamp_int(qget(q, "cols"), 0, 1, MAX_COLS) or None
+    rows = clamp_int(qget(q, "rows"), 0, 1, MAX_ROWS) or None
+    frm = clamp_int(qget(q, "from"), 0, 0, 1 << 62)
+    a = s.attach(writer, cols, rows, frm)
+    try:
+        while True:
+            msg = await read_message(reader, writer)
+            if msg is None or s.closed:
+                break
+            opcode, payload = msg
+            if opcode == 0x2:            # 바이너리 = 키 입력. 그대로 PTY 에 쓴다
+                s.send_input(payload)
+            elif opcode == 0x1:          # 텍스트 = 제어
+                try:
+                    m = json.loads(payload)
+                except ValueError:
+                    continue
+                if not isinstance(m, dict):
+                    continue
+                t = m.get("t")
+                if t == "resize":         # 이것만이 행·열을 바꾼다
+                    s.resize(clamp_int(m.get("cols"), s.cols, 1, MAX_COLS),
+                             clamp_int(m.get("rows"), s.rows, 1, MAX_ROWS))
+                elif t == "ack":
+                    s.ack(a, clamp_int(m.get("n"), 0, 0, 1 << 62))
+    finally:
+        s.detach(a)
+
+
+async def handle_request(reader, writer) -> None:
+    try:                                          # 놀거나 거짓말하는 연결이 fd 를 영원히 물지 않게 (#6)
+        request = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), REQUEST_TIMEOUT)
+    except asyncio.TimeoutError:
+        return
+    lines = request.decode("latin-1").split("\r\n")
+    try:
+        method, target, _version = lines[0].split(" ", 2)
+    except ValueError:
+        writer.write(http(400))
+        return
+    headers = {}
+    for line in lines[1:]:
+        if ":" in line:
+            k, v = line.split(":", 1)
+            headers[k.strip().lower()] = v.strip()
+
+    url = urlparse(target)
+    q = parse_qs(url.query)
+    path = unquote(url.path)
+
+    # ── 인증 — 모든 요청에 ──
+    if not (allowed_origin(headers) and allowed_host(headers)):
+        writer.write(http(403))
+        return
+    # 바이트로 견준다 — hmac.compare_digest 는 비-ASCII str 에 TypeError 를 낸다(?token=%C3%A9) (#4)
+    token_ok = hmac.compare_digest(qget(q, "token", "").encode("utf-8", "surrogatepass"), TOKEN[0].encode())
+
+    if headers.get("upgrade", "").lower() == "websocket":
+        if not token_ok:
+            writer.write(http(403))
+            return
+        if path == "/events":
+            await ws_events(reader, writer, headers)
+        elif path.startswith("/pty/"):
+            s = registry.sessions.get(path[len("/pty/"):])
+            if s is None:
+                writer.write(http(404))     # protocol.md 는 모르는 id 를 말하지 않는다 — 업그레이드 전에 404
+                return
+            await ws_pty(reader, writer, headers, q, s)
+        else:
+            writer.write(http(404))
+        return
+
+    body = b""
+    if method in ("POST", "PUT", "PATCH"):
+        try:
+            n = int(headers.get("content-length", "0") or 0)
+        except ValueError:
+            writer.write(http(400))
+            return
+        if n > MAX_BODY:
+            writer.write(http(413))
+            return
+        try:
+            body = await asyncio.wait_for(reader.readexactly(n), REQUEST_TIMEOUT) if n > 0 else b""
+        except asyncio.TimeoutError:                # Content-Length 만큼 안 보내는 연결 (#6)
+            writer.write(http(408))
+            return
+
+    # ── 훅 — 항상 200 {} (훅은 0 으로 끝나야 한다). 토큰이 틀리면 상태를 바꾸지 않을 뿐이다.
+    if path == "/hook/claude":
+        if method != "POST":
+            writer.write(http(405))
+            return
+        if token_ok:
+            s = registry.sessions.get(qget(q, "pane", ""))
+            if s is not None:
+                s.on_hook("claude", parse_json_body(body))
+        writer.write(http(200, b"{}"))
+        return
+
+    if path == "/api/sessions":
+        if method == "GET":
+            writer.write(http_json(200, [s.to_json() for s in registry.list()]))
+        elif method == "POST":
+            if not token_ok:
+                writer.write(http(403))
+                return
+            obj = parse_json_body(body)
+            if obj is None:
+                writer.write(http_error(400, "body must be a JSON object"))
+                return
+            raw = obj.get("cwd")
+            cwd = HOME if raw is None else resolve_under_roots(raw)   # cwd 가 없으면 홈 (스파이크 D 의 기본값)
+            if cwd is None:
+                writer.write(http_error(400, "cwd must be an absolute directory under a root"))
+                return
+            try:
+                name = clean_name(obj.get("name"))
+            except ValueError as e:
+                writer.write(http_error(400, str(e)))
+                return
+            cid = obj.get("canvas")
+            if cid is None:
+                # 데몬에는 "지금 보고 있는 캔버스" 가 없다(브라우저 둘이 다른 탭을 볼 수 있다).
+                # 안 주면 order 가 가장 앞인 캔버스 — curl 한 줄이 계속 돌게 하는 기본값이다.
+                cid = registry.default_canvas().id
+            elif not isinstance(cid, str) or cid not in registry.canvases:
+                writer.write(http_error(400, "unknown canvas"))
+                return
+            s = registry.create(str(cwd), cid, name)
+            writer.write(http_json(201, s.to_json()))
+        else:
+            writer.write(http(405))
+        return
+
+    m = re.fullmatch(r"/api/sessions/([A-Za-z0-9_\-]+)", path)
+    if m:
+        if method not in ("DELETE", "PATCH"):
+            writer.write(http(405))
+            return
+        if not token_ok:                 # 이름 바꾸기·캔버스 옮기기도 예외가 아니다(protocol.md "인증")
+            writer.write(http(403))
+            return
+        s = registry.sessions.get(m.group(1))
+        if s is None:
+            writer.write(http(404))
+            return
+        if method == "DELETE":
+            s.die("deleted")
+            writer.write(http(204))
+            return
+        # PATCH — **몸에 있는 키만** 바꾼다. 이름도 캔버스 이동도 session 프레임 하나로 나간다:
+        # Session 이 둘 다 들고 있고 받는 쪽은 지금도 session 을 통째로 갈아 끼운다.
+        obj = parse_json_body(body)
+        if obj is None:
+            writer.write(http_error(400, "body must be a JSON object"))
+            return
+        new_name = s.name
+        if "name" in obj:
+            try:
+                new_name = clean_name(obj.get("name"))
+            except ValueError as e:
+                writer.write(http_error(400, str(e)))
+                return
+        new_canvas = s.canvas
+        if "canvas" in obj:
+            cid = obj.get("canvas")
+            # 경로의 세션은 있으니 모르는 캔버스는 404 가 아니라 400 이다(protocol.md HTTP 표).
+            if not isinstance(cid, str) or cid not in registry.canvases:
+                writer.write(http_error(400, "unknown canvas"))
+                return
+            new_canvas = cid
+        if (new_name, new_canvas) != (s.name, s.canvas):
+            s.name, s.canvas = new_name, new_canvas
+            registry.changed(s)          # 낸 쪽도 방송을 되받는다 — 브라우저는 id 로 멱등하게 반영한다
+        writer.write(http_json(200, s.to_json()))
+        return
+
+    if path == "/api/canvases":
+        if method == "GET":
+            writer.write(http_json(200, [c.to_json() for c in registry.canvas_list()]))
+        elif method == "POST":
+            if not token_ok:
+                writer.write(http(403))
+                return
+            obj = parse_json_body(body)
+            if obj is None:
+                writer.write(http_error(400, "body must be a JSON object"))
+                return
+            try:
+                name = clean_name(obj.get("name"))
+            except ValueError as e:
+                writer.write(http_error(400, str(e)))
+                return
+            c = registry.new_canvas(name)
+            registry.canvas_changed(c)
+            writer.write(http_json(201, c.to_json()))
+        else:
+            writer.write(http(405))
+        return
+
+    # **/api/canvases/order 를 /api/canvases/<id> 보다 먼저 맞춘다**(protocol.md "캔버스").
+    # id 는 22자라 "order" 와 부딪힐 수 없지만, 갈아 끼울 구현이 다르게 짜지 않도록 순서를 지킨다.
+    if path == "/api/canvases/order":
+        if method != "POST":
+            writer.write(http(405))
+            return
+        if not token_ok:
+            writer.write(http(403))
+            return
+        obj = parse_json_body(body)
+        if obj is None:
+            writer.write(http_error(400, "body must be a JSON object"))
+            return
+        ids = obj.get("order")
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            writer.write(http_error(400, "order must be an array of canvas ids"))
+            return
+        if sorted(ids) != sorted(registry.canvases):
+            # 빠짐·더함·중복. 그 사이 누가 캔버스를 만들거나 지운 것이고, 그 브라우저는 이미
+            # 그 이벤트를 받았으니 다시 보내면 된다.
+            writer.write(http_error(409, "canvas list changed, try again"))
+            return
+        registry.reorder_canvases(ids)
+        registry.canvases_changed()      # 한 프레임 — 순서는 집합의 성질이라 쪼개지 않는다
+        writer.write(http_json(200, [c.to_json() for c in registry.canvas_list()]))
+        return
+
+    m = re.fullmatch(r"/api/canvases/([A-Za-z0-9_\-]+)", path)
+    if m:
+        if method not in ("PATCH", "DELETE"):
+            writer.write(http(405))
+            return
+        if not token_ok:
+            writer.write(http(403))
+            return
+        c = registry.canvases.get(m.group(1))
+        if c is None:
+            writer.write(http(404))
+            return
+        if method == "PATCH":
+            obj = parse_json_body(body)
+            if obj is None:
+                writer.write(http_error(400, "body must be a JSON object"))
+                return
+            if "name" in obj:            # 몸에 있는 키만 바꾼다
+                try:
+                    name = clean_name(obj.get("name"))
+                except ValueError as e:
+                    writer.write(http_error(400, str(e)))
+                    return
+                if name != c.name:
+                    c.name = name
+                    registry.canvas_changed(c)
+            writer.write(http_json(200, c.to_json()))
+            return
+        # DELETE — **빈 캔버스만, 마지막 하나는 못 지운다** (PROVISIONAL, protocol.md "캔버스").
+        # 자동으로 옆 캔버스에 옮기지 않는 것은 좌표가 session id 키라 옮겨진 창이 남의 창 위에
+        # 앉고 밀어내기가 돌기 때문이고, 지우면서 셸을 죽이는 길은 원칙 2 를 정면으로 어긴다.
+        if registry.canvas_sessions(c.id):
+            writer.write(http_error(409, "canvas still has terminals"))
+            return
+        if len(registry.canvases) <= 1:
+            writer.write(http_error(409, "the last canvas cannot be removed"))
+            return
+        registry.drop_canvas(c.id)
+        registry.canvas_gone(c.id)       # canvas_gone → canvases, 이 순서가 계약이다
+        writer.write(http(204))
+        return
+
+    if path == "/api/dirs":
+        if method == "GET":
+            raw = qget(q, "path")
+            if not raw:
+                # 뿌리 목록. path 는 null, name 은 절대 경로다 — 브라우저는 그걸 그대로 다음 path 로 쓴다.
+                entries = [dir_entry(str(r), str(r)) for r in roots()]
+                writer.write(http_json(200, {"path": None, "entries": entries}))
+                return
+            p = resolve_under_roots(raw)
+            if p is None:
+                writer.write(http_error(400, "path must be an absolute directory under a root"))
+                return
+            try:
+                entries = list_dirs(p)
+            except OSError as e:
+                writer.write(http_error(400, f"cannot read: {e.strerror or e}"))
+                return
+            writer.write(http_json(200, {"path": str(p), "entries": entries}))
+        elif method == "POST":
+            # 만들기만 있다 — 지우기·이름 바꾸기 없음. 나머지는 옆의 터미널이 한다.
+            if not token_ok:
+                writer.write(http(403))
+                return
+            obj = parse_json_body(body)
+            if obj is None:
+                writer.write(http_error(400, "body must be a JSON object"))
+                return
+            parent = resolve_under_roots(obj.get("path"))
+            name = obj.get("name")
+            if parent is None:
+                writer.write(http_error(400, "path must be an absolute directory under a root"))
+                return
+            if (not isinstance(name, str) or not name or name in (".", "..")
+                    or "/" in name or "\x00" in name or len(name.encode()) > 255):
+                writer.write(http_error(400, "name must be a single path component"))
+                return
+            target = parent / name
+            try:
+                os.mkdir(target)
+            except FileExistsError:
+                writer.write(http_error(409, "already exists"))
+                return
+            except OSError as e:
+                writer.write(http_error(400, f"mkdir failed: {e.strerror or e}"))
+                return
+            writer.write(http_json(201, {"path": str(target)}))
+        else:
+            writer.write(http(405))
+        return
+
+    if path.startswith("/api/") or path.startswith("/hook/"):
+        writer.write(http(404))
+        return
+
+    if method not in ("GET", "HEAD"):
+        writer.write(http(405))
+        return
+    writer.write(serve_static(path, head_only=(method == "HEAD")))   # HEAD 는 몸 없이 (#8)
+
+
+async def handle(reader, writer) -> None:
+    try:
+        await handle_request(reader, writer)
+        await writer.drain()
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionResetError,
+            BrokenPipeError, ValueError):
+        pass
+    except Exception as e:  # 한 연결의 사고가 데몬을 죽이면 안 된다 — 오래 도는 것이 전제다
+        log("handler error:", repr(e))
+    finally:
+        try:
+            writer.close()
+        except Exception:
+            pass
+
+
+# ── 뜨기 ──────────────────────────────────────────────────────────────────────
+def shutdown() -> None:
+    for s in list(registry.sessions.values()):
+        s.die("daemon stopping")
+
+
+async def main(port: int) -> None:
+    PORT[0] = port
+    TOKEN[0] = setup_palmer_dir()
+    registry.new_canvas()      # 캔버스가 없는 순간은 없다 — 이름 없는 것 하나로 뜬다 (⑪)
+    loop = asyncio.get_running_loop()
+    reaper.install(loop)
+    try:
+        # 127.0.0.1 밖으로 열지 않는다 — host 를 바꾸는 옵션을 두지 않는 것이 규칙이다(#29).
+        server = await asyncio.start_server(handle, "127.0.0.1", port)
+    except OSError as e:
+        raise SystemExit(f"palmerd: 127.0.0.1:{port} 에 묶지 못했다 — {e.strerror or e}")
+    stop = loop.create_future()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, lambda: stop.done() or stop.set_result(None))
+    log(f"palmerd pid {os.getpid()}  shell={os.environ.get('SHELL') or '/bin/sh'}  web={WEB}"
+        f"{'' if (WEB / 'index.html').is_file() else ' (index.html 없음 — 자리표를 낸다)'}")
+    print(f"http://127.0.0.1:{port}", flush=True)   # 마지막 줄 — 사용자는 이것만 보고 시작한다
+    async with server:
+        await stop
+    shutdown()
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description="palmer 데몬. 127.0.0.1 에만 묶인다.")
+    ap.add_argument("--port", type=int, default=8801)
+    args = ap.parse_args()
+    asyncio.run(main(args.port))
