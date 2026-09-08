@@ -42,7 +42,7 @@ import time
 HOST, PORT = "127.0.0.1", 8811
 # 공유 /tmp 에 두면 같은 기계의 다른 사용자가 데몬 교체를 걸 수 있다(#29).
 # 0700 인 사용자 전용 디렉터리에 둔다.
-RUN_DIR = os.path.join(os.path.expanduser("~"), ".palmer", "run")
+RUN_DIR = os.path.join(os.path.expanduser("~"), ".palmar", "run")
 HANDOFF_SOCK = os.path.join(RUN_DIR, "handoff.sock")
 RING = 1 << 20          # pane 당 1MB. 셸 pane 기준이다(스파이크 F).
 COLS, ROWS = 100, 30

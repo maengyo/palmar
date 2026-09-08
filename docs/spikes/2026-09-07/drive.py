@@ -5,7 +5,7 @@ D=sys.argv[1]; LOG=f"{D}/hooks.log"
 CWD=sys.argv[2] if len(sys.argv)>2 else os.path.abspath(os.path.join(os.path.dirname(__file__),"..","..",".."))
 open(LOG,"w").close()
 env={k:v for k,v in os.environ.items() if not (k.startswith("CLAUDE") or k.startswith("CODEX_COMPANION") or k.startswith("HERDR"))}
-env.update({"TERM":"xterm-256color","PALMER_HOOK_LOG":LOG})
+env.update({"TERM":"xterm-256color","PALMAR_HOOK_LOG":LOG})
 pid, master = pty.fork()
 if pid == 0:
     os.chdir(CWD); os.execvpe("claude", ["claude","--settings",f"{D}/settings.json","--permission-mode","default"], env)

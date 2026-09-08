@@ -15,7 +15,7 @@ herdr 를 빼기로 한 뒤 "직접 갖는다" 는 것이 성립하는지를 잰
 | 터미널 에뮬레이션 | **브라우저(xterm.js)** | pyte 로 하면 부하에서 tmux 의 8배 CPU (아래) |
 | 에이전트 상태 | CLI 훅/SSE → 데몬 | 스파이크 C. polycanv `cli-status-hooks.md` |
 | UI 가 죽어도 세션 유지 | 데몬이 PTY 소유 | polycanv #21. 재시작 방식은 미정(⑦) |
-| 좌표·크기·배치 | palmer 보관 | herdr 도 못 들고 있었다(`herdr-api.md`) |
+| 좌표·크기·배치 | palmar 보관 | herdr 도 못 들고 있었다(`herdr-api.md`) |
 | 재접속 시 화면 복원 | 미정 — ⑨ | alt-screen TUI 는 다시 그리게 하면 될 수도 있다 |
 
 에뮬레이션 근거: polycanv TUI 실측(터미널 1개, `seq 1 200000`, CPU 1.50s vs tmux 0.18s).
@@ -175,7 +175,7 @@ OpenAPI 실물). polycanv 는 `opencode serve` 를 띄워 `/event` 가 열리는
   재생하지 않고 "앱이 다시 그릴 때까지 best effort" 라고만 적었고, 크기 흔들기 구현은
   mulmoterminal 에서 확인됐다. → ⑨.
 - 에이전트 스스로의 감독 프로세스도 있다: `claude --bg` + `claude attach <id>`, `codex app-server` +
-  `codex --remote`, `opencode serve` + `opencode attach`. pane 에 attach 클라이언트만 띄우면 palmer 가
+  `codex --remote`, `opencode serve` + `opencode attach`. pane 에 attach 클라이언트만 띄우면 palmar 가
   재시작해도 에이전트는 산다. 콜드 재시작은 어느 도구든 `--resume <id>` 재기동이다(herdr 도 그렇다).
 
 ### 브라우저 쪽 — xterm.js 로 여러 개를 그릴 때
@@ -314,8 +314,8 @@ herdr(서버 35MB + pane 당 6MB)보다 작고 polycanv(55MB/1개)보다 훨씬 
 
 ## 스파이크 E — `--settings` 는 병합인가 대체인가 (2026-09-07 저녁)
 
-훅을 PATH shim 으로 붙이려면(`decisions.md` "훅은 palmer 가 붙인다") 껍데기가 `claude --settings
-/tmp/palmer/<pane>.json` 을 exec 한다. `--settings` 가 사용자 훅을 지우면 이 길은 없다.
+훅을 PATH shim 으로 붙이려면(`decisions.md` "훅은 palmar 가 붙인다") 껍데기가 `claude --settings
+/tmp/palmar/<pane>.json` 을 exec 한다. `--settings` 가 사용자 훅을 지우면 이 길은 없다.
 코드와 로그는 `docs/spikes/2026-09-07/shim/`.
 
 사용자 설정은 건드리지 않고, 같은 병합 코드를 타는 프로젝트 층 + `--settings` 층으로 잰다.
@@ -489,7 +489,7 @@ herdr(서버 35MB + pane 당 6MB)보다 작고 polycanv(55MB/1개)보다 훨씬 
 - `terminal.py` 의 PTY 부분 — `pty.fork`, `TIOCSWINSZ`, 읽기 예산, 재생 버퍼.
   pyte·Textual 부분은 가져오지 않는다.
 - `web.py` — 포트 고르기 규칙(지정했으면 옮기지 않고 실패, 아니면 옆으로).
-- `scripts/dev/bench.py` — 셸만·tmux·polycanv 를 같은 조건으로 재는 도구. 비교 대상에 palmer 를 넣는다.
+- `scripts/dev/bench.py` — 셸만·tmux·polycanv 를 같은 조건으로 재는 도구. 비교 대상에 palmar 를 넣는다.
 
 ---
 

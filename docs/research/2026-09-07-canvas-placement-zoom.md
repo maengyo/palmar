@@ -2,7 +2,7 @@
 
 에이전트 둘이 cate·opencove·termcanvas·nodeterm·ccanvas 의 **소스를 직접 읽고** 정리한 것이다.
 각 항목에 (verified|likely) 등급과 파일·줄 번호가 붙어 있다. verified 는 조사 에이전트가 소스에서 확인한 것이고,
-palmer 저자가 재확인한 것은 아니다. 요약과 판단은 `docs/own-runtime.md` 의 "캔버스 — 남들은 어떻게 했나" 에 있다.
+palmar 저자가 재확인한 것은 아니다. 요약과 판단은 `docs/own-runtime.md` 의 "캔버스 — 남들은 어떻게 했나" 에 있다.
 
 각도 둘: **placement**(새 창이 어디에 놓이는가) · **zoom-xterm**(CSS 변형 아래에서 xterm.js 를 어떻게 멀쩡하게 두는가).
 

@@ -54,7 +54,7 @@ def run(label,text,settle):
     for t,e in evs[:5]: print(f"   +{(t-t0)*1000:7.1f}ms {json.dumps(e,ensure_ascii=False)[:230]}")
     if len(evs)>5: print(f"   ... {len(evs)-5} more")
     return evs
-run("single echo","echo palmer-ev-1\n",1.5)
+run("single echo","echo palmar-ev-1\n",1.5)
 run("burst: 300 lines, no sleep","for i in $(seq 1 300); do echo line-$i; done\n",2.5)
 run("trickle: 50 lines @20ms","for i in $(seq 1 50); do echo t-$i; sleep 0.02; done\n",3.0)
 run("stream: 2000 lines via seq (fast)","seq 1 2000\n",2.5)

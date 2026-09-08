@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>palmer</title>
+<title>palmar</title>
 <link rel="icon" href="data:,">   <!-- 브라우저의 /favicon.ico 자동 요청(404)을 막는다 -->
 <!-- 런타임에 외부 서비스를 부르지 않는다(AGENTS 원칙 7·autopilot "외부 서비스 호출" 금지·vendor/VERSIONS
      "no network at runtime"). 그래서 Google Fonts 링크를 뺐다(#14). JetBrains Mono 는 style.css 의 --mono
@@ -21,7 +21,7 @@
   <div class="top">
     <div class="l">
       <!-- 목업의 .lights(macOS 창 버튼)는 넣지 않았다 — style.css 의 주석 참고. -->
-      <span class="brand">palmer</span>
+      <span class="brand">palmar</span>
     </div>
     <div class="c">
       <label class="search">
@@ -46,9 +46,10 @@
     <aside class="rail left">
       <div class="rh">Terminals <span class="n" id="count">0</span><span class="sp"></span></div>
       <div class="scroll" id="list"></div>
-      <!-- 훅은 shim 이 붙이고, shim 은 claude 만 있다 (protocol.md "shim": codex·opencode 는 ⑧ 미정).
-           이 줄은 그 사실을 적은 것이고 데몬에 물어 얻은 값이 아니다. -->
-      <div class="rf"><b>hooks</b> <i>claude</i> <i class="no">codex</i> <i class="no">opencode</i></div>
+      <!-- 상태의 근거를 적은 줄이다. 데몬에 물어 얻은 값이 아니라 사실을 적은 것.
+           **에이전트 이름을 늘어놓지 않는다** — 제목으로 읽는 길(protocol.md "제목으로 읽기")은
+           아무 에이전트에서나 되므로, 이름을 세는 순간 그 목록에 없는 것은 안 되는 줄로 읽힌다. -->
+      <div class="rf"><b>status</b> <i>any agent, by title</i> <i>hooks: claude</i></div>
     </aside>
 
     <!-- ── canvas ─────────────────────────────── -->

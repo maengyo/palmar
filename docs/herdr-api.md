@@ -74,7 +74,7 @@ stderr 에 "서버를 재시작하라" 를 찍고 종료 코드 1 로 죽는다(
 ```
 workspace.create {"cwd":"/tmp"}           → w1 생성, pane 1개가 따라 생긴다
 session.snapshot {}                       → panes[0].pane_id = "w1:p1"
-pane.send_text {"pane_id":"w1:p1","text":"echo palmer-works\n"}
+pane.send_text {"pane_id":"w1:p1","text":"echo palmar-works\n"}
 pane.read {"pane_id":"w1:p1","source":"visible","format":"ansi","lines":8}
                                           → 화면 그대로, 이스케이프 포함
 ```
@@ -222,7 +222,7 @@ stdout 에 뉴라인 JSON 프레임이 온다:
 - **컨트롤러는 붙는 순간 PTY 를 자기 뷰포트 크기로 바꾼다.** `--cols 60 --rows 20` 으로 붙이면
   stty `20 60`. `--cols/--rows` 없이 붙이면 기본 80x24 가 된다(서버 로그 `~/.config/herdr/
   herdr-server.log`: `terminal attach client connected cols=80 rows=24`; 이 경우 stty 는 안 쟀다).
-  컨트롤러가 빠져도 크기는 남는다. **palmer 는 pane 마다 반드시 `--cols/--rows` 를 캔버스 창 크기로
+  컨트롤러가 빠져도 크기는 남는다. **palmar 는 pane 마다 반드시 `--cols/--rows` 를 캔버스 창 크기로
   주고 띄워야 한다.**
 - `observe --cols/--rows` 는 PTY 크기를 **안** 바꾼다(100x30 으로 붙여도 stty `39 93` 그대로).
   대신 크기가 다르면 **화면이 잘린다** — 39행 PTY 를 30행으로 보니 상단 30행만 왔고, 마지막 프레임은
@@ -321,7 +321,7 @@ stdout 에 뉴라인 JSON 프레임이 온다:
   이벤트보다 62ms 먼저 봤다 — 이벤트도 수십 ms 는 늦을 수 있다. 그래도 **구독이 폴링보다 빠르고 싸다.**
 - `done` 은 "끝났는데 아직 안 본 것"이다(문서 기준, done→idle 전이는 미측정). 탭 포커스 또는 소켓의
   `pane.focus`/`agent.focus` 가 "봤다"로 치고 `idle` 로 바꾼다 — `pane.read` 는 안 바꾼다.
-  palmer 가 창을 앞으로 가져올 때 `pane.focus` 를 쏴야 done 이 걷힌다. 신호등에는 둘 다 "입력 가능".
+  palmar 가 창을 앞으로 가져올 때 `pane.focus` 를 쏴야 done 이 걷힌다. 신호등에는 둘 다 "입력 가능".
 - 종료도 working→done 을 한 번 거친다 — 신호등이 done 색으로 한 번 바뀐 뒤 꺼질 것이다.
 - **미확인:** bash 승인 프롬프트(`bash_permission_prompt` 규칙). 첫 시도는 내 스크립트 탓이다 —
   대기 루프가 "이미 done" 을 종료 조건으로 잡아 2ms 에 빠져나왔고, 화면을 읽은 뒤 바로 `/exit` 를
@@ -359,7 +359,7 @@ stdout 에 뉴라인 JSON 프레임이 온다:
 
 ## 자유 배치 좌표를 herdr 에 둘 수 있는가 (decisions ③)
 
-**답: 못 둔다. palmer 가 보관한다.**
+**답: 못 둔다. palmar 가 보관한다.**
 
 - `layout.export` 는 split 트리를 돌려준다:
   ```json
@@ -372,7 +372,7 @@ stdout 에 뉴라인 JSON 프레임이 온다:
   문자열 토큰(socket-api.mdx 기준: 한 번의 report 당 키 ≤16개, pane/workspace 당 보관 ≤32개, 키
   `[A-Za-z0-9_-]{1,32}`, 값 ≤80자, `null` 이면 삭제)을 실을 수 있고 `pane.get`/`workspace.get` 에
   `tokens` 로 돌아온다. 즉시 반영, 1ms.
-- **그러나 서버 재시작 후 사라진다.** 실측: 재시작 전 `{"palmer_x":"121","palmer_y":"80",…}`
+- **그러나 서버 재시작 후 사라진다.** 실측: 재시작 전 `{"palmar_x":"121","palmar_y":"80",…}`
   → 후 `None`. `session.json` 에도 안 들어간다. 공식 문서: "Token metadata is not restored
   after a server restart." `ttl_ms`(최대 24h) 도 있다 — 단명 메타데이터용이다.
 - `pane_id` 는 재시작 후에도 그대로였다(실측은 pane 하나뿐 — w2·w3·w4 를 닫고 재시작했다). 근거는
@@ -399,10 +399,10 @@ stdout 에 뉴라인 JSON 프레임이 온다:
 - TUI 클라이언트가 붙으면 가상 화면(120x40)이 그 터미널 크기로 바뀌고 pane 은 그 안에서 split 몫을
   다시 받을 것이다 — **미측정.** 근거는 `herdr --default-config` 주석 "Size of the virtual terminal
   used when no client is attached. Attached clients always use their own terminal size." 와
-  session-state 문서 "After a client attaches and provides terminal size…". palmer 와 TUI 를
+  session-state 문서 "After a client attaches and provides terminal size…". palmar 와 TUI 를
   동시에 쓰면 서로 크기를 뺏을 것이다 — 실물로 봐야 한다.
 
 **결론: 크기를 바꾸는 유일한 손잡이는 `terminal.resize`(또는 control `--cols/--rows`) 다.**
 헤드리스·TUI 없음 조건에서는 자유 크기 조절이 성립했다. TUI 동시 접속·`layout.updated`·재시작 뒤는
-미측정 — 어느 쪽이든 palmer 는 (1) pane 마다 control 을 띄울 때 항상 `--cols/--rows` 를 주고,
+미측정 — 어느 쪽이든 palmar 는 (1) pane 마다 control 을 띄울 때 항상 `--cols/--rows` 를 주고,
 (2) 재시작·재접속·`layout.updated` 뒤에 자기 좌표에서 크기를 다시 보낸다.

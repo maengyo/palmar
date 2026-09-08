@@ -1,6 +1,6 @@
 # 프로토콜 — 데몬 ↔ 브라우저
 
-이 문서가 계약이다. 데몬(`server/palmerd.py`)과 브라우저(`web/`)는 이것만 보고 만든다.
+이 문서가 계약이다. 데몬(`server/palmard.py`)과 브라우저(`web/`)는 이것만 보고 만든다.
 ② 가 "Bun 으로 옮길 수 있게" 를 조건으로 파이썬을 골랐으므로, **여기 적힌 것만 지키면 데몬을 갈아 끼울 수 있어야 한다.**
 바꾸려면 이 문서를 먼저 고친다. 스파이크 D·E·F·G·I 에서 실측된 값이 기준이다.
 
@@ -11,21 +11,21 @@
 ## 뜨기
 
 ```
-python3 server/palmerd.py            # 127.0.0.1:8801. --port 만 받는다. host 옵션은 없다.
+python3 server/palmard.py            # 127.0.0.1:8801. --port 만 받는다. host 옵션은 없다.
 ```
 
 뜨면서 하는 일 (순서대로, 하나라도 실패하면 뜨지 않는다):
-1. `~/.palmer/` `~/.palmer/bin/` `~/.palmer/run/` 을 0700 으로 만든다. **이미 있는데 소유자가 다르거나
+1. `~/.palmar/` `~/.palmar/bin/` `~/.palmar/run/` 을 0700 으로 만든다. **이미 있는데 소유자가 다르거나
    group/other 쓰기 비트가 있거나 심볼릭 링크면 거부한다** (#29). 0755 처럼 읽기만 열린 것은 거부하지
-   않고 0700 으로 조인다. **`~/.palmer/run/lock` 에 배타적 `flock` 을 잡는다 — 못 잡으면 이미 다른
-   palmerd 가 이 HOME 을 쓰는 것이라 그 URL 을 찍고 뜨지 않는다(데몬은 HOME 당 하나, #2). 락을 잡은
+   않고 0700 으로 조인다. **`~/.palmar/run/lock` 에 배타적 `flock` 을 잡는다 — 못 잡으면 이미 다른
+   palmard 가 이 HOME 을 쓰는 것이라 그 URL 을 찍고 뜨지 않는다(데몬은 HOME 당 하나, #2). 락을 잡은
    데몬만 아래 토큰 회전과 고아 `.json` 삭제를 한다** — 안 그러면 둘째 데몬이 첫째의 pane 설정을 지워
    훅이 소리 없이 빠진다. `run/` 의 고아 `<id>.json` 을 지운다(지난 데몬의 pane 은 이제 없다, ⑦=b).
-2. 토큰을 만든다 — `secrets.token_urlsafe(32)`. `~/.palmer/run/token` 에 0600 으로 쓴다.
+2. 토큰을 만든다 — `secrets.token_urlsafe(32)`. `~/.palmar/run/token` 에 0600 으로 쓴다.
    **다시 뜨면 토큰도 새로 난다** — 열려 있던 페이지의 토큰은 그 순간부터 틀린 토큰이다(아래 "인증").
-3. shim 을 `~/.palmer/bin/claude` 에 쓴다 (아래 "shim").
+3. shim 을 `~/.palmar/bin/claude` 에 쓴다 (아래 "shim").
 4. `web/` 을 정적으로 낸다. `index.html` 을 낼 때 **첫** `</head>` 앞에
-   `<script>window.PALMER_TOKEN="…"</script>` 를 심는다. **토큰은 이 길로만 브라우저에 간다.**
+   `<script>window.PALMAR_TOKEN="…"</script>` 를 심는다. **토큰은 이 길로만 브라우저에 간다.**
    그래서 `index.html` 에 그 닫는 태그는 정확히 하나여야 한다 — 주석에도 그 글자를 적지 않는다
    (실제로 한 번 주석 안에 심겨 토큰이 안 실렸다).
 5. 마지막 줄에 `http://127.0.0.1:8801` 을 찍는다.
@@ -38,7 +38,7 @@ python3 server/palmerd.py            # 127.0.0.1:8801. --port 만 받는다. hos
   DNS 리바인딩(공격자 도메인 → 127.0.0.1)으로 `index.html` 의 토큰을 읽어 가는 길을 막는다(#29).
   (2026-09-07 데몬 구현에서 추가. 브라우저는 자기 주소로 접속하니 영향이 없다.)
 - **모든 HTTP 응답에 `X-Frame-Options: DENY` 와 `Content-Security-Policy: frame-ancestors 'none'` 를 붙인다.**
-  남의 페이지가 palmer UI 를 iframe 으로 감싸 클릭재킹(한 번 눌러 터미널에 포커스 → 키 입력을 남의 셸로)을
+  남의 페이지가 palmar UI 를 iframe 으로 감싸 클릭재킹(한 번 눌러 터미널에 포커스 → 키 입력을 남의 셸로)을
   못 하게 막는다(#10, 2026-09-08 추가).
 - **웹소켓 업그레이드와 상태를 바꾸는 요청(POST·PATCH·DELETE)은 `?token=` 이 맞아야 한다.** `hmac.compare_digest`. 아니면 `403`.
   **캔버스 만들기·이름 바꾸기·순서 바꾸기·지우기와 세션 이름 바꾸기·캔버스 옮기기도 여기에 든다**
@@ -48,7 +48,7 @@ python3 server/palmerd.py            # 127.0.0.1:8801. --port 만 받는다. hos
   Origin·Host 가 틀린 것만 `403` (훅은 둘 다 안 보낸다).
 - **데몬 자리에 서는 것은 이 셋을 다 지킨다.** `web/dev-stub.py` 도 데몬 자리에 서고 `index.html` 에 같은
   토큰을 심으므로 예외가 아니다. (2026-09-08 실측: 스텁에 `Host` 검사와 두 헤더가 빠져 있어
-  `curl -H 'Host: evil.example' http://127.0.0.1:<port>/` 가 `200` 에 몸 안의 `PALMER_TOKEN` 까지 돌려줬다.
+  `curl -H 'Host: evil.example' http://127.0.0.1:<port>/` 가 `200` 에 몸 안의 `PALMAR_TOKEN` 까지 돌려줬다.
   제품 데몬은 같은 요청에 `403` 이었다. 스텁을 제품에 맞췄다.)
 - 정적 파일 `GET` 은 토큰 없이 된다 (토큰이 거기 실려 나가니까).
 - 정적 파일 경로는 `Path.is_relative_to(WEB)` 로 가른다. `startswith` 금지.
@@ -143,7 +143,7 @@ python3 server/palmerd.py            # 127.0.0.1:8801. --port 만 받는다. hos
   두지 않으려는 것뿐이고, 한 곳에 있어 바꾸기 싸다.
 - **이름은 유일하지 않다.** 같은 이름의 캔버스가 둘 있어도 된다 — 가리키는 것은 언제나 id 다.
   유일성을 강제하면 이름 바꿀 때마다 실패가 생기는데 그만한 값이 없다.
-- **이름은 셸에 안 닿는다.** pane 환경은 지금 그대로다(`PALMER_PANE`·`PATH`·`TERM`…). 이름은 화면에
+- **이름은 셸에 안 닿는다.** pane 환경은 지금 그대로다(`PALMAR_PANE`·`PATH`·`TERM`…). 이름은 화면에
   찍히는 데이터일 뿐이라 명령줄에도 rc 에도 환경변수에도 들어가지 않는다. **클라이언트가 명령을
   고를 길은 여전히 없다.** 브라우저는 이름을 `textContent` 로만 넣는다 — `innerHTML` 금지.
 - **왼쪽 목록은 캔버스로 거르지 않는다.** 다른 캔버스의 세션에 붙는 캔버스 이름표는
@@ -226,7 +226,7 @@ id 는 22자라 `order` 와 부딪힐 수 없지만, 갈아 끼울 구현이 다
 
 | | 바쁠 때 | 한가할 때 |
 |---|---|---|
-| codex 0.147.0 | `⠹ palmer` (점자 스피너, 초당 ~12회) | `palmer` |
+| codex 0.147.0 | `⠹ palmar` (점자 스피너, 초당 ~12회) | `palmar` |
 | Claude Code | `◐ Claude Code` (초당 ~1회) | `✳ …` |
 | opencode | (제목을 한 번만 세우고 안 바꾼다) | 〃 |
 
@@ -334,16 +334,16 @@ alt 가 바뀌면 `/events` 로 `session` 을 보낸다. **조각(alt 로 끊긴
 자주 넘나든 뒤 재접속하면 256KB 미만이라도 오래된 조각이 재생에서 빠질 수 있다(#23. 계약과 코드가 같아야
 Bun 으로 갈아 끼운다 — 이 상한을 없애고 인접 조각을 합치는 쪽으로 가도 된다. 사람이 정한다).
 
-## zsh 래퍼 — `~/.palmer/zsh/`
+## zsh 래퍼 — `~/.palmar/zsh/`
 
-**PATH 를 앞세우는 것만으로는 진다.** palmer 가 셸에 `PATH=~/.palmer/bin:$PATH` 를 넘겨도,
+**PATH 를 앞세우는 것만으로는 진다.** palmar 가 셸에 `PATH=~/.palmar/bin:$PATH` 를 넘겨도,
 그 셸이 뜨면서 읽는 사용자 rc 가 나중에 자기 것을 다시 앞에 붙인다 — 실측: `~/.zshrc` 의
 `export PATH="$HOME/.local/bin:$PATH"` 한 줄에 shim 이 밀려 `claude` 가 진짜 바이너리로 갔고
 훅이 하나도 안 왔다(2026-09-07 통합에서 발견, 2026-09-08 원인 확인).
 
-**셸이 zsh 이면 `ZDOTDIR` 로 감싼다.** 데몬이 `~/.palmer/zsh/` 에 `.zshenv`·`.zprofile`·`.zshrc`·
-`.zlogin` 넷을 쓰고(0600), 자식 환경에 `ZDOTDIR=~/.palmer/zsh` 와
-`PALMER_USER_ZDOTDIR=<원래 ZDOTDIR 또는 $HOME>` 를 넣는다. 우리 rc 는 **사용자 것을 먼저 부른 뒤**
+**셸이 zsh 이면 `ZDOTDIR` 로 감싼다.** 데몬이 `~/.palmar/zsh/` 에 `.zshenv`·`.zprofile`·`.zshrc`·
+`.zlogin` 넷을 쓰고(0600), 자식 환경에 `ZDOTDIR=~/.palmar/zsh` 와
+`PALMAR_USER_ZDOTDIR=<원래 ZDOTDIR 또는 $HOME>` 를 넣는다. 우리 rc 는 **사용자 것을 먼저 부른 뒤**
 PATH 를 다시 앞세운다. **사용자 파일은 읽기만 한다.**
 
 실측(2026-09-08, 격리된 가짜 HOME + 진짜 데몬):
@@ -361,18 +361,18 @@ PATH 를 다시 앞세운다. **사용자 파일은 읽기만 한다.**
 진짜 pane 에서 `claude -p` 를 띄우니 3초 만에 `working`/`agent=claude`/`UserPromptSubmit` 이 왔다.
 
 **bash 도 감쌌다(2026-09-08).** `ZDOTDIR` 이 없으므로 `--rcfile` 로 물린다 —
-데몬이 `~/.palmer/bash/bashrc`(0600)를 쓰고 자식을 `bash --rcfile <그 파일>` 로 띄우며
-`PALMER_USER_BASHRC`·`PALMER_USER_BASH_PROFILE` 을 넘긴다. 우리 rc 가 로그인 셸이면
+데몬이 `~/.palmar/bash/bashrc`(0600)를 쓰고 자식을 `bash --rcfile <그 파일>` 로 띄우며
+`PALMAR_USER_BASHRC`·`PALMAR_USER_BASH_PROFILE` 을 넘긴다. 우리 rc 가 로그인 셸이면
 `.bash_profile` 을, 아니면 `.bashrc` 를 먼저 부르고 그 뒤에 PATH 를 되돌린다.
 실측(2026-09-08, 진짜 데몬 · `SHELL=/bin/bash`): pane 안에서 `command -v claude` 가
-`~/.palmer/bin/claude` 였다. **이게 WSL 에 중요하다** — 거기 기본 셸이 bash 다.
+`~/.palmar/bin/claude` 였다. **이게 WSL 에 중요하다** — 거기 기본 셸이 bash 다.
 
 **fish 는 아직이다.** 그 셸에서는 PATH 경쟁에 질 수 있다 — 점이 회색에 머문다.
 
-## shim — `~/.palmer/bin/claude`
+## shim — `~/.palmar/bin/claude`
 
-데몬이 뜰 때 쓴다(0755). pane 을 만들 때 그 셸의 환경에 `PATH=~/.palmer/bin:$PATH`, `PALMER_PANE=<id>`,
-`TERM=xterm-256color`, `TERM_PROGRAM=palmer` 를 넣는다. 데몬을 띄운 터미널의 정체는 물려주지 않는다 —
+데몬이 뜰 때 쓴다(0755). pane 을 만들 때 그 셸의 환경에 `PATH=~/.palmar/bin:$PATH`, `PALMAR_PANE=<id>`,
+`TERM=xterm-256color`, `TERM_PROGRAM=palmar` 를 넣는다. 데몬을 띄운 터미널의 정체는 물려주지 않는다 —
 `TERM_SESSION_ID`·`TERM_PROGRAM_VERSION`·`ITERM_SESSION_ID`·`TMUX`·`TMUX_PANE` 을 뺀다(Terminal.app 에서 띄우면
 pane 의 zsh 가 `/etc/zshrc_Apple_Terminal` 을 타서 "Restored session:" 을 찍고 띄운 터미널과 히스토리 파일을
 공유했다 — 2026-09-07 통합 실측 1회).
@@ -382,7 +382,7 @@ pane 의 zsh 가 `/etc/zshrc_Apple_Terminal` 을 타서 "Restored session:" 을 
 진짜 pane 에 붙어 `printenv` 를 돌리니 `AI_AGENT`·`CLAUDE_EFFORT`·`CLAUDE_PID`·`CLAUDE_PLUGIN_DATA`·
 `CLAUDE_OFFICE_API_URL` 다섯이 그대로 넘어가 있었다 — pane 환경변수 55개 중 다섯. 넓힌 뒤 50개, 다섯 다 없다.
 **안 잰 것:** 저 다섯이 실제로 중첩 `claude` 의 시작을 바꾸는지는 안 쟀다. 재서가 아니라 규칙으로 뺀다.)
-pane 마다 `~/.palmer/run/<id>.json` (0600) 을 쓴다:
+pane 마다 `~/.palmar/run/<id>.json` (0600) 을 쓴다:
 
 ```jsonc
 { "hooks": {
@@ -397,7 +397,7 @@ pane 마다 `~/.palmer/run/<id>.json` (0600) 을 쓴다:
 shim 자체:
 ```sh
 #!/bin/sh
-# palmer shim: attaches hooks to a claude started inside a palmer terminal. Nothing else.
+# palmar shim: attaches hooks to a claude started inside a palmar terminal. Nothing else.
 d=$(cd "$(dirname "$0")" && pwd)
 new=
 IFS=:
@@ -409,20 +409,20 @@ for e in $PATH; do
 done
 unset IFS
 PATH=$new
-real=$(command -v claude) || { echo "palmer: claude not found on PATH" >&2; exit 127; }
-f="$HOME/.palmer/run/$PALMER_PANE.json"
-[ -n "$PALMER_PANE" ] && [ -r "$f" ] && exec "$real" --settings "$f" "$@"
+real=$(command -v claude) || { echo "palmar: claude not found on PATH" >&2; exit 127; }
+f="$HOME/.palmar/run/$PALMAR_PANE.json"
+[ -n "$PALMAR_PANE" ] && [ -r "$f" ] && exec "$real" --settings "$f" "$@"
 exec "$real" "$@"
 ```
 - 자기 디렉터리는 **고정 문자열**로 견주고 뒤 슬래시 철자도 함께 뺀다(#12). 옛 `grep -vx "$d"` 는 `$d` 를
-  정규식으로 봐서 `.palmer` 의 `.` 가 아무 글자나 맞았고(예: PATH 의 `/Xpalmer/bin` 이 잘못 빠짐),
-  `/…/.palmer/bin/` 처럼 뒤 슬래시가 붙은 철자는 못 빼 `command -v claude` 가 자기(shim)를 다시 골라 무한 exec 했다.
+  정규식으로 봐서 `.palmar` 의 `.` 가 아무 글자나 맞았고(예: PATH 의 `/Xpalmar/bin` 이 잘못 빠짐),
+  `/…/.palmar/bin/` 처럼 뒤 슬래시가 붙은 철자는 못 빼 `command -v claude` 가 자기(shim)를 다시 골라 무한 exec 했다.
 - `--settings` 는 **병합**이다(스파이크 E). 사용자 훅을 지우지 않는다.
 - pane 이 죽으면 그 `<id>.json` 을 지운다. 데몬이 뜰 때 `run/` 의 고아 `.json` 을 지운다.
 - codex·opencode shim 은 **아직 없다**(⑧ 미정). `claude` 만.
 - **알려진 문제(미해결, 2026-09-07 실측):** 사용자 rc 파일이 `PATH` 앞에 다른 디렉터리를 다시 세우면 shim 이
   진다. 이 기계의 `.zshrc` 는 `export PATH="$HOME/.local/bin:$PATH"` 를 갖고 있어 pane 안에서 `command -v claude`
-  가 `~/.local/bin/claude` 였다(`~/.palmer/bin` 은 PATH 5번째, `~/.local/bin` 은 4번째). 즉 지금 구조로는 이
+  가 `~/.local/bin/claude` 였다(`~/.palmar/bin` 은 PATH 5번째, `~/.local/bin` 은 4번째). 즉 지금 구조로는 이
   사용자에게 훅이 안 붙는다. 어떻게 풀지는 정하지 않았다 — 판단 재료는 데몬 보고서(#22)에 있다.
 
 ## 위치·크기·이름·캔버스 소속 — 어디에 있는가
@@ -432,7 +432,7 @@ exec "$real" "$@"
 
 | 무엇 | 어디 | 언제까지 사는가 |
 |---|---|---|
-| 창의 좌표·크기·z 순서 | **브라우저 `localStorage`** (`palmer-tiles`, session `id` 키) | 그 브라우저가 지울 때까지 |
+| 창의 좌표·크기·z 순서 | **브라우저 `localStorage`** (`palmar-tiles`, session `id` 키) | 그 브라우저가 지울 때까지 |
 | 캔버스 목록·`name`·`order` | **데몬 메모리** | 데몬이 사는 동안 |
 | 세션의 `canvas`·`name` | **데몬 메모리** (`Session` 안) | 그 세션이 사는 동안 |
 | 지금 보고 있는 탭 · 목록 그룹 접힘 · 미니맵 | **브라우저에만** (아래 "없는 것") | 그 브라우저 안에서 |

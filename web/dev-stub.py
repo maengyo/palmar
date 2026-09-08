@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""dev-stub — 개발용 가짜 데몬. **제품이 아니다.** 제품은 server/palmerd.py 다.
+"""dev-stub — 개발용 가짜 데몬. **제품이 아니다.** 제품은 server/palmard.py 다.
 
 브라우저 쪽(web/)을 데몬 없이 띄워 보려고 docs/protocol.md 의 겉모양만 흉내 낸다:
-    GET  /, /app.js …            web/ 정적 파일. index.html 에 window.PALMER_TOKEN 을 심는다
+    GET  /, /app.js …            web/ 정적 파일. index.html 에 window.PALMAR_TOKEN 을 심는다
     WS   /events?token=          hello 에 가짜 세션 둘. seen 을 받으면 done → idle
     WS   /pty/<id>?token=…       hello 프레임 + 링버퍼 재생 + **키 입력을 그대로 되돌려 준다(echo)**. PTY 는 없다
     GET  /api/sessions           목록 — **캔버스로 거르지 않는다**(왼쪽 목록이 전부를 본다)
@@ -196,7 +196,7 @@ def seed():
     CANVASES.extend([c1, c2, c3])
     renumber()
 
-    proj = HOME / "ddul" / "python" / "palmer"
+    proj = HOME / "ddul" / "python" / "palmar"
     a_cwd = str(proj) if proj.is_dir() else str(HOME)
     a = Sess(a_cwd, status="waiting", agent="claude", last_event="PermissionRequest",
              canvas=c2.id, banner=(
@@ -223,7 +223,7 @@ def seed():
 
 # ── 디렉터리 (읽기 전용) ─────────────────────────────────────
 def owned_by_me(p) -> bool:
-    """resolve() 된 경로의 소유자가 지금 uid 인가. palmerd.owned_by_me 와 같은 술어다 (#31)."""
+    """resolve() 된 경로의 소유자가 지금 uid 인가. palmard.owned_by_me 와 같은 술어다 (#31)."""
     try:
         return os.stat(str(p)).st_uid == os.getuid()
     except OSError:
@@ -236,7 +236,7 @@ def roots():
     이 스텁은 `/api/dirs` 에서 진짜 파일시스템을 읽으므로 뿌리 규칙도 진짜와 같아야 한다
     (protocol.md "뿌리(roots)": 데몬 자리에 서는 것은 같은 규칙을 지킨다). uid 검사가 빠져 있으면
     WSL 에서 `aa` 로 스텁을 띄웠을 때 `/home/bb` 가 디렉터리 레일에 그대로 뜬다 — #31 ② 가 데몬에서
-    고친 바로 그 자리다. 소유자는 palmerd 와 같이 **푼 경로(resolve)** 에서 잰다."""
+    고친 바로 그 자리다. 소유자는 palmard 와 같이 **푼 경로(resolve)** 에서 잰다."""
     out = [HOME]
     for base in (Path("/Users"), Path("/home")):
         if base.is_dir():
@@ -311,7 +311,7 @@ def respond(writer, status, body=b"", ctype="application/json; charset=utf-8", e
     reason = {200: "OK", 201: "Created", 204: "No Content", 400: "Bad Request", 403: "Forbidden",
               404: "Not Found", 405: "Method Not Allowed", 409: "Conflict",
               501: "Not Implemented"}.get(status, "OK")
-    # protocol.md "인증": 모든 HTTP 응답에 붙는다. 제품(server/palmerd.py http())과 같은 두 줄이다 —
+    # protocol.md "인증": 모든 HTTP 응답에 붙는다. 제품(server/palmard.py http())과 같은 두 줄이다 —
     # 스텁도 index.html 에 토큰을 심으므로 iframe 으로 감싸이면 잃을 것이 제품과 같다(#10).
     head = (f"HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\n"
             f"Cache-Control: no-store\r\n"
@@ -352,9 +352,9 @@ async def handle(reader, writer):
 
     def allowed_host():
         # protocol.md "인증": Host 도 같은 둘만. DNS 리바인딩(공격자 도메인 → 127.0.0.1)으로
-        # index.html 의 토큰을 읽어 가는 길을 막는다. 제품 palmerd.allowed_host() 와 같은 규칙이다 —
+        # index.html 의 토큰을 읽어 가는 길을 막는다. 제품 palmard.allowed_host() 와 같은 규칙이다 —
         # 스텁도 같은 자리에 토큰을 심으므로 여기만 열려 있으면 스텁이 그 길이 된다(실측 2026-09-08:
-        # Host: evil.example 로 GET / 가 200 이었고 몸에 PALMER_TOKEN 이 그대로 있었다).
+        # Host: evil.example 로 GET / 가 200 이었고 몸에 PALMAR_TOKEN 이 그대로 있었다).
         h = headers.get("host")
         return h is None or h in (f"127.0.0.1:{PORT[0]}", f"localhost:{PORT[0]}")
 
@@ -538,7 +538,7 @@ async def handle(reader, writer):
             b = await body_json()
             c = canvas_by_id(path[len("/api/canvases/"):])
             # **몸에 있는 키만 바꾼다.** 옛 판은 키가 없어도 clean_name(None) 을 거쳐 이름을 지웠다 —
-            # 데몬은 안 그런다(server/palmerd.py 의 `if "name" in obj`). 스텁이 데몬과 다르면 여기서
+            # 데몬은 안 그런다(server/palmard.py 의 `if "name" in obj`). 스텁이 데몬과 다르면 여기서
             # 되던 것이 진짜에서 안 된다. (2026-09-08 통합에서 맞춤)
             has_name = isinstance(b, dict) and "name" in b
             ok_name, name = clean_name(b.get("name")) if has_name else (True, None)
@@ -605,7 +605,7 @@ async def handle(reader, writer):
         else:
             data = f.read_bytes()
             if f.suffix == ".html":
-                data = data.replace(b"</head>", f'<script>window.PALMER_TOKEN="{TOKEN}"</script></head>'.encode(), 1)
+                data = data.replace(b"</head>", f'<script>window.PALMAR_TOKEN="{TOKEN}"</script></head>'.encode(), 1)
             ctype = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                      ".css": "text/css; charset=utf-8"}.get(f.suffix, "application/octet-stream")
             respond(writer, 200, data, ctype)
@@ -688,7 +688,7 @@ async def serve_pty(reader, writer, sess, q):
 
 
 async def main():
-    ap = argparse.ArgumentParser(description="palmer dev stub — NOT the product")
+    ap = argparse.ArgumentParser(description="palmar dev stub — NOT the product")
     ap.add_argument("--port", type=int, default=8801)
     ap.add_argument("--debug", action="store_true", help="log every request to stderr")
     ap.add_argument("--delay-gone", type=float, default=0.0, metavar="SEC",

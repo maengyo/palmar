@@ -1,4 +1,4 @@
-# palmer
+# palmar
 
 *Read this in [한국어](README.ko.md).*
 
@@ -8,7 +8,7 @@ or **idle** — and it works out which without being told anything about the age
 
 Close the browser tab and the sessions keep running.
 
-![palmer running: canvases as tabs, terminals placed on the canvas, the session that wants you at the top of the list](docs/img/palmer-light.png)
+![palmar running: canvases as tabs, terminals placed on the canvas, the session that wants you at the top of the list](docs/img/palmar-light.png)
 
 ## What it does
 
@@ -26,7 +26,7 @@ same tabs in the same order, because the daemon owns them, not the page.
 lives. It groups by canvas and folds, but folding can never hide the thing you are needed for: a
 canvas with something waiting floats to the top, a folded group still draws its waiting rows, and
 its header says how many of the sessions it hid are asking for you. A row from another canvas
-carries a small badge — click it and palmer switches to that canvas and brings you to the window.
+carries a small badge — click it and palmar switches to that canvas and brings you to the window.
 
 **One terminal can fill the canvas.** The expand box blows a window up to the whole canvas, and its
 rows and columns genuinely grow — this is not a camera. **Esc** brings you back. The rails stay
@@ -48,12 +48,12 @@ terminal gets more rows and columns at once.
 ## Quick start
 
 ```
-python3 server/palmerd.py
+python3 server/palmard.py
 ```
 
 It prints `http://127.0.0.1:8801` on its last line. Open that.
 
-There is nothing to install and nothing to build. palmer uses only the Python standard library, and
+There is nothing to install and nothing to build. palmar uses only the Python standard library, and
 xterm.js is vendored in the repo, so no dependency is fetched — at install time or at runtime. It
 binds `127.0.0.1` and nothing else.
 
@@ -64,9 +64,9 @@ Stop it with `Ctrl-C`.
 A light is only worth having if it is right, and if it works for the agent you actually run.
 
 **Agents already say when they are busy — in the window title.** They animate a spinner into it
-while they think and drop it when they stop. palmer owns the PTY, so it sees that stream and reads
+while they think and drop it when they stop. palmar owns the PTY, so it sees that stream and reads
 the state straight off it. Nothing to install, no config file, no permission to grant, and it works
-for an agent palmer has never been taught about.
+for an agent palmar has never been taught about.
 
 It does not keep a table of spinner characters, because every agent draws its own and any such
 table would be wrong the day a new one appears. **It watches the churn instead**: a title that
@@ -74,12 +74,12 @@ changes twice in three seconds is a spinner by definition. Spinning is *working*
 stops is *done*; a title that never spun stays *idle*, so a text editor parked in a pane is not
 mistaken for a finished job.
 
-**Where an agent offers hooks, palmer uses those instead**, because a hook is exact where a title
+**Where an agent offers hooks, palmar uses those instead**, because a hook is exact where a title
 is inferred — it can tell an approval prompt from a finished turn. Hooks attach themselves: every
-shell palmer opens gets a small shim in front of `PATH`, so there is still nothing for you to set
+shell palmar opens gets a small shim in front of `PATH`, so there is still nothing for you to set
 up. This works in zsh and bash.
 
-**Notifications reach you when palmer does not have the screen.** The browser tab counts what wants
+**Notifications reach you when palmar does not have the screen.** The browser tab counts what wants
 you, the favicon carries a dot, and the bell in the top bar turns on real notifications. It is off
 until you turn it on, it asks for permission on that click and never on load, it fires only when a
 terminal *becomes* one that wants you, several at once arrive as one notification, and clicking it
@@ -117,7 +117,7 @@ takes you to that terminal.
 └───────────┴───────────┬────────────┴───────────┘
                         │ WebSocket: bytes, status, canvases
 ┌───────────────────────┴────────────────────────┐
-│  palmer daemon — owns the PTYs, reads status,  │
+│  palmar daemon — owns the PTYs, reads status,  │
 │  keeps the canvases. Alive with no browser.    │
 └──────┬─────────────────────┬───────────────────┘
        │ PTY: bytes in and   │ hooks, per pane, when the agent has them
@@ -128,7 +128,7 @@ takes you to that terminal.
 └────────────────────────────────────────────────┘
 ```
 
-palmer opens shells and nothing else — it has no list of tools and no opinion about what you run.
+palmar opens shells and nothing else — it has no list of tools and no opinion about what you run.
 The daemon holds the PTYs, the canvases, and the status; the browser holds where the windows sit.
 
 The wire format between them is written down in [`docs/protocol.md`](docs/protocol.md): every
@@ -147,13 +147,13 @@ sessions, for working on the UI without spawning real shells.
 - [`docs/decisions.md`](docs/decisions.md) — what is settled, and what is deliberately still open.
 - [`docs/roadmap.md`](docs/roadmap.md) — the order of work and what blocks what.
 
-The living list is the [issues](https://github.com/maengyo/palmer/issues).
+The living list is the [issues](https://github.com/maengyo/palmar/issues).
 
 ## License
 
-palmer is MIT — see [`LICENSE`](LICENSE).
+palmar is MIT — see [`LICENSE`](LICENSE).
 
 The only third-party code in this repo is xterm.js (`@xterm/xterm`, `@xterm/addon-fit`,
-`@xterm/addon-webgl`) under `web/vendor/`, vendored so palmer fetches nothing at runtime. It is MIT
+`@xterm/addon-webgl`) under `web/vendor/`, vendored so palmar fetches nothing at runtime. It is MIT
 too; its notice is [`web/vendor/LICENSE-xterm`](web/vendor/LICENSE-xterm), kept beside the files
 because the minified builds carry no header of their own.

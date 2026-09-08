@@ -66,7 +66,7 @@ daemon2 가 같은 pid(2164)의 fd 를 이어받아 `produced=3060` 부터 계�
 
 **새 데몬이 부모의 stdio 를 물려받는다.** 첫 실행에서 `python3 handoff.py run | tail` 이 안 끝났다.
 daemon2 가 stdout 파이프를 들고 있어 `tail` 이 EOF 를 못 본 것이다. **제품에서는 새 데몬이 stdio 를
-떼야 한다** — 안 그러면 palmer 를 띄운 터미널이 안 닫힌다.
+떼야 한다** — 안 그러면 palmar 를 띄운 터미널이 안 닫힌다.
 
 ## 안 잰 것
 

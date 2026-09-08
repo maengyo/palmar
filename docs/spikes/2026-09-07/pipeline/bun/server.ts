@@ -77,7 +77,7 @@ const server = Bun.serve({
       };
       const proc = Bun.spawn(cmd, {
         cwd,
-        env: { ...process.env, TERM: "xterm-256color", PALMER_PANE: "spike" },
+        env: { ...process.env, TERM: "xterm-256color", PALMAR_PANE: "spike" },
         terminal: {
           cols, rows,
           data(_term: any, bytes: Uint8Array) {

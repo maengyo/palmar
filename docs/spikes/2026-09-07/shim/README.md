@@ -1,7 +1,7 @@
 # 스파이크 E — `claude --settings` 는 병합인가, 대체인가 (2026-09-07 저녁)
 
-**왜 잰다.** 훅을 PATH shim 으로 붙이기로 하면(`decisions.md` "훅은 palmer 가 붙인다"), 껍데기가
-`claude --settings /tmp/palmer/<pane>.json` 을 exec 한다. 이때 `--settings` 가 사용자의
+**왜 잰다.** 훅을 PATH shim 으로 붙이기로 하면(`decisions.md` "훅은 palmar 가 붙인다"), 껍데기가
+`claude --settings /tmp/palmar/<pane>.json` 을 exec 한다. 이때 `--settings` 가 사용자의
 `~/.claude/settings.json` 훅을 **지워 버리면** shim 은 쓸 수 없다. 이게 shim 전체가 걸려 있는 전제다.
 
 **어떻게 잰다.** 사용자 설정은 건드리지 않는다. 대신 같은 병합 코드를 타는 두 층을 쓴다 —

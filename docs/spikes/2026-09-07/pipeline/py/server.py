@@ -89,7 +89,7 @@ class Pane:
         self.pid, self.master = pty.fork()
         if self.pid == 0:  # 자식 — 여기서 돌아오지 않는다
             os.environ["TERM"] = "xterm-256color"
-            os.environ["PALMER_PANE"] = "spike"
+            os.environ["PALMAR_PANE"] = "spike"
             try:
                 os.chdir(cwd)
             except OSError:
@@ -240,7 +240,7 @@ async def handle(reader, writer):
         )
         cols = min(500, max(1, int(q.get("cols", ["80"])[0])))
         rows = min(200, max(1, int(q.get("rows", ["24"])[0])))
-        # 명령은 클라이언트가 못 고른다. palmer 는 셸만 연다 — 그래서 파라미터가 아예 없다(#29).
+        # 명령은 클라이언트가 못 고른다. palmar 는 셸만 연다 — 그래서 파라미터가 아예 없다(#29).
         cmd = [os.environ.get("SHELL", "/bin/sh")]
         # cwd 도 홈 아래로만. 스파이크라 뿌리가 하나다.
         home = Path.home().resolve()
@@ -279,7 +279,7 @@ async def handle(reader, writer):
             return
         n = int(headers.get("content-length", "0"))
         body = await reader.readexactly(n) if n else b"{}"
-        with open(os.environ.get("PALMER_REPORT", "/tmp/palmer-report.jsonl"), "a") as fh:
+        with open(os.environ.get("PALMAR_REPORT", "/tmp/palmar-report.jsonl"), "a") as fh:
             fh.write(body.decode() + "\n")
         writer.write(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
         await writer.drain()
@@ -295,7 +295,7 @@ async def handle(reader, writer):
     else:
         body = f.read_bytes()
         if f.suffix == ".html":
-            body = body.replace(b"</head>", f'<script>window.PALMER_TOKEN="{TOKEN}"</script></head>'.encode(), 1)
+            body = body.replace(b"</head>", f'<script>window.PALMAR_TOKEN="{TOKEN}"</script></head>'.encode(), 1)
         ctype = {".html": "text/html", ".js": "text/javascript", ".css": "text/css"}.get(
             f.suffix, "application/octet-stream"
         )

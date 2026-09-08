@@ -1,11 +1,11 @@
-// palmer 브라우저 — 캔버스 UI. 데몬과의 계약은 docs/protocol.md 하나다. 이 파일은 거기 적힌 것만 믿는다.
+// palmar 브라우저 — 캔버스 UI. 데몬과의 계약은 docs/protocol.md 하나다. 이 파일은 거기 적힌 것만 믿는다.
 //
 // ① 웹 스택은 아직 사람이 정하지 않았다. 이 파일이 vanilla JS 인 것은 결정이 아니라 결정 전의 기본값이다
 //    (decisions.md ①: "기본값은 안 쓰는 것이고, 쓰자고 하려면 이유를 대야 한다"). 빌드 단계도 없다.
 //    프레임워크를 고르게 되면 이 파일이 바뀐다 — 그래서 상태(sessions·tiles)와 DOM 을 최대한 얇게 이었다.
 //
 // 임시로 둔 것 (사람 몫의 결정을 미리 정하지 않은 자리 — 지금 도는 데 필요한 최소만):
-//   ③ 좌표·크기·z 순서는 localStorage 'palmer-tiles' 에 session id 로 둔다. protocol.md "위치·크기" 절이
+//   ③ 좌표·크기·z 순서는 localStorage 'palmar-tiles' 에 session id 로 둔다. protocol.md "위치·크기" 절이
 //      말하는 임시 그대로다. 데몬은 pane 의 cols·rows 만 안다.
 //   ⑥ status 문자열을 CSS 클래스(wait/work/done/idle)로만 바꾼다. 색은 style.css 의 --st-* 에만 있다.
 //      idle 과 unknown 은 같은 회색 자리에 둔다 — 매핑이 정해지면 STATUS_CLASS 한 곳만 바뀐다.
@@ -13,7 +13,7 @@
 //      기본 크기 DEFAULT_W/H 도 ⑩ 에 딸린 미정이다.
 //   ⑪⑫ 캔버스 목록·순서·이름과 세션의 canvas·name 은 **데몬이 갖는다**(protocol.md "캔버스"). 이 파일은
 //      사본을 들고 hello 로 갈아 낀다. 브라우저에만 있는 것은 셋뿐이다 — 지금 보고 있는 탭, 목록 그룹의
-//      접힘(localStorage 'palmer-groups' · 'palmer-canvas-groups'), 미니맵. 데몬은 그 셋을 모른다(protocol.md "없는 것").
+//      접힘(localStorage 'palmar-groups' · 'palmar-canvas-groups'), 미니맵. 데몬은 그 셋을 모른다(protocol.md "없는 것").
 //      PROVISIONAL 둘: 이름 없는 캔버스의 이름표를 무엇으로 만드는지(⑪ 미정 → canvasLabel 하나에 있다),
 //      새 세션이 어느 캔버스에 뜨는지(⑪ "지금 캔버스인가 그 폴더의 캔버스인가" 미정 → launch 하나에 있다).
 //
@@ -23,7 +23,7 @@
 (() => {
 'use strict';
 
-const TOKEN = window.PALMER_TOKEN || '';
+const TOKEN = window.PALMAR_TOKEN || '';
 const enc = new TextEncoder();
 const root = document.documentElement;
 const $ = (sel, from) => (from || document).querySelector(sel);
@@ -52,10 +52,10 @@ const EVENT_PHRASE = {
 const GRID = 22, GAP = 12;                              // 점 격자와 같은 22px 간격으로 빈 자리를 훑는다
 const DEFAULT_W = 520, DEFAULT_H = 360;                 // ⑩ 임시 기본 크기
 const MIN_W = 220, MIN_H = 110;
-const LS_TILES = 'palmer-tiles';                        // ③ 임시
-const LS_THEME = 'palmer-theme';
-const LS_GROUPS = 'palmer-groups';                      // 목록 그룹 접힘 — 브라우저에만 있는 것(⑪)
-const LS_CVGROUPS = 'palmer-canvas-groups';             // 캔버스 묶음 접힘 — 캔버스 id 로 건다(#31 ③)
+const LS_TILES = 'palmar-tiles';                        // ③ 임시
+const LS_THEME = 'palmar-theme';
+const LS_GROUPS = 'palmar-groups';                      // 목록 그룹 접힘 — 브라우저에만 있는 것(⑪)
+const LS_CVGROUPS = 'palmar-canvas-groups';             // 캔버스 묶음 접힘 — 캔버스 id 로 건다(#31 ③)
 // 캔버스가 사라진 세션이 떨어지는 자리. 계약상 없어야 하지만(protocol.md: hello 한 프레임 안에서 모든
 // session.canvas 가 그 canvases 안에 있다) 목록이 세션을 잃는 것보다는 낫다.
 const OTHER_KEY = '__other';
@@ -273,7 +273,7 @@ function agoText(id) {
   return Math.floor(d / 86400) + 'd';
 }
 
-// ── 테마 (system / light / dark, localStorage 'palmer-theme') ──
+// ── 테마 (system / light / dark, localStorage 'palmar-theme') ──
 const themeBtn = $('#theme');
 const darkMq = matchMedia('(prefers-color-scheme: dark)');
 function storedTheme() {
@@ -619,7 +619,7 @@ function tryWebgl(term, onLoss) {
     term.loadAddon(gl);
     return gl;
   } catch (e) {
-    console.warn('palmer: WebGL unavailable, DOM renderer', e && e.message);
+    console.warn('palmar: WebGL unavailable, DOM renderer', e && e.message);
     return null;
   }
 }
@@ -1153,7 +1153,7 @@ function toggleCvGroup(id) {
 // **캔버스로 묶는다 — 그런데 기다리는 것은 절대 못 숨긴다.**
 //
 // 이 둘은 원래 서로 반대였다. 목업을 견줄 때 캔버스 우선 묶기를 반대한 근거가 정확히
-// "접힌 묶음 안에 기다리는 것이 파묻힌다" 였고, **"기다리는 것이 어디 있든 맨 위" 는 palmer 가
+// "접힌 묶음 안에 기다리는 것이 파묻힌다" 였고, **"기다리는 것이 어디 있든 맨 위" 는 palmar 가
 // 존재하는 이유**다(decisions.md ⑪). 사용자가 매일 쓰면서 캔버스 묶기를 요구했으므로(#31) 묶되,
 // 보장은 두 겹으로 지킨다:
 //   1. **기다리는 세션이 있는 캔버스 묶음이 맨 위로 뜬다.** 나머지는 데몬이 준 캔버스 차례 그대로다
@@ -1318,12 +1318,12 @@ addEventListener('keydown', (e) => {
 });
 
 // ── 밖으로 나가는 신호 (#40) ──────────────────────────────
-// 신호등은 palmer 를 보고 있을 때만 값이 있다. 에디터가 위에 떠 있으면 아무한테도 안 닿는데,
+// 신호등은 palmar 를 보고 있을 때만 값이 있다. 에디터가 위에 떠 있으면 아무한테도 안 닿는데,
 // 하필 그때가 신호등이 필요한 순간이다. 두 층으로 내보낸다:
 //   탭 제목·파비콘 — 브라우저가 보일 때의 곁눈질. 공짜다.
 //   알림 — 창이 덮였을 때의 끼어들기. 127.0.0.1 은 secure context 라 HTTPS 없이도 된다
 //          (2026-09-08 실측: isSecureContext=true, Notification.permission='default').
-const LS_NOTIFY = 'palmer.notify';
+const LS_NOTIFY = 'palmar.notify';
 const NOTIFY_COALESCE_MS = 500;
 //: "나를 부르는" 상태. **done 도 넣는다** — 훅이 없는 에이전트는 waiting 을 낼 수 없고(#38 은 제목으로
 //: 읽으니 working/done/idle 만 나온다), 회사에서 쓰는 codex 가 정확히 그 경우다(#15).
@@ -1359,7 +1359,7 @@ function renderBadge(force) {
   const key = n + '|' + (document.documentElement.dataset.theme || 'system');
   if (!force && key === badgeKey) return;      // 세션 프레임마다 캔버스를 다시 그리지 않는다
   badgeKey = key;
-  document.title = n ? '(' + n + ') palmer' : 'palmer';
+  document.title = n ? '(' + n + ') palmar' : 'palmar';
   if (!favEl) return;
   const css = getComputedStyle(document.documentElement);
   const c = document.createElement('canvas'); c.width = c.height = 32;
@@ -1378,7 +1378,7 @@ let notifyTimer = null;
 // **상태로 바뀌는 순간에만** 부른다. 상태가 이어지는 동안 다시 울리면 사람들은 알림을 통째로 끈다.
 function onWantsYou(id) {
   if (!notifyOn || !('Notification' in window) || Notification.permission !== 'granted') return;
-  // palmer 를 보고 있으면 신호등으로 충분하다. hasFocus 는 "다른 창이 위에 있다" 와 "다른 탭이다" 를
+  // palmar 를 보고 있으면 신호등으로 충분하다. hasFocus 는 "다른 창이 위에 있다" 와 "다른 탭이다" 를
   // 둘 다 잡는다 — visibilityState 는 창이 덮여도 'visible' 이라 여기서는 쓸 수 없다.
   if (document.hasFocus()) return;
   notifyQueue.add(id);
@@ -1399,7 +1399,7 @@ function flushNotify() {
     n = new Notification(
       one ? labelOf(one) + ' wants you' : ids.length + ' terminals want you',
       { body: one ? one.cwd : ids.map((i) => labelOf(sessions.get(i))).join(', '),
-        tag: 'palmer-wants-you' });          // 같은 tag 라 쌓이지 않고 갈아 끼워진다
+        tag: 'palmar-wants-you' });          // 같은 tag 라 쌓이지 않고 갈아 끼워진다
   } catch (e) { return; }
   // 눌렀는데 그 터미널로 안 가면 "가서 찾아봐" 라고 말하는 셈이라 원래 문제를 그대로 둔다.
   n.onclick = () => { window.focus(); goToSession(ids[0]); n.close(); };
@@ -1537,7 +1537,7 @@ async function checkStaleToken() {
   try {
     const r = await fetch('/', { cache: 'no-store' });
     if (!r.ok) return;
-    const m = /window\.PALMER_TOKEN="([^"]*)"/.exec(await r.text());
+    const m = /window\.PALMAR_TOKEN="([^"]*)"/.exec(await r.text());
     if (m && m[1] && m[1] !== TOKEN) {
       toast([{ b: 'daemon restarted' }, ' — reloading']);
       setTimeout(() => location.reload(), 600);
@@ -1684,7 +1684,7 @@ addEventListener('keydown', (e) => {
 });
 
 // 콘솔·개발 도구에서 들여다보는 손잡이. 제품 동작은 이것에 기대지 않는다.
-window.palmer = { sessions, tiles, canvases, layout: () => layout,
+window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   canvas: () => current, groups: () => groupsCollapsed,
                   cvGroups: () => cvCollapsed, closing: () => [...closing] };
 

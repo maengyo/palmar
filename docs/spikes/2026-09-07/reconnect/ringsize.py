@@ -22,10 +22,10 @@ def run(cmd, seconds=6.0, cols=100, rows=30):
     return bytes(buf)
 
 CASES = [
-    ("git log --oneline -100",        "git -C ~/ddul/python/palmer log --oneline -100"),
+    ("git log --oneline -100",        "git -C ~/ddul/python/palmar log --oneline -100"),
     ("ls -la /usr/bin",               "ls -la /usr/bin"),
     ("색 있는 빌드 로그 흉내",          "for i in $(seq 1 200); do printf '\\033[32m ok \\033[0m module_%s compiled\\n' $i; done"),
-    ("git diff (색 포함)",             "git -C ~/ddul/python/palmer diff HEAD~3 --color=always"),
+    ("git diff (색 포함)",             "git -C ~/ddul/python/palmar diff HEAD~3 --color=always"),
     ("python 역추적 반복",             "for i in $(seq 1 40); do python3 -c 'raise ValueError(\"x\")' 2>&1; done"),
 ]
 print(f"{'무엇':28} {'바이트':>9} {'줄':>6} {'줄당':>6} {'100줄당':>9}")

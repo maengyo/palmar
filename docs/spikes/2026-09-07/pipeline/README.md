@@ -47,7 +47,7 @@ python3 wsprobe.py --port 8801 --pid $(pgrep -f 'server.py --port 8801') --name 
 ## 자동으로 재기 (실제로 쓴 방법)
 
 주소에 시나리오를 넣으면 페이지가 스스로 띄우고·켜고·재고, 결과를 `/report` 로 보낸다.
-결과는 `PALMER_REPORT` (기본 `/tmp/palmer-report.jsonl`) 에 한 줄씩 쌓인다.
+결과는 `PALMAR_REPORT` (기본 `/tmp/palmar-report.jsonl`) 에 한 줄씩 쌓인다.
 
 ```
 ?panes=8&renderer=webgl&auto=flood,drag&warm=6&measure=10

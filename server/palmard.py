@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""palmerd — palmer 데몬 (#22). 계약은 `docs/protocol.md` 다. 이 파일은 그것만 구현한다.
+"""palmard — palmar 데몬 (#22). 계약은 `docs/protocol.md` 다. 이 파일은 그것만 구현한다.
 
 PTY 를 띄우고, 바이트를 옮기고, 훅을 받고, 폴더를 읽는다. 그 이상은 없다(AGENTS.md 원칙 1).
 
@@ -11,7 +11,7 @@ PTY 를 띄우고, 바이트를 옮기고, 훅을 받고, 폴더를 읽는다. �
 - 캔버스(⑪)와 이름(⑫)은 2026-09-08 에 계약에 붙었다. 데몬이 갖는 것은 id·이름·순서와
   세션의 소속뿐이다 — 미니맵도 목록 접기도 "지금 보고 있는 탭" 도 여기 없다(브라우저만의 것).
 
-    python3 server/palmerd.py            # 127.0.0.1:8801. --port 만 받는다. host 옵션은 없다(#29).
+    python3 server/palmard.py            # 127.0.0.1:8801. --port 만 받는다. host 옵션은 없다(#29).
 
 자식 종료 감지는 SIGCHLD → `waitpid(WNOHANG)` 다. kqueue NOTE_EXIT 는 macOS 전용이라 리눅스
 폴백이 따로 필요하고, 0.5초 폴링은 유휴를 먹는다(원칙 6). asyncio 가 시그널을 self-pipe 로
@@ -42,7 +42,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 if sys.version_info < (3, 9):
-    sys.exit("palmerd: 파이썬 3.9 이상이 필요하다 (/usr/bin/python3 가 3.9.6 이다)")
+    sys.exit("palmard: 파이썬 3.9 이상이 필요하다 (/usr/bin/python3 가 3.9.6 이다)")
 
 WS_MAGIC = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -88,11 +88,11 @@ OSC_CARRY_MAX = 512          # 종결자 없는 ESC] 가 계속 와도 carry 가
 
 # ── 경로 ──────────────────────────────────────────────────────────────────────────
 HOME = Path.home().resolve()
-PALMER_DIR = Path.home() / ".palmer"        # shim 의 "$HOME/.palmer" 와 같은 글자여야 한다
-BIN_DIR = PALMER_DIR / "bin"
-ZDOT_DIR = PALMER_DIR / "zsh"      # zsh 래퍼 rc
-BASHRC = PALMER_DIR / "bash" / "bashrc"   # bash 래퍼 rc (--rcfile 로 물린다)      # zsh 를 감싸는 rc. 사용자 rc 뒤에 PATH 를 다시 앞세운다
-RUN_DIR = PALMER_DIR / "run"
+PALMAR_DIR = Path.home() / ".palmar"        # shim 의 "$HOME/.palmar" 와 같은 글자여야 한다
+BIN_DIR = PALMAR_DIR / "bin"
+ZDOT_DIR = PALMAR_DIR / "zsh"      # zsh 래퍼 rc
+BASHRC = PALMAR_DIR / "bash" / "bashrc"   # bash 래퍼 rc (--rcfile 로 물린다)      # zsh 를 감싸는 rc. 사용자 rc 뒤에 PATH 를 다시 앞세운다
+RUN_DIR = PALMAR_DIR / "run"
 TOKEN_FILE = RUN_DIR / "token"
 WEB = (Path(__file__).resolve().parent.parent / "web").resolve()
 
@@ -136,50 +136,50 @@ HOOK_EVENTS = list(HOOK_STATUS)
 
 # protocol.md "shim" 그대로. 데몬이 뜰 때마다 다시 쓴다(0755).
 # 자기 디렉터리를 PATH 에서 뺄 때 고정 문자열로 견주고(정규식 아님) 뒤 슬래시 철자도 함께 뺀다(#12):
-#   옛 `grep -vx "$d"` 는 $d 를 정규식으로 봐서 `.palmer` 의 `.` 가 아무 글자나 맞았고(예: /Xpalmer/bin),
-#   `/.palmer/bin/` 처럼 뒤 슬래시가 붙은 철자는 못 빼 `command -v claude` 가 자기(shim)를 다시 골라 무한 exec 했다.
+#   옛 `grep -vx "$d"` 는 $d 를 정규식으로 봐서 `.palmar` 의 `.` 가 아무 글자나 맞았고(예: /Xpalmar/bin),
+#   `/.palmar/bin/` 처럼 뒤 슬래시가 붙은 철자는 못 빼 `command -v claude` 가 자기(shim)를 다시 골라 무한 exec 했다.
 # ── zsh 래퍼 ────────────────────────────────────────────────────────────────────
 # PATH 를 앞세우는 것만으로는 진다 — 사용자 rc 가 나중에 돌며 자기 것을 다시 앞에 붙인다.
 # ZDOTDIR 을 우리 것으로 바꾸고, 우리 rc 가 사용자 rc 를 부른 **뒤에** PATH 를 다시 앞세운다.
 # 사용자 파일은 읽기만 한다. zsh 는 ZDOTDIR 의 .zshenv → .zprofile → .zshrc → .zlogin 을 본다.
-ZSHENV = """# palmer. 사용자 것을 먼저 부른다.
-[ -r "${PALMER_USER_ZDOTDIR:-$HOME}/.zshenv" ] && . "${PALMER_USER_ZDOTDIR:-$HOME}/.zshenv"
+ZSHENV = """# palmar. 사용자 것을 먼저 부른다.
+[ -r "${PALMAR_USER_ZDOTDIR:-$HOME}/.zshenv" ] && . "${PALMAR_USER_ZDOTDIR:-$HOME}/.zshenv"
 """
 
-ZPROFILE = """# palmer.
-[ -r "${PALMER_USER_ZDOTDIR:-$HOME}/.zprofile" ] && . "${PALMER_USER_ZDOTDIR:-$HOME}/.zprofile"
+ZPROFILE = """# palmar.
+[ -r "${PALMAR_USER_ZDOTDIR:-$HOME}/.zprofile" ] && . "${PALMAR_USER_ZDOTDIR:-$HOME}/.zprofile"
 """
 
-ZLOGIN = """# palmer.
-[ -r "${PALMER_USER_ZDOTDIR:-$HOME}/.zlogin" ] && . "${PALMER_USER_ZDOTDIR:-$HOME}/.zlogin"
+ZLOGIN = """# palmar.
+[ -r "${PALMAR_USER_ZDOTDIR:-$HOME}/.zlogin" ] && . "${PALMAR_USER_ZDOTDIR:-$HOME}/.zlogin"
 """
 
-ZSHRC = """# palmer 가 만든 것. 고치지 마라 — 데몬이 뜰 때마다 다시 쓴다.
+ZSHRC = """# palmar 가 만든 것. 고치지 마라 — 데몬이 뜰 때마다 다시 쓴다.
 # 사용자 rc 를 먼저 부르고, 그 뒤에 shim 을 PATH 앞에 되돌린다.
-[ -r "${PALMER_USER_ZDOTDIR:-$HOME}/.zshrc" ] && . "${PALMER_USER_ZDOTDIR:-$HOME}/.zshrc"
+[ -r "${PALMAR_USER_ZDOTDIR:-$HOME}/.zshrc" ] && . "${PALMAR_USER_ZDOTDIR:-$HOME}/.zshrc"
 case ":$PATH:" in
-  ":$HOME/.palmer/bin:"*) ;;                       # 이미 맨 앞이면 그대로
-  *) PATH="$HOME/.palmer/bin:$PATH"; export PATH ;;
+  ":$HOME/.palmar/bin:"*) ;;                       # 이미 맨 앞이면 그대로
+  *) PATH="$HOME/.palmar/bin:$PATH"; export PATH ;;
 esac
 # 사용자가 rc 안에서 ZDOTDIR 을 자기 홈으로 되돌렸을 수 있다 — 그건 그대로 둔다.
-# 이 파일은 이미 다 돌았고, 다음 셸은 palmer 가 다시 환경을 준다.
+# 이 파일은 이미 다 돌았고, 다음 셸은 palmar 가 다시 환경을 준다.
 """
 
-BASH_RC = """# palmer 가 만든 것. 고치지 마라 — 데몬이 뜰 때마다 다시 쓴다.
+BASH_RC = """# palmar 가 만든 것. 고치지 마라 — 데몬이 뜰 때마다 다시 쓴다.
 # bash 에는 ZDOTDIR 이 없어 --rcfile 로 물린다. 사용자 것을 먼저 부르고 PATH 를 되돌린다.
-if [ -n "$PALMER_USER_BASH_PROFILE" ] && [ -r "$PALMER_USER_BASH_PROFILE" ] && shopt -q login_shell; then
-  . "$PALMER_USER_BASH_PROFILE"
-elif [ -n "$PALMER_USER_BASHRC" ] && [ -r "$PALMER_USER_BASHRC" ]; then
-  . "$PALMER_USER_BASHRC"
+if [ -n "$PALMAR_USER_BASH_PROFILE" ] && [ -r "$PALMAR_USER_BASH_PROFILE" ] && shopt -q login_shell; then
+  . "$PALMAR_USER_BASH_PROFILE"
+elif [ -n "$PALMAR_USER_BASHRC" ] && [ -r "$PALMAR_USER_BASHRC" ]; then
+  . "$PALMAR_USER_BASHRC"
 fi
 case ":$PATH:" in
-  ":$HOME/.palmer/bin:"*) ;;
-  *) PATH="$HOME/.palmer/bin:$PATH"; export PATH ;;
+  ":$HOME/.palmar/bin:"*) ;;
+  *) PATH="$HOME/.palmar/bin:$PATH"; export PATH ;;
 esac
 """
 
 SHIM = """#!/bin/sh
-# palmer shim: attaches hooks to a claude started inside a palmer terminal. Nothing else.
+# palmar shim: attaches hooks to a claude started inside a palmar terminal. Nothing else.
 d=$(cd "$(dirname "$0")" && pwd)
 new=
 IFS=:
@@ -191,18 +191,18 @@ for e in $PATH; do
 done
 unset IFS
 PATH=$new
-real=$(command -v claude) || { echo "palmer: claude not found on PATH" >&2; exit 127; }
-f="$HOME/.palmer/run/$PALMER_PANE.json"
-[ -n "$PALMER_PANE" ] && [ -r "$f" ] && exec "$real" --settings "$f" "$@"
+real=$(command -v claude) || { echo "palmar: claude not found on PATH" >&2; exit 127; }
+f="$HOME/.palmar/run/$PALMAR_PANE.json"
+[ -n "$PALMAR_PANE" ] && [ -r "$f" ] && exec "$real" --settings "$f" "$@"
 exec "$real" "$@"
 """
 
 # web/index.html 이 아직 없을 때 GET / 가 그래도 200 과 토큰을 돌려주도록 하는 자리표.
 # web/ 은 다른 사람이 쓰고 있다 — 여기서 만들지 않는다.
 PLACEHOLDER_INDEX = b"""<!doctype html>
-<html><head><meta charset="utf-8"><title>palmer</title></head>
+<html><head><meta charset="utf-8"><title>palmar</title></head>
 <body style="font-family:system-ui,sans-serif;margin:2rem;max-width:40rem">
-<h1>palmer</h1>
+<h1>palmar</h1>
 <p>The daemon is running, but <code>web/index.html</code> is not there yet.</p>
 <p>The API is up: <code>GET /api/sessions</code>, <code>POST /api/sessions</code>,
 <code>PATCH /api/sessions/&lt;id&gt;</code>, <code>/api/canvases</code>,
@@ -451,18 +451,18 @@ class Session:
         base = os.path.basename(shell)
         argv = [shell]
         if base == "zsh" and (ZDOT_DIR / ".zshrc").exists():
-            env["PALMER_USER_ZDOTDIR"] = env.get("ZDOTDIR") or str(HOME)
+            env["PALMAR_USER_ZDOTDIR"] = env.get("ZDOTDIR") or str(HOME)
             env["ZDOTDIR"] = str(ZDOT_DIR)
         elif base == "bash" and BASHRC.exists():
             # bash 에는 ZDOTDIR 이 없다. --rcfile 이 대화형 셸의 rc 를 갈아끼운다 —
             # 우리 것이 사용자 것을 먼저 부르고 그 뒤에 PATH 를 되돌린다(실측 2026-09-08).
             # 로그인 셸(-l)은 .bash_profile 을 보므로 이 수가 안 먹는다 — 아래 래퍼가 그것도 부른다.
-            env["PALMER_USER_BASHRC"] = str(HOME / ".bashrc")
-            env["PALMER_USER_BASH_PROFILE"] = str(HOME / ".bash_profile")
+            env["PALMAR_USER_BASHRC"] = str(HOME / ".bashrc")
+            env["PALMAR_USER_BASH_PROFILE"] = str(HOME / ".bash_profile")
             argv = [shell, "--rcfile", str(BASHRC)]
-        env["PALMER_PANE"] = self.id
+        env["PALMAR_PANE"] = self.id
         env["TERM"] = "xterm-256color"
-        env["TERM_PROGRAM"] = "palmer"     # tmux 가 TERM_PROGRAM=tmux 를 두는 것과 같은 자리. 띄운 터미널 이름을 덮는다
+        env["TERM_PROGRAM"] = "palmar"     # tmux 가 TERM_PROGRAM=tmux 를 두는 것과 같은 자리. 띄운 터미널 이름을 덮는다
         pid, master = pty.fork()
         if pid == 0:  # 자식 — 여기서 돌아오지 않는다. 예외를 부모 쪽 asyncio 로 흘리면 안 된다.
             try:
@@ -475,7 +475,7 @@ class Session:
             try:
                 os.execvpe(shell, argv, env)
             except OSError:
-                os.write(2, f"palmer: cannot exec {shell}\n".encode())
+                os.write(2, f"palmar: cannot exec {shell}\n".encode())
             os._exit(127)
         return pid, master
 
@@ -1024,7 +1024,7 @@ registry = Registry()
 reaper = Reaper()
 
 
-# ── ~/.palmer 준비 (protocol.md "뜨기") ─────────────────────────────────────────────
+# ── ~/.palmar 준비 (protocol.md "뜨기") ─────────────────────────────────────────────
 def ensure_private_dir(p: Path) -> None:
     """0700 으로 만든다. 이미 있으면 내 것이어야 하고 group/other 쓰기 비트가 없어야 한다(#29).
     심볼릭 링크는 거부한다 — 여기 shim 이 있고 PATH 맨 앞에 온다."""
@@ -1034,11 +1034,11 @@ def ensure_private_dir(p: Path) -> None:
         os.mkdir(p, 0o700)
         st = os.lstat(p)
     if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
-        raise SystemExit(f"palmerd: {p} 는 디렉터리여야 한다 (심볼릭 링크 불가, #29)")
+        raise SystemExit(f"palmard: {p} 는 디렉터리여야 한다 (심볼릭 링크 불가, #29)")
     if st.st_uid != os.getuid():
-        raise SystemExit(f"palmerd: {p} 의 소유자가 내가 아니다 (#29)")
+        raise SystemExit(f"palmard: {p} 의 소유자가 내가 아니다 (#29)")
     if st.st_mode & 0o022:
-        raise SystemExit(f"palmerd: {p} 에 group/other 쓰기 비트가 있다 — chmod 700 뒤 다시 (#29)")
+        raise SystemExit(f"palmard: {p} 에 group/other 쓰기 비트가 있다 — chmod 700 뒤 다시 (#29)")
     if st.st_mode & 0o077:
         os.chmod(p, 0o700)        # 0755 처럼 읽기만 열린 것은 거부 대상이 아니라 조여 준다
 
@@ -1056,14 +1056,14 @@ def write_private(path: Path, data: bytes, mode: int) -> None:
 
 
 def write_pane_settings(sid: str) -> None:
-    """pane 마다 ~/.palmer/run/<id>.json (0600). 여섯 이벤트 전부 같은 http 훅 하나."""
+    """pane 마다 ~/.palmar/run/<id>.json (0600). 여섯 이벤트 전부 같은 http 훅 하나."""
     url = f"http://127.0.0.1:{PORT[0]}/hook/claude?pane={sid}&token={TOKEN[0]}"
     hooks = {ev: [{"hooks": [{"type": "http", "url": url}]}] for ev in HOOK_EVENTS}
     write_private(RUN_DIR / f"{sid}.json", json.dumps({"hooks": hooks}, indent=1).encode() + b"\n", 0o600)
 
 
 def acquire_single_instance_lock() -> None:
-    """~/.palmer/run/lock 에 배타적 flock. 못 잡으면 이미 다른 palmerd 가 이 HOME 을 쓰는 것이다 —
+    """~/.palmar/run/lock 에 배타적 flock. 못 잡으면 이미 다른 palmard 가 이 HOME 을 쓰는 것이다 —
     두 번째가 뜨면 아래에서 token 을 새로 쓰고 run/*.json 을 전부 지워 첫째의 pane 훅이 소리 없이 빠진다(#2,
     AGENTS 원칙 3 '알아채고 알려 준다' 위반). 그래서 락을 잡은 데몬만 그 일을 하고, 못 잡으면 거부한다."""
     fd = os.open(str(RUN_DIR / "lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -1075,16 +1075,16 @@ def acquire_single_instance_lock() -> None:
         except OSError:
             prev = ""
         os.close(fd)
-        raise SystemExit(f"palmerd: 이미 다른 palmerd 가 {PALMER_DIR} 를 쓰고 있다"
+        raise SystemExit(f"palmard: 이미 다른 palmard 가 {PALMAR_DIR} 를 쓰고 있다"
                          f"{' — ' + prev if prev else ''} (데몬은 HOME 당 하나)")
     os.ftruncate(fd, 0)
     os.write(fd, f"pid {os.getpid()} http://127.0.0.1:{PORT[0]}\n".encode())
     LOCK_FH[0] = fd     # 데몬이 사는 동안 열어 둔다 — 닫히면 락이 풀린다
 
 
-def setup_palmer_dir() -> str:
+def setup_palmar_dir() -> str:
     """순서대로. 하나라도 실패하면 뜨지 않는다."""
-    for d in (PALMER_DIR, BIN_DIR, RUN_DIR):
+    for d in (PALMAR_DIR, BIN_DIR, RUN_DIR):
         ensure_private_dir(d)
     acquire_single_instance_lock()   # 락을 잡은 데몬만 token 을 돌리고 *.json 을 지운다 (#2)
     token = secrets.token_urlsafe(32)
@@ -1203,7 +1203,7 @@ def list_dirs(path: Path) -> list[dict]:
     """폴더만, 점으로 시작하는 것은 빼고, 이름순. 이 한 폴더만 읽는다 — 트리를 훑지 않는다.
     이벤트 루프 안에서 동기로 돈다(5000개 폴더에 120~250ms 블로킹, #7). run_in_executor 로 옮기지
     않는 것은 그것이 스레드를 띄우고, 스레드가 있으면 이후 pty.fork 가 교착 위험이기 때문이다
-    (palmerd 는 그래서 단일 스레드다 — 파일 맨 위 주석·AGENTS). 보통 폴더는 문제없고, 사람이 펼칠 때
+    (palmard 는 그래서 단일 스레드다 — 파일 맨 위 주석·AGENTS). 보통 폴더는 문제없고, 사람이 펼칠 때
     한 번 도는 일이라 #7 은 안 고치고 이렇게 남긴다."""
     entries = []
     with os.scandir(path) as it:
@@ -1243,7 +1243,7 @@ def http(status: int, body: bytes = b"", ctype: str = "application/json; charset
     # 여기서 이유 문구로 채운다 — 브라우저가 토스트에 그대로 쓰므로 경로도 내부 사정도 담지 않는다.
     if status >= 400 and not body:
         body = json.dumps({"error": REASONS.get(status, "Error")}).encode()
-    # frame-ancestors 'none' + X-Frame-Options: DENY — 남의 페이지가 palmer UI 를 iframe 으로 감싸
+    # frame-ancestors 'none' + X-Frame-Options: DENY — 남의 페이지가 palmar UI 를 iframe 으로 감싸
     # 클릭재킹/키 입력 유도를 못 하게(#10). HEAD 응답은 헤더만, Content-Length 는 남긴다(#8).
     head = (f"HTTP/1.1 {status} {REASONS.get(status, 'Unknown')}\r\n"
             f"Content-Length: {len(body)}\r\nCache-Control: no-store\r\nConnection: close\r\n"
@@ -1290,7 +1290,7 @@ def serve_static(path: str, head_only: bool = False) -> bytes:
         return http(404, head_only=head_only)
     if suffix == ".html":
         # 토큰은 이 길로만 브라우저에 간다.
-        tag = f'<script>window.PALMER_TOKEN="{TOKEN[0]}"</script>'.encode()
+        tag = f'<script>window.PALMAR_TOKEN="{TOKEN[0]}"</script>'.encode()
         body = body.replace(b"</head>", tag + b"</head>", 1) if b"</head>" in body else tag + body
     ctype = CONTENT_TYPES.get(suffix, "application/octet-stream")
     if ctype.startswith("text/") or ctype.endswith(("json", "javascript", "xml")):
@@ -1729,7 +1729,7 @@ def shutdown() -> None:
 
 async def main(port: int) -> None:
     PORT[0] = port
-    TOKEN[0] = setup_palmer_dir()
+    TOKEN[0] = setup_palmar_dir()
     registry.new_canvas()      # 캔버스가 없는 순간은 없다 — 이름 없는 것 하나로 뜬다 (⑪)
     loop = asyncio.get_running_loop()
     reaper.install(loop)
@@ -1737,11 +1737,11 @@ async def main(port: int) -> None:
         # 127.0.0.1 밖으로 열지 않는다 — host 를 바꾸는 옵션을 두지 않는 것이 규칙이다(#29).
         server = await asyncio.start_server(handle, "127.0.0.1", port)
     except OSError as e:
-        raise SystemExit(f"palmerd: 127.0.0.1:{port} 에 묶지 못했다 — {e.strerror or e}")
+        raise SystemExit(f"palmard: 127.0.0.1:{port} 에 묶지 못했다 — {e.strerror or e}")
     stop = loop.create_future()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda: stop.done() or stop.set_result(None))
-    log(f"palmerd pid {os.getpid()}  shell={os.environ.get('SHELL') or '/bin/sh'}  web={WEB}"
+    log(f"palmard pid {os.getpid()}  shell={os.environ.get('SHELL') or '/bin/sh'}  web={WEB}"
         f"{'' if (WEB / 'index.html').is_file() else ' (index.html 없음 — 자리표를 낸다)'}")
     print(f"http://127.0.0.1:{port}", flush=True)   # 마지막 줄 — 사용자는 이것만 보고 시작한다
     await stop
@@ -1755,7 +1755,7 @@ async def main(port: int) -> None:
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="palmer 데몬. 127.0.0.1 에만 묶인다.")
+    ap = argparse.ArgumentParser(description="palmar 데몬. 127.0.0.1 에만 묶인다.")
     ap.add_argument("--port", type=int, default=8801)
     args = ap.parse_args()
     asyncio.run(main(args.port))

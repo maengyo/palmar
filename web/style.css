@@ -1,6 +1,6 @@
-/* palmer — 화면 스타일.
+/* palmar — 화면 스타일.
  *
- * 정본은 디자인 목업(대화 아티팩트 "palmer", decisions.md "디자인" 절)이다. 토큰·레이아웃·컴포넌트는
+ * 정본은 디자인 목업(대화 아티팩트 "palmar", decisions.md "디자인" 절)이다. 토큰·레이아웃·컴포넌트는
  * 거기서 그대로 옮겼다. 덧붙인 것은 아래 "xterm 호스팅" 과 "동작용" 절만이다.
  *
  * 임시(⑥ 미정): --st-work / --st-wait / --st-done / --st-idle 은 상태 색이다. JS 는 status 문자열을

@@ -92,7 +92,7 @@ class PaneWin {
     // 명령은 안 보낸다 — 데몬이 $SHELL 을 박아 쓴다(#29). 토큰은 서버가 이 페이지에 심어 준다.
     const q = new URLSearchParams({
       cols: String(this.term.cols), rows: String(this.term.rows),
-      token: window.PALMER_TOKEN || "",
+      token: window.PALMAR_TOKEN || "",
     });
     this.ws = new WebSocket(`ws://${location.host}/pty?${q}`);
     this.ws.binaryType = "arraybuffer";
@@ -294,7 +294,7 @@ if (scenario.length || P.has("panes")) {
       if (secs) setTimeout(() => {
         const now = performance.now();
         const bps = bytesWindow.filter(([t]) => now - t < 1000).reduce((a, [, n]) => a + n, 0);
-        fetch("/report?token=" + encodeURIComponent(window.PALMER_TOKEN || ""), { method: "POST", body: JSON.stringify({
+        fetch("/report?token=" + encodeURIComponent(window.PALMAR_TOKEN || ""), { method: "POST", body: JSON.stringify({
           label, panes: panes.length, gl: glCount,
           fps: pct(frames, 0.5) ? 1000 / pct(frames, 0.5) : null,
           f50: pct(frames, 0.5), f95: pct(frames, 0.95),

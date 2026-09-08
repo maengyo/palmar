@@ -18,7 +18,7 @@ print("=== E1 revision semantics ===")
 r0=rev(); one("pane.send_text",{"pane_id":PANE,"text":"echo rev-probe-1\n"}); time.sleep(0.3); r1=rev()
 _,rd=one("pane.read",{"pane_id":PANE,"source":"visible","format":"ansi","lines":5}); rr=rd["result"]["read"]["revision"]; time.sleep(0.1); r2=rev()
 one("pane.send_text",{"pane_id":PANE,"text":"seq 1 500\n"}); time.sleep(0.5); r3=rev()
-one("pane.report_metadata",{"pane_id":PANE,"source":"palmer","tokens":{"palmer_x":"121"}}); time.sleep(0.1); r4=rev()
+one("pane.report_metadata",{"pane_id":PANE,"source":"palmar","tokens":{"palmar_x":"121"}}); time.sleep(0.1); r4=rev()
 print(f"  before={r0}  after echo={r1}  pane.read.revision={rr}  after read={r2}  after seq 500={r3}  after report_metadata={r4}")
 print(f"  read text tail: {rd['result']['read']['text'][-160:]!r}  truncated={rd['result']['read']['truncated']}")
 
