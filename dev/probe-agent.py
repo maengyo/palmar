@@ -67,6 +67,14 @@ def main() -> int:
     ioctl(master, termios.TIOCSWINSZ, winsize(sys.stdin.fileno()))
     signal.signal(signal.SIGWINCH,
                   lambda *_: ioctl(master, termios.TIOCSWINSZ, winsize(sys.stdin.fileno())))
+    # 죽이라는 신호에도 **보고는 하고 나간다.** 안 그러면 25초 재 놓고 kill 한 사람은 아무것도 못 본다.
+    def _bail(*_):
+        raise KeyboardInterrupt
+    for _sig in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(_sig, _bail)
+        except (OSError, ValueError):
+            pass
 
     t0 = time.monotonic()
     titles: list[tuple[float, str]] = []      # (시각, 제목) — 값이 실제로 바뀐 것만

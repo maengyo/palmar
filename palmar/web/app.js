@@ -384,11 +384,13 @@ class Tile {
     tb.append(this.dotEl, this.nameEl, this.pillEl, this.szEl, this.rnEl, this.xpEl, this.clEl);
     // #25 판마다 글자 크기. Ctrl/⌘+휠은 브라우저 확대이기도 하므로 반드시 막는다 — 안 막으면
     // 창 하나를 키우려다 페이지 전체가 커진다. 그냥 휠은 그대로 두어 xterm 의 스크롤백이 산다.
+    // **캡처 단계로 받는다.** 버블로 받으면 xterm 의 스크롤백 처리기가 자식에서 먼저 먹어,
+    // 스크롤이 맨 위나 맨 아래에 닿았을 때만 여기까지 온다(사용자 보고 2026-09-08).
     e.addEventListener('wheel', (ev) => {
       if (!ev.ctrlKey && !ev.metaKey) return;
       ev.preventDefault(); ev.stopPropagation();
       this.setFont((this.term.options.fontSize || FONT_PX) + (ev.deltaY < 0 ? FONT_STEP : -FONT_STEP));
-    }, { passive: false });
+    }, { passive: false, capture: true });
     // 크기 표시가 곧 되돌리기 단추다 — 제목 줄에 단추를 하나 더 붙이지 않으려고 이미 있는 것에 얹는다.
     this.szEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.setFont(FONT_PX); });
     this.termEl = el('div', 'term');
