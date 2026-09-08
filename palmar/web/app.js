@@ -2214,7 +2214,35 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   cvGroups: () => cvCollapsed, closing: () => [...closing],
                   // 화면에서는 지울 수 있을 때만 손잡이가 나오므로, 거절당하는 길(#18 의 409)은
                   // 콘솔에서만 태워 볼 수 있다. 데몬이 어차피 막으므로 여기 두는 것이 위험을 늘리지 않는다.
-                  removeCanvas };
+                  removeCanvas, watchInput };
+
+// 콘솔에서 `palmar.watchInput()`. **진짜 IME 는 헤드리스로 못 잰다** — CDP 의 조합 흉내는 통과하는데
+// 실제 기계에서 안 된다는 보고가 있어, 그 기계에서 무엇이 오는지 직접 찍게 한다.
+// 어디서 끊기는지 한 번에 갈린다: composition 이 아예 안 오나 · 와도 data 가 안 나가나 · 나가는데 안 보이나.
+function watchInput(secs) {
+  const t = tiles.get(focused) || [...tiles.values()][0];
+  if (!t) { console.log('palmar: 열린 터미널이 없다'); return; }
+  const ta = t.el.querySelector('textarea');
+  const log = [];
+  const at = () => ((performance.now() / 1000).toFixed(2) + 's');
+  const say = (...a) => { log.push(a.join(' ')); console.log('palmar:', ...a); };
+  say('보는 중 —', secs || 20, '초. 지금 한글을 쳐 보라.');
+  say('  터미널:', t.s.name || t.s.cwd, '· textarea:', !!ta, '· 포커스:',
+      document.activeElement === ta ? '이 판' : (document.activeElement || {}).tagName);
+  const off = [];
+  for (const type of ['compositionstart', 'compositionupdate', 'compositionend', 'beforeinput', 'input']) {
+    const h = (e) => say(at(), type, JSON.stringify(e.data !== undefined ? e.data : (e.target && e.target.value)));
+    if (ta) { ta.addEventListener(type, h); off.push(() => ta.removeEventListener(type, h)); }
+  }
+  const kh = (e) => say(at(), 'keydown', JSON.stringify(e.key), 'code=' + e.code, 'isComposing=' + e.isComposing);
+  if (ta) { ta.addEventListener('keydown', kh); off.push(() => ta.removeEventListener('keydown', kh)); }
+  const d = t.term.onData((x) => say(at(), '→ 데몬으로', JSON.stringify(x)));
+  setTimeout(() => {
+    off.forEach((f) => f()); d.dispose();
+    say('끝. 아래를 통째로 복사해 보내라.');
+    console.log('%c' + log.join('\n'), 'font-family:monospace');
+  }, (secs || 20) * 1000);
+}
 
 // ── 시작 ────────────────────────────────────────────────
 function boot() {
