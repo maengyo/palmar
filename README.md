@@ -133,7 +133,7 @@ takes you to that terminal.
 | Browser | Vanilla JavaScript, no framework, no build step. xterm.js draws the terminals. |
 | Runs on | macOS, Linux, and WSL (run the daemon inside WSL, browse from Windows). |
 | Network | **Nothing goes out.** The daemon has no HTTP client and the page loads nothing from anywhere — no CDN, no font host, no telemetry. It binds `127.0.0.1` to serve the page and that is the only socket it opens. |
-| Security | A token in a `0600` file, plus `Origin` and `Host` checks, on every request that changes anything. |
+| Security | A token in a `0600` file, plus `Origin` and `Host` checks, on every API request — reads included. Each terminal's pty is closed to every other terminal. |
 
 ## What is not built yet
 

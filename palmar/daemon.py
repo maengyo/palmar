@@ -1814,6 +1814,16 @@ async def handle_request(reader, writer) -> None:
         writer.write(http(200, b"{}"))
         return
 
+    # ── 읽기에도 토큰이 있어야 한다 ──
+    # 여기까지 `/api/` 의 GET 은 무사통과였다. `Origin`·`Host` 검사는 헤더가 **없으면** 통과시키므로
+    # (브라우저가 아닌 것을 막을 수 없다 — 그러라고 있는 검사가 아니다) 같은 기계의 아무 프로세스나
+    # `curl http://127.0.0.1:8801/api/sessions` 로 모든 판의 경로를 읽고, `/api/dirs` 로 홈 디렉터리를
+    # 훑을 수 있었다(2026-09-09 실측). 브라우저는 토큰을 이미 들고 있으니 붙이면 그만이다.
+    # 본문을 다 읽은 **뒤에** 막는다 — 안 읽고 끊으면 연결을 이어 쓰는 쪽에서 다음 요청이 밀린다.
+    if path.startswith("/api/") and not token_ok:
+        writer.write(http(403))
+        return
+
     if path == "/api/sessions":
         if method == "GET":
             writer.write(http_json(200, [s.to_json() for s in registry.list()]))

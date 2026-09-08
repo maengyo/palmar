@@ -425,6 +425,12 @@ async def handle(reader, writer):
         return
 
     # ── API ──
+    # 읽기도 토큰이 있어야 한다 — 제품과 같은 규칙이다(protocol.md "인증"). 스텁이 더 헐거우면
+    # 여기서만 되는 화면을 만들게 된다(예전에 Host 검사가 그렇게 갈렸다 — roadmap P2).
+    if path.startswith("/api/") and not has_token():
+        respond(writer, 403, jbody({"error": "bad token"}))
+        await finish()
+        return
     if path == "/api/sessions" and method == "GET":
         respond(writer, 200, jbody([s.json() for s in SESSIONS.values()]))
     elif path == "/api/sessions" and method == "POST":

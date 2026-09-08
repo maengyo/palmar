@@ -362,7 +362,7 @@ function shortPath(p) {
 // ── HTTP ────────────────────────────────────────────────
 async function api(method, path, body) {
   const url = new URL(path, location.origin);
-  if (method !== 'GET') url.searchParams.set('token', TOKEN);   // 상태를 바꾸는 요청만 토큰 (protocol.md "인증")
+  url.searchParams.set('token', TOKEN);   // **읽기도 포함해서 전부** (protocol.md "인증")
   const init = { method };
   if (body !== undefined) { init.headers = { 'content-type': 'application/json' }; init.body = JSON.stringify(body); }
   const r = await fetch(url, init);

@@ -40,7 +40,11 @@ python3 -m palmar            # 127.0.0.1:8801. --port 만 받는다. host 옵션
 - **모든 HTTP 응답에 `X-Frame-Options: DENY` 와 `Content-Security-Policy: frame-ancestors 'none'` 를 붙인다.**
   남의 페이지가 palmar UI 를 iframe 으로 감싸 클릭재킹(한 번 눌러 터미널에 포커스 → 키 입력을 남의 셸로)을
   못 하게 막는다(#10, 2026-09-08 추가).
-- **웹소켓 업그레이드와 상태를 바꾸는 요청(POST·PATCH·DELETE)은 `?token=` 이 맞아야 한다.** `hmac.compare_digest`. 아니면 `403`.
+- **`/api/` 로 가는 모든 요청과 웹소켓 업그레이드는 `?token=` 이 맞아야 한다 — 읽기도 포함해서.**
+  `hmac.compare_digest`. 아니면 `403`. 2026-09-09 에 읽기까지 넓혔다: 그전까지 `GET /api/*` 는
+  무사통과였는데, 위 `Origin`·`Host` 검사는 헤더가 **없으면** 통과시키므로(브라우저가 아닌 것을
+  막으라고 있는 검사가 아니다) 같은 기계의 아무 프로세스나 `curl` 한 번으로 모든 판의 경로를 읽고
+  (`/api/sessions`) 홈 디렉터리를 훑을 수 있었다(`/api/dirs`) — 실측으로 확인했다.
   **캔버스 만들기·이름 바꾸기·순서 바꾸기·지우기와 세션 이름 바꾸기·캔버스 옮기기도 여기에 든다**
   (2026-09-08 에 `PATCH` 가 들어오면서 이 줄에 붙었다). Origin·Host 검사도 똑같이 받는다.
   **새 경로에 예외를 두지 않는다.**
@@ -61,17 +65,17 @@ python3 -m palmar            # 127.0.0.1:8801. --port 만 받는다. host 옵션
 | 메서드 | 경로 | 몸 | 답 |
 |---|---|---|---|
 | `GET` | `/` `/index.html` `/app.js` … | | `web/` 의 파일. 모르는 확장자는 `application/octet-stream` |
-| `GET` | `/api/sessions` | | `[Session]` (만든 순서). **캔버스로 거르지 않는다** — 왼쪽 목록이 전부를 보기 때문이다(⑪) |
+| `GET` | `/api/sessions?token=` | | `[Session]` (만든 순서). **캔버스로 거르지 않는다** — 왼쪽 목록이 전부를 보기 때문이다(⑪) |
 | `POST` | `/api/sessions?token=` | `{"cwd": "/abs/path", "canvas": "<id>", "name": "…"}` · `cwd` 없으면 홈 · `canvas` 가 없거나 `null` 이면 `order` 가 가장 앞인 캔버스 · `name` 없으면 이름 없음 | `Session` (201) · cwd 가 뿌리 밖이면 `400` · 모르는 `canvas` 면 `400` · 이름이 규칙에 안 맞으면 `400`. 세션은 80×24 로 태어나 첫 attach·resize 에서 크기가 잡힌다 |
 | `PATCH` | `/api/sessions/<id>?token=` | `{"name": …}` · `{"canvas": "<id>"}` · 둘 다. **몸에 있는 키만 바꾼다** (`name` 은 문자열 또는 `null`, `canvas` 는 문자열만) | `Session` (200 — 아무 키도 없는 `{}` 도 200, 그대로 돌려준다) · 세션이 없으면 `404` · 모르는 `canvas` 면 `400`(경로의 세션은 있으니 `404` 가 아니다) · **`{"canvas": null}` 도 `400`** — 소속은 비울 수 없다(`Session.canvas` 는 `null` 이 아니다) · 몸이 객체가 아니면 `400` |
 | `DELETE` | `/api/sessions/<id>?token=` | | `204` · 없으면 `404`. SIGHUP → 2초 뒤 살아 있으면 SIGKILL |
-| `GET` | `/api/canvases` | | `[Canvas]` (`order` 순) |
+| `GET` | `/api/canvases?token=` | | `[Canvas]` (`order` 순) |
 | `POST` | `/api/canvases?token=` | `{"name": "…"}` · 없으면 이름 없음 | `Canvas` (201). **끝에 붙는다** — 있던 캔버스의 `order` 는 안 바뀐다 · 이름이 규칙에 안 맞으면 `400` |
 | `POST` | `/api/canvases/order?token=` | `{"order": ["<id>", …]}` — **지금 있는 전부를 새 순서로** | `[Canvas]` (200, `order` 순) · 배열이 아니거나 원소가 문자열이 아니면 `400` · 지금 집합과 다르면(빠짐·더함·중복) `409` |
 | `PATCH` | `/api/canvases/<id>?token=` | `{"name": …}` (문자열 또는 `null`) | `Canvas` (200) · 없으면 `404` · 이름이 규칙에 안 맞으면 `400` |
 | `DELETE` | `/api/canvases/<id>?token=` | | `204` · 없으면 `404` · **세션이 하나라도 있으면 `409`** · **마지막 하나면 `409`** (아래 "캔버스") |
-| `GET` | `/api/dirs?path=` | | `Dirs` · `path` 없으면 뿌리 목록(아래 모양) · 뿌리 밖이면 `400` |
-| `GET` | `/api/dirs?find=` | | `{"find": "…", "entries": [DirEntry]}` — 뿌리 아래 폴더 찾기(아래 "폴더 찾기") |
+| `GET` | `/api/dirs?path=&token=` | | `Dirs` · `path` 없으면 뿌리 목록(아래 모양) · 뿌리 밖이면 `400` |
+| `GET` | `/api/dirs?find=&token=` | | `{"find": "…", "entries": [DirEntry]}` — 뿌리 아래 폴더 찾기(아래 "폴더 찾기") |
 | `POST` | `/api/dirs?token=` | `{"path": "/abs/parent", "name": "new"}` | `201 {"path": "/abs/parent/new"}` · 이미 있으면 `409` · `name` 이 한 조각이 아니면(`/`·`.`·`..`·빈 것) `400`. **만들기만 있다** — 지우기·이름 바꾸기 없음 |
 | `POST` | `/hook/claude?pane=<id>&token=` | Claude Code 훅 JSON | `200 {}` — **항상.** 모르는 pane·틀린 토큰도 200 (무시할 뿐이다 — 훅은 0 으로 끝나야 한다) |
 
@@ -370,11 +374,18 @@ xterm.js 는 **UTF-8 전용**이다. 판의 셸이 UTF-8 로케일을 안 갖고
 바로 깨지고, 그러면 훅으로 되돌아간 것과 같다. 대신 **제목이 계속 바뀌는 것만** 본다: 스피너는 정의상
 계속 바뀐다.
 
-- `TITLE_WINDOW_S` (3초) 안에 제목이 `TITLE_BUSY_N` (2) 번 이상 바뀌었으면 → `working`
+- `TITLE_WINDOW_S` (3초) 안에 제목이 `TITLE_BUSY_N` (2) 번 이상 바뀌고, **그 바뀜이
+  `TITLE_MIN_S` (0.5초) 이상에 걸쳐 있으면** → `working`
 - **돌다가** 멎으면 → `done`. 돌지도 않았으면 `idle` 그대로다 — 가만히 떠 있는 TUI(`vim` 같은)를
   "끝났다" 로 만들면 신호등이 늘 켜져 있게 된다.
 - 두 번을 요구하는 것은 한 번짜리 제목 바꾸기를 거르기 위해서다. Claude Code 는 턴이 시작될 때
   제목을 그 턴의 말로 바꾼다.
+- **걸친 시간까지 보는 것은 횟수만으로는 셸과 스피너가 구별되지 않기 때문이다.** 제목을 명령마다
+  갈아 끼우는 셸(oh-my-zsh·p10k 의 preexec/precmd, WSL 의 맨 bash)은 명령 하나에 제목을 두세 번
+  바꾸는데 그것이 **9ms 안에** 끝난다. 2026-09-09 실측: 그런 셸에서 판을 열어 두기만 해도 12초
+  내내 `done` 이었고 — 화면에서는 "나를 부른다" 다 — `title_spun` 이 걸려 아래 되돌림 층까지
+  영영 꺼졌다. 고친 뒤 같은 셸에서 가만히 둔 판도 `ls` 한 뒤에도 `idle`,
+  스피너(초당 1회·12회 둘 다)는 그대로 `working` → 멎으면 `done`.
 - 이 길로는 **`waiting` 이 나오지 않는다.** 제목만으로는 "승인을 기다림" 과 "턴이 끝남" 이 같아 보인다.
   둘 다 사람을 부르는 상태이므로 `done` 으로 모은다 — 브라우저는 `waiting` 과 `done` 을 똑같이
   "나를 부른다" 로 다룬다.
