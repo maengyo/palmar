@@ -219,6 +219,19 @@ kbd {
   display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: start;
 }
 .keys-act span { color: var(--ink-3); font-size: 10.5px; line-height: 1.45; }
+.diagbox {
+  position: absolute; top: 60px; left: 50%; transform: translateX(-50%); z-index: 95;
+  width: min(720px, calc(100vw - 40px)); background: var(--float);
+  border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--shadow);
+  backdrop-filter: blur(8px); padding: 10px 14px 12px; font-size: 11.5px; color: var(--ink-2);
+}
+.diag-hint { padding-bottom: 8px; color: var(--ink-3); }
+.diag-out {
+  width: 100%; height: 260px; resize: vertical; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--search); color: var(--ink);
+  font: 11px/1.5 var(--mono); padding: 8px; white-space: pre; overflow: auto;
+}
+.diagbox .keys-act { margin-top: 8px; padding-top: 8px; }
 .keys-sw { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--ink-2); white-space: nowrap; }
 .keys-sw input { accent-color: var(--accent); margin: 0; }
 .keys .ex {

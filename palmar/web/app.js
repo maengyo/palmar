@@ -2242,6 +2242,45 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
 // 콘솔에서 `palmar.watchInput()`. **진짜 IME 는 헤드리스로 못 잰다** — CDP 의 조합 흉내는 통과하는데
 // 실제 기계에서 안 된다는 보고가 있어, 그 기계에서 무엇이 오는지 직접 찍게 한다.
 // 어디서 끊기는지 한 번에 갈린다: composition 이 아예 안 오나 · 와도 data 가 안 나가나 · 나가는데 안 보이나.
+// 화면에서 바로 하는 입력 진단. **개발자 도구를 열 필요가 없다** — 콘솔로 안내했더니 그 자체가
+// 벽이었다(2026-09-09). 브라우저가 치는 동안 무엇을 내는지 그대로 적어 화면에 띄운다.
+function recordTyping(secs) {
+  const box = document.getElementById('diagbox');
+  const out = document.getElementById('diag-out');
+  const hint = document.getElementById('diag-hint');
+  const t = tiles.get(focused) || [...tiles.values()].find((x) => x.visible());
+  if (!box || !t) { toast(['open a terminal first']); return; }
+  const ta = t.termEl.querySelector('textarea');
+  const L = [];
+  const t0 = performance.now();
+  const at = () => ((performance.now() - t0) / 1000).toFixed(2).padStart(6) + 's';
+  const put = (...a) => L.push(at() + '  ' + a.join(' '));
+  put('browser', navigator.userAgent);
+  put('terminal', t.s.name || t.s.cwd, '· textarea', !!ta);
+  const off = [];
+  const on = (el, type, fn) => { el.addEventListener(type, fn); off.push(() => el.removeEventListener(type, fn)); };
+  if (ta) {
+    on(ta, 'keydown', (e) => put('keydown  ', 'key=' + JSON.stringify(e.key),
+        'code=' + e.code, 'keyCode=' + e.keyCode, 'isComposing=' + e.isComposing));
+    for (const type of ['compositionstart', 'compositionupdate', 'compositionend'])
+      on(ta, type, (e) => put(type.padEnd(9), 'data=' + JSON.stringify(e.data)));
+    on(ta, 'input', (e) => put('input    ', 'data=' + JSON.stringify(e.data),
+        'type=' + e.inputType, 'value=' + JSON.stringify(e.target.value)));
+  }
+  const d = t.term.onData((x) => put('→ 데몬   ', JSON.stringify(x)));
+  box.hidden = false;
+  out.value = '';
+  hint.textContent = 'recording — click the terminal and type 안녕하십니까 …';
+  const tick = setInterval(() => { out.value = L.join('\n'); out.scrollTop = out.scrollHeight; }, 400);
+  setTimeout(() => {
+    clearInterval(tick); off.forEach((f) => f()); d.dispose();
+    out.value = L.join('\n');
+    hint.textContent = 'done — press Copy and paste it back.';
+    // 진단을 켜면 사람은 곧바로 터미널을 눌러야 한다. 판 위로 포커스를 옮겨 준다.
+  }, (secs || 15) * 1000);
+  setTimeout(() => { if (t.term) t.term.focus(); }, 60);
+}
+
 function watchInput(secs) {
   const t = tiles.get(focused) || [...tiles.values()][0];
   if (!t) { console.log('palmar: 열린 터미널이 없다'); return; }
@@ -2299,6 +2338,18 @@ function boot() {
     keysEl.addEventListener('click', (e) => e.stopPropagation());
     addEventListener('click', () => { if (!keysEl.hidden) showKeys(false); });
     addEventListener('keydown', (e) => { if (e.key === 'Escape' && !keysEl.hidden) showKeys(false); });
+    const dg = document.getElementById('diag');
+    if (dg) dg.addEventListener('click', () => { showKeys(false); recordTyping(15); });
+    const dgx = document.getElementById('diag-x');
+    if (dgx) dgx.addEventListener('click', () => { document.getElementById('diagbox').hidden = true; });
+    const dgc = document.getElementById('diag-copy');
+    if (dgc) dgc.addEventListener('click', async () => {
+      const box = document.getElementById('diag-out');
+      box.select();
+      const okc = await clipWrite(box.value);
+      dgc.textContent = okc ? 'Copied' : 'Copy';
+      setTimeout(() => { dgc.textContent = 'Copy'; }, 1600);
+    });
     const sw = document.getElementById('autotidy');
     if (sw) {
       sw.checked = autoTidy;

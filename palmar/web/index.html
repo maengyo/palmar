@@ -63,6 +63,15 @@
     </div>
   </div>
 
+  <!-- 입력 진단 결과. 개발자 도구 없이 복사할 수 있게 화면에 띄운다. -->
+  <div class="diagbox" id="diagbox" hidden role="dialog" aria-label="typing report">
+    <div class="keys-h">Typing report <button class="keys-x" id="diag-x" type="button" aria-label="close">×</button></div>
+    <div class="diag-hint" id="diag-hint"></div>
+    <textarea class="diag-out" id="diag-out" readonly spellcheck="false"></textarea>
+    <div class="keys-act"><button class="keys-btn" id="diag-copy" type="button">Copy</button>
+      <span>paste this back — it says exactly what your browser sends while typing.</span></div>
+  </div>
+
   <!-- 단축키. 열려 있을 때만 뜬다. -->
   <div class="keys" id="keys" hidden role="dialog" aria-modal="false" aria-label="keyboard shortcuts">
     <div class="keys-h">Keyboard <button class="keys-x" id="keys-x" type="button" aria-label="close">×</button></div>
@@ -80,6 +89,9 @@
       <dt><kbd>Ctrl</kbd><kbd>−</kbd> <kbd>Ctrl</kbd><kbd>+</kbd></dt><dd>the browser's own zoom — every terminal at once</dd>
     </dl>
     <div class="keys-act">
+      <button class="keys-btn" id="diag" type="button">Record typing (15s)</button>
+      <span>if typing behaves oddly — Korean, Japanese, Chinese — press this, type into a
+            terminal for fifteen seconds, and a report appears that you can copy.</span>
       <label class="keys-sw"><input type="checkbox" id="autotidy"> Tidy automatically</label>
       <span>when a terminal closes, pull the rest back to the corner on their own.
             Off by default: it moves windows you can see, and a window should not
