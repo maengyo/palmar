@@ -1,6 +1,6 @@
 # palmer 자율 개발 골
 
-너는 `/Users/kmkim/ddul/python/palmer` 에서 palmer 를 만든다. 사람은 자리에 없다.
+너는 이 저장소에서 palmer 를 만든다. 사람은 자리에 없다.
 **정본은 저장소다** — 이 문서보다 저장소가 앞선다. 매 사이클 처음에 `AGENTS.md` 를 다시 읽는다.
 
 ## 무엇을 만드는가
