@@ -35,6 +35,7 @@ import secrets
 import signal
 import stat
 import struct
+import subprocess
 import sys
 import termios
 import time
@@ -159,6 +160,49 @@ LOCK_FH = [None]     # 단일 인스턴스 락 fd — 데몬이 사는 동안 �
 
 #: 스파이크 D 의 크기 상한.
 MAX_COLS, MAX_ROWS = 500, 200
+
+#: 판의 로케일 안전망. xterm.js 는 UTF-8 전용인데, 판의 셸에 UTF-8 로케일이 없으면 셸이 멀티바이트
+#: 입력을 깨뜨린다 — 실측(2026-09-08, `/bin/zsh -f -i`, LANG 을 지우고 "한글" 을 넣어 보고):
+#:   LANG=en_US.UTF-8 → `$ 한글`  ·  LANG 없음/LANG=C → `$ ?\x08?<0095><009c>?<0080>`
+#:
+#: **대부분은 이미 파이썬이 막고 있다.** CPython 은 C/POSIX 로케일로 뜨면 PEP 538 에 따라
+#: `LC_CTYPE=C.UTF-8` 을 **환경변수에** 세우고, 자식이 그것을 물려받는다(실측: `env -i` 로 띄운
+#: 판도 `charmap=UTF-8` 이었다 — 이 코드가 없던 때도 그랬다).
+#: **남는 구멍은 하나다: C 도 UTF-8 도 아닌 로케일.** 그때는 코어션이 안 걸린다
+#: (실측: `LANG=ko_KR.eucKR` → 판의 `charmap: eucKR`). 이 몇 줄은 그 경우만 받아 낸다.
+#:
+#: **사용자가 정한 것은 절대 안 덮는다** — 이미 UTF-8 을 말하고 있으면 손대지 않고, 없을 때만
+#: `LC_CTYPE` 하나를 둔다(언어·숫자·날짜 형식은 사용자 것이지 우리 것이 아니다).
+LOCALE_PREF = ("C.UTF-8", "en_US.UTF-8", "en_GB.UTF-8")
+UTF8_CTYPE = [None]     # 뜰 때 한 번 고른다 — 이 기계에 실제로 있는 것으로
+
+
+def pick_utf8_locale() -> str:
+    """이 기계에 **있는** UTF-8 로케일 하나. `locale -a` 는 5ms 라 뜰 때 한 번이면 싸다(실측)."""
+    have = set()
+    try:
+        r = subprocess.run(["locale", "-a"], capture_output=True, text=True, timeout=5)
+        have = {l.strip() for l in r.stdout.splitlines() if l.strip()}
+    except Exception:
+        pass
+    low = {h.lower(): h for h in have}
+    for want in LOCALE_PREF:
+        if want.lower() in low:
+            return low[want.lower()]
+    for h in sorted(have):                       # 아무 UTF-8 이라도
+        if h.lower().endswith((".utf-8", ".utf8")):
+            return h
+    # `locale` 이 없거나 아무것도 못 읽었을 때. macOS 는 `LC_CTYPE=UTF-8` 을 그대로 받는다.
+    return "UTF-8" if sys.platform == "darwin" else "C.UTF-8"
+
+
+def has_utf8(env: dict) -> bool:
+    """이 환경이 이미 UTF-8 을 말하고 있나. 우선순위는 POSIX 그대로 LC_ALL > LC_CTYPE > LANG."""
+    for k in ("LC_ALL", "LC_CTYPE", "LANG"):
+        v = env.get(k)
+        if v:
+            return v.lower().endswith((".utf-8", ".utf8")) or v.upper() == "UTF-8"
+    return False
 
 #: 자식 셸에 물려주지 않는 환경변수 접두. Claude Code 안에서 데몬을 띄우면 자식 claude 가
 #: 이걸 물려받아 중첩 세션으로 뜬다(실측, AGENTS.md "검증").
@@ -534,6 +578,9 @@ class Session:
             argv = [shell, "--rcfile", str(BASHRC)]
         env["PALMAR_PANE"] = self.id
         env["TERM"] = "xterm-256color"
+        # 판은 UTF-8 이어야 한다(xterm.js 가 UTF-8 전용이다). **없을 때만** 둔다 — 있으면 그 사람 것이다.
+        if not has_utf8(env):
+            env["LC_CTYPE"] = UTF8_CTYPE[0] or "UTF-8"
         env["TERM_PROGRAM"] = "palmar"     # tmux 가 TERM_PROGRAM=tmux 를 두는 것과 같은 자리. 띄운 터미널 이름을 덮는다
         pid, master = pty.fork()
         if pid == 0:  # 자식 — 여기서 돌아오지 않는다. 예외를 부모 쪽 asyncio 로 흘리면 안 된다.
@@ -2006,6 +2053,7 @@ def shutdown() -> None:
 
 async def main(port: int) -> None:
     PORT[0] = port
+    UTF8_CTYPE[0] = pick_utf8_locale()
     TOKEN[0] = setup_palmar_dir()
     registry.new_canvas()      # 캔버스가 없는 순간은 없다 — 이름 없는 것 하나로 뜬다 (⑪)
     loop = asyncio.get_running_loop()
@@ -2066,6 +2114,11 @@ def doctor(port: int) -> int:
     out("  platform  %s" % platform.platform())
     out("  $SHELL    %s%s" % (os.environ.get("SHELL") or "(없음)",
                               "   ← 없으면 /bin/sh 로 떨어진다" if not os.environ.get("SHELL") else ""))
+    # 판의 글자 인코딩. UTF-8 이 아니면 한글·일본어·중국어 입력이 깨진다 — 화면에서는 "안 쳐진다" 로 보인다.
+    loc = " ".join("%s=%s" % (k, os.environ[k]) for k in ("LC_ALL", "LC_CTYPE", "LANG") if os.environ.get(k))
+    utf8 = has_utf8(os.environ)
+    out("  locale    %s%s" % (loc or "(없음)", "" if utf8 else "   ← UTF-8 이 아니다"))
+    out("  판에 줄 것 %s" % ("그대로" if utf8 else "LC_CTYPE=" + (UTF8_CTYPE[0] or pick_utf8_locale())))
     out("  홈        %s" % PALMAR_DIR)
     out("")
 
