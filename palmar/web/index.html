@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>palmar</title>
 <link rel="icon" href="data:,">   <!-- 브라우저의 /favicon.ico 자동 요청(404)을 막는다 -->
+<!-- 주소에 열쇠가 실려 있다(#14). 지금은 바깥을 부르는 것이 하나도 없어 샐 자리가 없지만,
+     나중에 누가 하나를 들이면 그 요청의 Referer 에 열쇠가 통째로 실려 나간다. 한 줄로 못 박아 둔다. -->
+<meta name="referrer" content="no-referrer">
 <!-- 런타임에 외부 서비스를 부르지 않는다(AGENTS 원칙 7·autopilot "외부 서비스 호출" 금지·vendor/VERSIONS
      "no network at runtime"). 그래서 Google Fonts 링크를 뺐다(#14). JetBrains Mono 는 style.css 의 --mono
      첫 자리에 그대로 있어 로컬에 깔려 있으면 쓰이고, 없으면 뒷 목록(ui-monospace, Menlo…)으로 떨어진다.

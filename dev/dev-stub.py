@@ -45,6 +45,9 @@ WEB = (Path(__file__).resolve().parent.parent / "palmar" / "web").resolve()
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from palmar import PROTOCOL
 TOKEN = secrets.token_urlsafe(32)
+#: 페이지를 받아 갈 자격(#14). 제품과 같은 규칙 — 스텁이 더 헐거우면 여기서만 되는 화면을 만들게 된다.
+#: 제품은 이것을 ~/.palmar/run/key 에 남기지만, 스텁은 지어낸 세션을 쓰는 개발 도구라 매번 새로 난다.
+KEY = secrets.token_urlsafe(32)
 PORT = [8801]
 HOME = Path.home().resolve()
 DEBUG = [False]
@@ -615,10 +618,21 @@ async def handle(reader, writer):
             respond(writer, 404, jbody({"error": "not found"}))
         else:
             data = f.read_bytes()
-            if f.suffix == ".html":
+            # 소문자로 견준다 — macOS 는 이름의 대소문자를 안 가려 `/INDEX.HTML` 이 index.html 을
+            # 찾아 오는데, 그대로 비교하면 `.HTML` 이 문지기를 안 탄다(제품 serve_static 과 같은 이유).
+            suffix = f.suffix.lower()
+            if suffix == ".html":
+                # 토큰이 실리는 유일한 요청이라 여기만 열쇠를 묻는다(제품 serve_static 과 같은 자리).
+                # **바이트로 견준다** — `hmac.compare_digest` 는 비-ASCII str 에 TypeError 를 내는데,
+                # 그 예외를 여기서 아무도 안 받아 연결이 응답 없이 매달렸다(실측: `?k=한글` 로 무응답).
+                got = q.get("k", [""])[0].encode("utf-8", "surrogatepass")
+                if not hmac.compare_digest(got, KEY.encode()):
+                    respond(writer, 403, jbody({"error": "이 주소에는 ?k= 가 필요하다 — 스텁이 찍은 주소로 열어라"}))
+                    await finish()
+                    return
                 data = data.replace(b"</head>", f'<script>window.PALMAR_TOKEN="{TOKEN}"</script></head>'.encode(), 1)
             ctype = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-                     ".css": "text/css; charset=utf-8"}.get(f.suffix, "application/octet-stream")
+                     ".css": "text/css; charset=utf-8"}.get(suffix, "application/octet-stream")
             respond(writer, 200, data, ctype)
     else:
         respond(writer, 404, jbody({"error": "not found"}))
@@ -711,7 +725,7 @@ async def main():
     seed()
     server = await asyncio.start_server(handle, "127.0.0.1", args.port)
     print(f"dev-stub (not the product)  pid {os.getpid()}  token {TOKEN}", flush=True)
-    print(f"http://127.0.0.1:{args.port}", flush=True)
+    print(f"http://127.0.0.1:{args.port}/?k={KEY}", flush=True)
     async with server:
         await server.serve_forever()
 

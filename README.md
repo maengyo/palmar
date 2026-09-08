@@ -85,7 +85,12 @@ browser's own.
 python3 -m palmar
 ```
 
-It prints `http://127.0.0.1:8801` on its last line. Open that.
+It prints a URL on its last line — `http://127.0.0.1:8801/?k=…`. Open that, and bookmark it if
+you like: the key stays the same across restarts, so the bookmark keeps working. Lost the URL?
+`cat ~/.palmar/run/url`.
+
+The key is what stops any other process on the machine from asking the daemon for the page and
+reading your session token out of it.
 
 There is nothing to install and nothing to build. palmar uses only the Python standard library, and
 xterm.js is vendored in the repo, so no dependency is fetched — at install time or at runtime. It

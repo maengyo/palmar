@@ -24,6 +24,23 @@
 'use strict';
 
 const TOKEN = window.PALMAR_TOKEN || '';
+// 페이지를 받아 온 열쇠(#14). 토큰과 다르다 — 토큰은 데몬이 다시 뜨면 바뀌고, 이것은 남는다.
+// **주소에서 지우지 않는다.** 새로고침하면 브라우저가 HTML 을 다시 받아 오는데 그 요청은 자바스크립트보다
+// 먼저 나가므로, 주소에 열쇠가 없으면 그 순간 403 이다. 그래서 주소가 열쇠를 든 채로 있어야 한다
+// (이것이 사용자가 고른 방식의 값이다 — 대신 북마크가 계속 열린다).
+// sessionStorage 는 주소에 열쇠 없이 들어온 탭을 위한 예비다. 실패해도(사생활 보호 창 등) 넘어간다.
+const KEY = (() => {
+  try {
+    // **서버와 같은 것을 골라야 한다.** 데몬은 `parse_qs` 로 읽는데 그것은 **빈 값을 버리므로**
+    // `?k=&k=X` 에서 서버는 X 를 본다. `URLSearchParams.get` 은 빈 첫 값을 그대로 줘서 '' 가 되고,
+    // 그러면 페이지는 떴는데 아래 재접속 검사만 조용히 403 을 받는다. 비지 않은 첫 값을 쓴다.
+    for (const v of new URLSearchParams(location.search).getAll('k')) if (v) return v;
+  } catch (e) {}
+  // 여기로 오는 길은 사실상 없다 — 열쇠 없는 요청에는 데몬이 안내 페이지를 내고 그 페이지는 이
+  // 스크립트를 안 부른다. 그래서 sessionStorage 에 따로 갈무리해 두지 않는다(비밀 사본을 하나 더
+  // 두는 값이 없다). '' 로 두면 아래 재접속 검사가 그 사실을 사람에게 말한다.
+  return '';
+})();
 const enc = new TextEncoder();
 const root = document.documentElement;
 const $ = (sel, from) => (from || document).querySelector(sel);
@@ -2212,11 +2229,23 @@ function connectEvents() {
 // 심긴 토큰이 우리 것과 다를 때만 새로 고친다 — 같으면(데몬이 아직 없다) 그냥 재시도가 이어진다. 되돌이표는 없다:
 // 새로 고친 뒤에는 토큰이 같다.
 let staleCheck = false;
+let keyStale = false;    // 열쇠가 안 맞는다고 한 번 말했나 — 0.5초마다 같은 말을 되풀이하지 않는다
 async function checkStaleToken() {
   if (staleCheck) return;
   staleCheck = true;
   try {
-    const r = await fetch('/', { cache: 'no-store' });
+    // 열쇠를 실어야 한다 — 이 요청이 노리는 것이 바로 토큰이 심긴 그 페이지다.
+    const r = await fetch('/?k=' + encodeURIComponent(KEY), { cache: 'no-store' });
+    if (r.status === 403) {
+      // **열쇠가 더는 안 맞는다.** 데몬이 `run/key` 를 잃고 새로 만든 경우다. 페이지는 새 열쇠를
+      // 알 길이 없으니 스스로 못 고친다 — 그대로 삼키면 "reconnecting…" 만 영원히 돈다.
+      if (!keyStale) {
+        keyStale = true;
+        toast([{ b: 'the daemon has a new key' }, ' — open the URL it printed, or ',
+                { d: 'cat ~/.palmar/run/url' }]);
+      }
+      return;
+    }
     if (!r.ok) return;
     const m = /window\.PALMAR_TOKEN="([^"]*)"/.exec(await r.text());
     if (m && m[1] && m[1] !== TOKEN) {

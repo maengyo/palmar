@@ -158,12 +158,18 @@ ZDOT_DIR = PALMAR_DIR / "zsh"      # zsh 래퍼 rc
 BASHRC = PALMAR_DIR / "bash" / "bashrc"   # bash 래퍼 rc (--rcfile 로 물린다)      # zsh 를 감싸는 rc. 사용자 rc 뒤에 PATH 를 다시 앞세운다
 RUN_DIR = PALMAR_DIR / "run"
 TOKEN_FILE = RUN_DIR / "token"
+#: 페이지를 받아 갈 자격. **토큰과 다른 것이다.** 토큰은 뜰 때마다 새로 나지만 이것은 남는다 —
+#: 그래야 북마크가 데몬을 다시 켠 뒤에도 열린다(2026-09-09, 사용자가 이 방식을 골랐다).
+KEY_FILE = RUN_DIR / "key"
+#: 그때그때 찍은 주소를 잃어버렸을 때 되찾는 자리. `cat ~/.palmar/run/url` 한 줄이면 된다.
+URL_FILE = RUN_DIR / "url"
 # web/ 는 이 파일 **옆에** 있다. 저장소에서 `python3 -m palmar` 로 돌 때와 휠에서 설치돼 돌 때가
 # 같은 경로다 — 둘이 다르면 한쪽에서만 되는 종류의 버그가 생긴다.
 WEB = (Path(__file__).resolve().parent / "web").resolve()
 
 PORT = [8801]        # Origin·Host 검사와 훅 URL 에 쓰려고 전역으로 둔다
 TOKEN = [""]         # 뜰 때 만든다 — secrets.token_urlsafe(32)
+KEY = [""]           # 페이지를 받아 갈 자격. 한 번 만들고 run/key 에 남는다
 LOCK_FH = [None]     # 단일 인스턴스 락 fd — 데몬이 사는 동안 연 채로 둔다(닫으면 락이 풀린다) (#2)
 
 #: 스파이크 D 의 크기 상한.
@@ -1333,11 +1339,51 @@ def acquire_single_instance_lock() -> None:
         except OSError:
             prev = ""
         os.close(fd)
+        # **락 파일에는 열쇠를 안 적는다** — `--doctor` 가 이 줄을 그대로 찍는데 그 출력은 붙여
+        # 넣으라고 있는 것이다(#14). 그래서 여기서도 주소를 통째로 내밀지 않고, 어디서 되찾는지만
+        # 말한다. 안 그러면 열쇠 없는 주소를 안내하게 되고, 그대로 열면 403 이다(실측으로 그랬다).
         raise SystemExit(f"palmard: 이미 다른 palmard 가 {PALMAR_DIR} 를 쓰고 있다"
-                         f"{' — ' + prev if prev else ''} (데몬은 HOME 당 하나)")
+                         f"{' — ' + prev if prev else ''} (데몬은 HOME 당 하나)\n"
+                         f"        그 데몬의 주소: cat {URL_FILE}")
     os.ftruncate(fd, 0)
     os.write(fd, f"pid {os.getpid()} http://127.0.0.1:{PORT[0]}\n".encode())
     LOCK_FH[0] = fd     # 데몬이 사는 동안 열어 둔다 — 닫히면 락이 풀린다
+
+
+KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
+def load_or_make_key() -> str:
+    """페이지를 받아 갈 자격. **있으면 그대로 쓰고, 없거나 망가졌으면 새로 만든다.**
+
+    토큰과 달리 뜰 때마다 돌리지 않는다. 돌리면 켤 때마다 주소가 바뀌어 북마크가 죽는데,
+    북마크가 사는 쪽이 사용자가 고른 것이다. 토큰은 그대로 매번 새로 난다 — 옛 페이지가
+    데몬이 다시 떴다는 것을 알아채는 길이 그것이다(protocol.md '인증')."""
+    had = KEY_FILE.exists()
+    try:
+        got = KEY_FILE.read_text("utf-8").strip()
+    except (OSError, ValueError, UnicodeDecodeError) as e:
+        log(f"run/key 를 못 읽었다 ({e}) — 새로 만든다")
+        got = ""
+    # 길이와 글자를 본다. 손으로 고쳤거나 반쯤 쓰이다 만 파일을 그대로 믿으면, 주소에 못 담을
+    # 글자가 섞여 아무도 못 여는 데몬이 된다.
+    if len(got) >= 32 and set(got) <= KEY_CHARS:
+        # **권한은 매번 조인다.** 만들 때만 0600 으로 쓰면, 어쩌다 느슨해진 파일(복원·복사·umask)을
+        # 그대로 쓰게 된다. 토큰 파일은 뜰 때마다 0600 으로 다시 쓰이므로 이쪽만 빠져 있었다.
+        try:
+            if KEY_FILE.stat().st_mode & 0o077:
+                os.chmod(KEY_FILE, 0o600)
+                log(f"run/key 의 권한을 0600 으로 조였다")
+        except OSError as e:
+            log(f"run/key 의 권한을 못 고쳤다 — {e}")
+        return got
+    if had:
+        # **조용히 갈아치우지 않는다.** 열쇠가 바뀌면 북마크가 죽는데, 그것은 이 방식이 사용자에게
+        # 약속한 바로 그것이다(#14). 왜 바뀌었는지 말은 하고 바꾼다.
+        log("run/key 가 비었거나 모양이 아니다 — 새로 만든다. **주소가 바뀐다**(북마크를 다시 잡아라)")
+    key = secrets.token_urlsafe(32)
+    write_private(KEY_FILE, key.encode() + b"\n", 0o600)
+    return key
 
 
 def setup_palmar_dir() -> str:
@@ -1345,6 +1391,7 @@ def setup_palmar_dir() -> str:
     for d in (PALMAR_DIR, BIN_DIR, RUN_DIR):
         ensure_private_dir(d)
     acquire_single_instance_lock()   # 락을 잡은 데몬만 token 을 돌리고 *.json 을 지운다 (#2)
+    KEY[0] = load_or_make_key()      # 락 안에서 — 둘이 동시에 만들어 서로 덮어쓰지 않게
     token = secrets.token_urlsafe(32)
     write_private(TOKEN_FILE, token.encode() + b"\n", 0o600)
     write_private(BIN_DIR / "claude", SHIM.encode(), 0o755)
@@ -1627,7 +1674,27 @@ def allowed_host(headers: dict) -> bool:
     return h is None or h in (f"127.0.0.1:{PORT[0]}", f"localhost:{PORT[0]}")
 
 
-def serve_static(path: str, head_only: bool = False) -> bytes:
+#: 열쇠 없이 페이지를 열었을 때. 막다른 403 대신 **무엇을 하면 되는지** 적는다 —
+#: 여기 오는 사람은 공격자가 아니라 주소를 잃어버린 본인일 가능성이 훨씬 높다.
+NO_KEY_PAGE = b"""<!doctype html><meta charset="utf-8"><title>palmar</title>
+<style>body{font:15px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;max-width:34rem;
+margin:12vh auto;padding:0 1.5rem;color:#2b2723;background:#faf7f2}
+code{background:#efe9e0;padding:.15em .4em;border-radius:3px}
+@media(prefers-color-scheme:dark){body{color:#e8e2d6;background:#191714}code{background:#2a2621}}</style>
+<h1>palmar</h1><p>This address needs the key the daemon printed when it started.</p>
+<p>Open the link from the daemon's last line, or get it back with:</p>
+<p><code>cat ~/.palmar/run/url</code></p>
+<p>The key lives in <code>~/.palmar/run/key</code> and does not change when the daemon restarts,
+so a bookmark keeps working.</p>
+"""
+
+
+def key_ok(q: dict) -> bool:
+    """`?k=` 가 맞나. 바이트로 견준다 — `hmac.compare_digest` 는 비-ASCII str 에 TypeError 를 낸다."""
+    return hmac.compare_digest(qget(q, "k", "").encode("utf-8", "surrogatepass"), KEY[0].encode())
+
+
+def serve_static(path: str, head_only: bool = False, has_key: bool = False) -> bytes:
     name = unquote(path).lstrip("/") or "index.html"
     try:
         f = (WEB / name).resolve()
@@ -1636,13 +1703,24 @@ def serve_static(path: str, head_only: bool = False) -> bytes:
         ok = False
     if ok:
         body = f.read_bytes()
-        suffix = f.suffix
+        # **소문자로 견준다.** macOS 의 파일 시스템은 이름의 대소문자를 안 가려서 `/INDEX.HTML` 이
+        # 그대로 index.html 을 찾아 오는데, 확장자를 그대로 비교하면 `.HTML` 은 아래 `.html` 갈래를
+        # 안 타 문지기도 토큰도 건너뛴다(실측: macOS 200, 리눅스 404). 비밀이 새는 것은 아니지만
+        # 같은 코드가 기계마다 다르게 도는 것이라 여기서 하나로 만든다.
+        suffix = f.suffix.lower()
     elif name == "index.html":
         body, suffix = PLACEHOLDER_INDEX, ".html"
     else:
         return http(404, head_only=head_only)
     if suffix == ".html":
-        # 토큰은 이 길로만 브라우저에 간다.
+        # **토큰이 실리는 유일한 요청이다. 그래서 여기만 열쇠를 묻는다.**
+        # `Origin`·`Host` 검사는 헤더가 없으면 통과시키므로(브라우저가 아닌 것을 가리는 검사가
+        # 아니다) 이 요청은 자격을 아무것도 안 물은 채 비밀을 내주고 있었다: 같은 기계의 아무
+        # 프로세스나 `curl http://127.0.0.1:8801/` 한 번으로 토큰을 받아 진짜 셸을 열었다
+        # (2026-09-09 실측, #14). 토큰 파일이 0600 이어도 소용이 없다 — 같은 비밀을 소켓으로
+        # 나눠 주고 있었으니까. 나머지 정적 파일은 비밀을 안 싣는 공개 코드라 그대로 둔다.
+        if not has_key:
+            return http(403, NO_KEY_PAGE, "text/html; charset=utf-8", head_only=head_only)
         tag = f'<script>window.PALMAR_TOKEN="{TOKEN[0]}"</script>'.encode()
         body = body.replace(b"</head>", tag + b"</head>", 1) if b"</head>" in body else tag + body
     ctype = CONTENT_TYPES.get(suffix, "application/octet-stream")
@@ -2055,7 +2133,7 @@ async def handle_request(reader, writer) -> None:
     if method not in ("GET", "HEAD"):
         writer.write(http(405))
         return
-    writer.write(serve_static(path, head_only=(method == "HEAD")))   # HEAD 는 몸 없이 (#8)
+    writer.write(serve_static(path, head_only=(method == "HEAD"), has_key=key_ok(q)))   # HEAD 는 몸 없이 (#8)
 
 
 async def handle(reader, writer) -> None:
@@ -2116,7 +2194,15 @@ async def main(port: int) -> None:
         loop.add_signal_handler(sig, lambda: stop.done() or stop.set_result(None))
     log(f"palmard pid {os.getpid()}  shell={os.environ.get('SHELL') or '/bin/sh'}  web={WEB}"
         f"{'' if (WEB / 'index.html').is_file() else ' (index.html 없음 — 자리표를 낸다)'}")
-    print(f"http://127.0.0.1:{port}", flush=True)   # 마지막 줄 — 사용자는 이것만 보고 시작한다
+    # 마지막 줄 — 사용자는 이것만 보고 시작한다. **열쇠가 붙는다**(#14): 이 주소로 와야 페이지가
+    # 나온다. 열쇠는 남으므로 이 주소는 다시 켜도 같다 — 북마크해 두면 된다.
+    url = f"http://127.0.0.1:{port}/?k={KEY[0]}"
+    # 터미널을 스크롤해 찾을 필요가 없게 파일로도 남긴다(0600). 도크터가 이 경로를 알려 준다.
+    try:
+        write_private(URL_FILE, url.encode() + b"\n", 0o600)
+    except OSError as e:
+        log(f"run/url 을 못 남겼다 — {e}")
+    print(url, flush=True)
     await stop
     server.close()
     shutdown()
@@ -2200,6 +2286,21 @@ def doctor(port: int) -> int:
         return 1
 
     token = TOKEN_FILE.read_text().strip()
+    # 열쇠 자체는 **절대 안 찍는다.** 이 출력은 붙여 넣으라고 있는 것이고, 열쇠는 페이지를 받아 갈
+    # 자격이다(#14). 있는지와 권한만 말하고, 주소는 어디서 되찾는지만 알려 준다.
+    if KEY_FILE.exists():
+        # **둘 다 본다.** run/url 은 열쇠를 통째로 담은 두 번째 사본이라 권한이 똑같이 중요하다.
+        for label, f in (("열쇠", KEY_FILE), ("주소", URL_FILE)):
+            if not f.exists():
+                out("  %s      (%s 없다)" % (label, f.name))
+                continue
+            mode = oct(f.stat().st_mode & 0o777)
+            out("  %s      %s (%s)%s" % (label, f, mode,
+                                         "" if mode == "0o600" else "   ← 0600 이어야 한다"))
+        if URL_FILE.exists():
+            out("            주소를 잃었으면 `cat %s`" % URL_FILE)
+    else:
+        out("  ! 열쇠 파일이 없다(%s) — 이 데몬은 열쇠가 붙기 전 코드다." % KEY_FILE)
     if note:
         out("도는 데몬   %s" % note)
         m = re.search(r":(\d+)", note)
