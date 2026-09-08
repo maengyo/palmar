@@ -446,7 +446,12 @@ class Session:
         self.title_timer = None
         self.osc_carry = b""         # 조각 경계에 걸린 OSC 후보
         self.derived = "idle"        # 훅이 없을 때 제목·출력으로 읽은 상태
-        self.title_seen = False      # 이 세션이 제목을 한 번이라도 세웠나 (#22)
+        #: 이 판의 제목이 **실제로 돈 적이 있나**. "한 번이라도 세웠나" 가 아니다 —
+        #: 셸이 프롬프트마다 제목을 세우는 것은 아주 흔하고(WSL 의 bash 기본값이 그렇다:
+        #: `\e]0;\u@\h: \w\a`), 그것을 "이 판은 제목으로 읽는다" 로 받으면 **되돌림이 통째로
+        #: 꺼진다.** 셸 제목은 돌지 않으므로 신호등은 영영 idle 이다(사용자 보고 2026-09-08:
+        #: title=`linux user@…` 인데 status=idle. macOS 의 맨 zsh 는 제목을 안 세워서 안 보였다).
+        self.title_spun = False
         self.last_out = 0.0          # 마지막으로 바이트가 나온 시각(monotonic)
         self.out_start = 0.0         # 지금 이어지는 출력 묶음이 시작된 시각
         self.out_timer = None
@@ -601,7 +606,6 @@ class Session:
             if t != self.title:        # 같은 제목을 다시 세우는 것은 변화가 아니다
                 self.title = t
                 self.title_hits.append(time.monotonic())
-                self.title_seen = True     # 이 세션은 제목을 쓴다 — 되돌림은 이제 안 본다
                 hit = True
         rest = buf[last:]
         i = rest.rfind(b"\x1b]")
@@ -629,7 +633,12 @@ class Session:
     def _title_tick(self) -> None:
         """돌고 있으면 working, **돌다가** 멎으면 done. 돌지도 않았는데 done 이 되지는 않는다 —
         가만히 떠 있는 TUI(vim 같은 것)를 '끝났다' 로 만들면 신호등이 늘 켜져 있게 된다."""
-        want = "working" if self._title_busy() else ("done" if self.derived == "working" else self.derived)
+        busy = self._title_busy()
+        if busy:
+            self.title_spun = True         # **여기서만** 제목 층이 주도권을 갖는다
+        elif not self.title_spun:
+            return                         # 아직 돈 적 없다 — 판단은 되돌림에 맡긴다
+        want = "working" if busy else ("done" if self.derived == "working" else self.derived)
         if want != self.derived:
             self.derived = want
             if self.status == "unknown":      # 훅이 말해 주는 세션이면 화면을 흔들지 않는다
@@ -662,7 +671,7 @@ class Session:
         if now - self.last_out > OUT_QUIET_S:
             self.out_start = now         # 조용하다가 다시 찍기 시작했다 — 새 묶음
         self.last_out = now
-        if self.title_seen:
+        if self.title_spun:
             return
         self._out_tick()
         self._arm_out()
@@ -676,7 +685,7 @@ class Session:
 
     def _out_settle(self) -> None:
         self.out_timer = None
-        if self.closed or self.title_seen:
+        if self.closed or self.title_spun:
             return
         if time.monotonic() - self.last_out < OUT_QUIET_S:
             self._arm_out()                 # 그 사이 또 찍었다
