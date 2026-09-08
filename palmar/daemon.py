@@ -596,6 +596,14 @@ class Session:
             except OSError:
                 os.write(2, f"palmar: cannot exec {shell}\n".encode())
             os._exit(127)
+        # **이 fd 는 다음 판에게 넘어가면 안 된다.** `pty.fork()` 가 주는 master 는 상속 표시가 켜진
+        # 채로 온다(`os.open`·소켓과 달리 CLOEXEC 이 아니다). 그대로 두면 나중에 연 판의 셸이
+        # 앞서 연 모든 판의 master 를 그대로 물려받는다 — 판 다섯이면 마지막 셸이 넷을 든다.
+        # 2026-09-09 실측: 마지막 판에서 `/dev/fd/*` 에 한 줄 써 넣자 판 0·1·2·3 이 **각자 자기
+        # $PANE 값으로** 그 줄을 실행했다. 남의 판을 읽는 것을 넘어 **남의 셸에 키를 넣는 것**이고,
+        # 그것은 곧 다른 에이전트의 승인 프롬프트에 대신 답할 수 있다는 뜻이다.
+        # 덤으로, 판을 닫아도 나중 판이 사본을 들고 있는 한 pty 가 안 풀린다.
+        os.set_inheritable(master, False)
         return pid, master
 
     def to_json(self) -> dict:
