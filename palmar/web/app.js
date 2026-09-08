@@ -716,6 +716,16 @@ class Tile {
 
   update(s) {
     this.s = s;
+    // **행·열은 데몬이 진짜다.** 두 번째 브라우저가 같은 판에 붙으면 그쪽 크기로 PTY 가 바뀌는데
+    // (daemon.attach), 먼저 붙어 있던 쪽은 그 방송을 버리고 옛 크기로 계속 그렸다 — 셸은 80칸에서
+    // 줄을 접고 화면은 120칸으로 그리니 그 뒤 모든 줄이 어긋난다. `sentCols` 를 먼저 맞춰 두는 것이
+    // 요점이다: 되받아치지 않으니 왔다 갔다 하지 않고, 이 브라우저에서 창을 실제로 만지면 그때
+    // 다시 자기 크기를 주장한다.
+    if (s.cols && s.rows && (s.cols !== this.term.cols || s.rows !== this.term.rows)) {
+      this.sentCols = s.cols; this.sentRows = s.rows;
+      try { this.term.resize(s.cols, s.rows); } catch (e) { /* 판이 닫히는 중 */ }
+      this.showSize();
+    }
     const cls = STATUS_CLASS[s.status] || 'idle';
     this.dotEl.className = 'dot ' + cls;
     // ⑫ 사람이 준 이름이 이긴다. 없으면 지금까지의 경로 이름표 그대로.
