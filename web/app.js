@@ -1694,6 +1694,14 @@ function boot() {
     toast(['xterm.js is missing under web/vendor/ — see web/vendor/VERSIONS']);
     return;
   }
+  // 단축키 안내는 이 기계의 글쇠를 말해야 한다. 처리 쪽은 진작 metaKey 와 ctrlKey 를 둘 다 받고
+  // 있었는데(아래 keydown) 안내만 ⌘ 로 박혀 있어서, 리눅스·WSL 에서는 없는 글쇠를 가리켰다.
+  // HTML 의 기본값은 Ctrl 이다 — 맥이 아닌 곳이 더 넓고, 못 알아보면 안 바꾸는 편이 안전하다.
+  const uaP = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+  if (/Mac|iPhone|iPad/i.test(uaP)) {
+    const k = document.getElementById('kmod');
+    if (k) k.firstElementChild.textContent = '⌘';
+  }
   setNotify(notifyOn && 'Notification' in window && Notification.permission === 'granted');
   applyTheme(storedTheme());
   renderBadge(true);
