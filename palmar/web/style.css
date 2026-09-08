@@ -50,69 +50,69 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --ground:   #0a0c11;
-    --canvas:   rgba(22,31,54,.78);
-    --dot:      #2b3654;
-    --rail:     #0c0f15;
-    --tile:     #050608;
-    --tile-bar: #0a0c11;
-    --line:     #1a1f2b;
-    --line-2:   #262d3b;
-    --ink:      #dfe2e8;
-    --ink-2:    #9aa1b0;
-    --ink-3:    #5d6575;
-    --accent:   #8b9cf9;
-    --on-accent:#0a0c11;
-    --accent-2: rgba(139,156,249,.16);
-    --hover:    rgba(255,255,255,.025);
-    --btn:      #0f1218;
-    --kbd:      #10131a;
-    --kbd-ink:  #9aa1b0;
-    --float:    rgba(10,12,17,.92);
-    --topbar:   rgba(12,15,21,.7);
-    --search:   rgba(5,6,8,.6);
-    --term-ink: #c9cdd6;
-    --term-box: #7d8598;
-    --st-work:  #62b56a;
-    --st-wait:  #e2a63a;
-    --st-done:  #e0574f;
-    --st-idle:  #4a5262;
-    --atmo-1:   rgba(70,130,225,.20);
-    --atmo-2:   rgba(95,125,215,.12);
+    --ground:    #101216;
+    --canvas:    rgba(26,38,62,.72);
+    --dot:       #33405e;
+    --rail:      #15181e;
+    --tile:      #0a0c0f;
+    --tile-bar:  #171a21;
+    --line:      #262a33;
+    --line-2:    #3a404d;
+    --ink:       #edeff3;
+    --ink-2:     #b3b9c6;
+    --ink-3:     #7c8494;
+    --accent:    #4bc7bd;
+    --on-accent: #06100f;
+    --accent-2:  rgba(75,199,189,.18);
+    --hover:     rgba(255,255,255,.045);
+    --btn:       #1a1e26;
+    --kbd:       #1b1f27;
+    --kbd-ink:   #b3b9c6;
+    --float:     rgba(16,18,22,.94);
+    --topbar:    rgba(21,24,30,.75);
+    --search:    rgba(10,12,15,.6);
+    --term-ink:  #dde1e8;
+    --term-box:  #8f97a8;
+    --st-work:   #55c96a;
+    --st-wait:   #ecb03f;
+    --st-done:   #ef6058;
+    --st-idle:   #5a6273;
+    --atmo-1:    rgba(60,150,170,.18);
+    --atmo-2:    rgba(70,110,190,.12);
     --shadow:   0 1px 0 rgba(255,255,255,.02) inset, 0 12px 32px -12px rgba(0,0,0,.8);
     --shadow-2: 0 16px 40px -12px rgba(0,0,0,.9);
   }
 }
 :root[data-theme="dark"] {
-  --ground:   #0a0c11;
-  --canvas:   rgba(22,31,54,.78);
-  --dot:      #2b3654;
-  --rail:     #0c0f15;
-  --tile:     #050608;
-  --tile-bar: #0a0c11;
-  --line:     #1a1f2b;
-  --line-2:   #262d3b;
-  --ink:      #dfe2e8;
-  --ink-2:    #9aa1b0;
-  --ink-3:    #5d6575;
-  --accent:   #8b9cf9;
-  --on-accent:#0a0c11;
-  --accent-2: rgba(139,156,249,.16);
-  --hover:    rgba(255,255,255,.025);
-  --btn:      #0f1218;
-  --kbd:      #10131a;
-  --kbd-ink:  #9aa1b0;
-  --float:    rgba(10,12,17,.92);
-  --topbar:   rgba(12,15,21,.7);
-  --search:   rgba(5,6,8,.6);
-  --term-ink: #c9cdd6;
-  --term-box: #7d8598;
-  --st-work:  #62b56a;
-  --st-wait:  #e2a63a;
-  --st-done:  #e0574f;
-  --st-idle:  #4a5262;
-  --atmo-1:   rgba(70,130,225,.20);
-  --atmo-2:   rgba(95,125,215,.12);
+  --ground:    #101216;
+  --canvas:    rgba(26,38,62,.72);
+  --dot:       #33405e;
+  --rail:      #15181e;
+  --tile:      #0a0c0f;
+  --tile-bar:  #171a21;
+  --line:      #262a33;
+  --line-2:    #3a404d;
+  --ink:       #edeff3;
+  --ink-2:     #b3b9c6;
+  --ink-3:     #7c8494;
+  --accent:    #4bc7bd;
+  --on-accent: #06100f;
+  --accent-2:  rgba(75,199,189,.18);
+  --hover:     rgba(255,255,255,.045);
+  --btn:       #1a1e26;
+  --kbd:       #1b1f27;
+  --kbd-ink:   #b3b9c6;
+  --float:     rgba(16,18,22,.94);
+  --topbar:    rgba(21,24,30,.75);
+  --search:    rgba(10,12,15,.6);
+  --term-ink:  #dde1e8;
+  --term-box:  #8f97a8;
+  --st-work:   #55c96a;
+  --st-wait:   #ecb03f;
+  --st-done:   #ef6058;
+  --st-idle:   #5a6273;
+  --atmo-1:    rgba(60,150,170,.18);
+  --atmo-2:    rgba(70,110,190,.12);
   --shadow:   0 1px 0 rgba(255,255,255,.02) inset, 0 12px 32px -12px rgba(0,0,0,.8);
   --shadow-2: 0 16px 40px -12px rgba(0,0,0,.9);
 }
@@ -177,8 +177,37 @@ kbd {
 /* 컨트롤은 절대 줄지 않는다. 안 그러면 좁은 레일에서 힌트가 자리를 먹고 단추가 찌그러진다 —
    벨을 넣기 전에도 그랬고(실측: 톱니가 16px 에서 2px 로 눌렸다) 그냥 안 보였을 뿐이다. */
 .top .r .bell, .top .r .theme, .top .r .gear { flex: none; }
-.gear { width: 16px; height: 16px; border: 1.5px solid var(--ink-3); border-radius: 50%; position: relative; }
-.gear::after { content: ""; position: absolute; inset: 4px; border-radius: 50%; border: 1.5px solid var(--ink-3); }
+/* 단축키 단추. 테마 단추와 같은 상자다 — 위 줄에 새 모양을 만들지 않는다. */
+.help {
+  width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--btn);
+  display: grid; place-items: center; cursor: pointer; color: var(--ink-3); flex: none;
+  padding: 0; font: 600 12px/1 var(--mono); -webkit-appearance: none; appearance: none;
+  -webkit-app-region: no-drag;
+}
+.help:hover, .help[aria-expanded="true"] { border-color: var(--accent); color: var(--ink); }
+/* 단축키 판. 위 줄 오른쪽 아래에 뜬다 — 부른 단추 가까이. */
+.keys {
+  position: absolute; top: 46px; right: 14px; z-index: 90; width: 372px; max-width: calc(100vw - 28px);
+  background: var(--float); border: 1px solid var(--line-2); border-radius: 10px;
+  box-shadow: var(--shadow); backdrop-filter: blur(8px); padding: 10px 14px 12px;
+  font-size: 11.5px; color: var(--ink-2);
+}
+.keys-h {
+  display: flex; align-items: center; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--ink-3); padding-bottom: 8px; margin-bottom: 6px; border-bottom: 1px solid var(--line);
+}
+.keys-x {
+  margin-left: auto; border: 0; background: transparent; color: var(--ink-3); cursor: pointer;
+  font: inherit; font-size: 14px; line-height: 1; padding: 0 2px;
+}
+.keys-x:hover { color: var(--ink); }
+.keys dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0; align-items: baseline; }
+.keys dt { display: flex; align-items: center; gap: 3px; white-space: nowrap; color: var(--ink-3); }
+.keys dd { margin: 0; color: var(--ink-2); }
+.keys .ex {
+  font-family: var(--mono); font-size: 10px; color: var(--ink-3);
+  border: 1px solid var(--line-2); border-radius: 3px; padding: 0 4px;
+}
 .theme {
   width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--btn);
   display: grid; place-items: center; cursor: pointer; color: var(--ink-2);
@@ -221,8 +250,14 @@ kbd {
 }
 .rz:hover::after, .rz:focus-visible::after, .rz.on::after { opacity: .85; }
 .rz:focus-visible { outline: none; }
-.rz.l { left: calc(var(--rail-l) - 3px); }
-.rz.r { left: auto; right: calc(var(--rail-r) - 3px); }
+/* **스크롤 막대 자리를 비켜 선다.** 경계에 걸쳐 두었더니 왼쪽 손잡이는 왼쪽 레일의 막대를,
+   오른쪽 손잡이는 캔버스의 막대를 덮었다 — 막대를 잡으려다 레일 크기가 바뀌었다(보고 2026-09-08).
+   각자 막대가 없는 쪽으로 통째로 옮긴다: 왼쪽은 캔버스 쪽(캔버스에 왼쪽 막대는 없다),
+   오른쪽은 레일 쪽(레일의 막대는 창 오른쪽 끝에 있다). */
+.rz.l { left: var(--rail-l); }
+.rz.r { left: auto; right: calc(var(--rail-r) - 7px); }
+.rz.l::after { left: 0; }
+.rz.r::after { left: auto; right: 0; }
 body.rz-drag { cursor: col-resize; user-select: none; }
 .rail { background: var(--rail); display: flex; flex-direction: column; min-height: 0; }
 .rail.left  { border-right: 1px solid var(--line); }
@@ -240,8 +275,15 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 }
 .ib:hover { border-color: var(--accent); color: var(--ink); }
 .scroll { overflow-y: auto; min-height: 0; flex: 1; }
-.scroll::-webkit-scrollbar { width: 8px; }
-.scroll::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 4px; }
+/* 잡기 좋을 만큼 굵게 — 8px 는 손이 자꾸 빗나갔다. 그리고 **손이 올라간 것을 색으로 말한다**:
+   스크롤 막대는 커서 모양이 안 바뀌므로 그것밖에 알릴 길이 없다. */
+.scroll::-webkit-scrollbar { width: 12px; }
+.scroll::-webkit-scrollbar-thumb {
+  background: var(--line-2); border-radius: 6px;
+  border: 3px solid transparent; background-clip: padding-box;
+}
+.scroll::-webkit-scrollbar-thumb:hover { background: var(--ink-3); background-clip: padding-box; }
+.scroll::-webkit-scrollbar-thumb:active { background: var(--accent); background-clip: padding-box; }
 
 /* ── sessions (left) ────────────────────────── */
 /* 묶음 머리글. **자기 내용보다 흐리면 머리글로 안 읽힌다** — 전에는 --ink-3 이라 아래 줄들보다
@@ -397,8 +439,13 @@ body.rz-drag { cursor: col-resize; user-select: none; }
   background-image: radial-gradient(var(--dot) 1px, transparent 1.2px);
   background-size: 22px 22px; background-position: 11px 11px; background-attachment: local;
 }
-.cv-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
-.cv-scroll::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 4px; }
+.cv-scroll::-webkit-scrollbar { width: 14px; height: 14px; }
+.cv-scroll::-webkit-scrollbar-thumb {
+  background: var(--line-2); border-radius: 7px;
+  border: 4px solid transparent; background-clip: padding-box;
+}
+.cv-scroll::-webkit-scrollbar-thumb:hover { background: var(--ink-3); background-clip: padding-box; }
+.cv-scroll::-webkit-scrollbar-thumb:active { background: var(--accent); background-clip: padding-box; }
 .cv.has-max .cv-scroll { overflow: hidden; }
 /* 빈 자리를 쥐고 끌 수 있다는 것을 커서로 먼저 말한다. 타일 위에서는 타일의 커서가 이긴다. */
 .cv-scroll { cursor: grab; }
@@ -490,8 +537,13 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 /* xterm.css 는 뷰포트를 #000 으로 칠하고, 뷰포트는 .xterm 의 여백까지 덮는다 — 밝은 테마에서 검은 테가 생겼다(실측).
    타일 색으로 맞춘다. 색은 여기 한 곳. */
 .term .xterm .xterm-viewport { background-color: var(--tile); }
-.term .xterm .xterm-viewport::-webkit-scrollbar { width: 6px; }
-.term .xterm .xterm-viewport::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
+.term .xterm .xterm-viewport::-webkit-scrollbar { width: 10px; }
+.term .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--line-2); border-radius: 5px;
+  border: 3px solid transparent; background-clip: padding-box;
+}
+.term .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: var(--ink-3); background-clip: padding-box; }
+.term .xterm .xterm-viewport::-webkit-scrollbar-thumb:active { background: var(--accent); background-clip: padding-box; }
 .grip {
   position: absolute; right: 3px; bottom: 3px; width: 12px; height: 12px; opacity: .5; cursor: nwse-resize;
   background: linear-gradient(135deg, transparent 55%, var(--ink-3) 55%, var(--ink-3) 62%, transparent 62%),

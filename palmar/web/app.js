@@ -2040,6 +2040,26 @@ function boot() {
   if (IS_MAC) {
     const k = document.getElementById('kmod');
     if (k) k.firstElementChild.textContent = '⌘';
+    // 맥에서는 복사·붙여넣기·글자 크기가 ⌘ 하나다 — Shift 없이. 안내도 그 기계의 글쇠를 말한다.
+    for (const el of document.querySelectorAll('.keys kbd.mod')) el.textContent = '⌘';
+    for (const el of document.querySelectorAll('.keys dt')) {
+      const ks = [...el.querySelectorAll('kbd')];
+      if (ks.length === 3 && ks[1].textContent === 'Shift') ks[1].remove();
+    }
+  }
+  // ── 단축키 판 ──
+  const helpBtn = document.getElementById('help'), keysEl = document.getElementById('keys');
+  const showKeys = (on) => {
+    keysEl.hidden = !on;
+    helpBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
+  };
+  if (helpBtn && keysEl) {
+    helpBtn.addEventListener('click', (e) => { e.stopPropagation(); showKeys(keysEl.hidden); });
+    document.getElementById('keys-x').addEventListener('click', () => showKeys(false));
+    // 판 밖을 누르거나 Esc 로 닫는다. 판 안의 클릭은 삼킨다.
+    keysEl.addEventListener('click', (e) => e.stopPropagation());
+    addEventListener('click', () => { if (!keysEl.hidden) showKeys(false); });
+    addEventListener('keydown', (e) => { if (e.key === 'Escape' && !keysEl.hidden) showKeys(false); });
   }
   loadRails();
   rzGrip(document.getElementById('rz-l'), 'l');
