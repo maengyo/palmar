@@ -309,8 +309,14 @@ PATH 를 다시 앞세운다. **사용자 파일은 읽기만 한다.**
 
 진짜 pane 에서 `claude -p` 를 띄우니 3초 만에 `working`/`agent=claude`/`UserPromptSubmit` 이 왔다.
 
-**bash·fish 는 아직이다.** bash 는 `--rcfile` 이 `-i` 에서만 먹고 로그인 셸에서는 다른 파일을 보므로
-같은 수를 그대로 못 쓴다. 그때까지 그 셸들은 PATH 경쟁에서 질 수 있다 — 점이 회색에 머문다.
+**bash 도 감쌌다(2026-09-08).** `ZDOTDIR` 이 없으므로 `--rcfile` 로 물린다 —
+데몬이 `~/.palmer/bash/bashrc`(0600)를 쓰고 자식을 `bash --rcfile <그 파일>` 로 띄우며
+`PALMER_USER_BASHRC`·`PALMER_USER_BASH_PROFILE` 을 넘긴다. 우리 rc 가 로그인 셸이면
+`.bash_profile` 을, 아니면 `.bashrc` 를 먼저 부르고 그 뒤에 PATH 를 되돌린다.
+실측(2026-09-08, 진짜 데몬 · `SHELL=/bin/bash`): pane 안에서 `command -v claude` 가
+`~/.palmer/bin/claude` 였다. **이게 WSL 에 중요하다** — 거기 기본 셸이 bash 다.
+
+**fish 는 아직이다.** 그 셸에서는 PATH 경쟁에 질 수 있다 — 점이 회색에 머문다.
 
 ## shim — `~/.palmer/bin/claude`
 

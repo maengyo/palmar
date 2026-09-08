@@ -79,7 +79,8 @@ ALT_OFF = b"\x1b[?1049l"
 HOME = Path.home().resolve()
 PALMER_DIR = Path.home() / ".palmer"        # shim 의 "$HOME/.palmer" 와 같은 글자여야 한다
 BIN_DIR = PALMER_DIR / "bin"
-ZDOT_DIR = PALMER_DIR / "zsh"      # zsh 를 감싸는 rc. 사용자 rc 뒤에 PATH 를 다시 앞세운다
+ZDOT_DIR = PALMER_DIR / "zsh"      # zsh 래퍼 rc
+BASHRC = PALMER_DIR / "bash" / "bashrc"   # bash 래퍼 rc (--rcfile 로 물린다)      # zsh 를 감싸는 rc. 사용자 rc 뒤에 PATH 를 다시 앞세운다
 RUN_DIR = PALMER_DIR / "run"
 TOKEN_FILE = RUN_DIR / "token"
 WEB = (Path(__file__).resolve().parent.parent / "web").resolve()
@@ -151,6 +152,19 @@ case ":$PATH:" in
 esac
 # 사용자가 rc 안에서 ZDOTDIR 을 자기 홈으로 되돌렸을 수 있다 — 그건 그대로 둔다.
 # 이 파일은 이미 다 돌았고, 다음 셸은 palmer 가 다시 환경을 준다.
+"""
+
+BASH_RC = """# palmer 가 만든 것. 고치지 마라 — 데몬이 뜰 때마다 다시 쓴다.
+# bash 에는 ZDOTDIR 이 없어 --rcfile 로 물린다. 사용자 것을 먼저 부르고 PATH 를 되돌린다.
+if [ -n "$PALMER_USER_BASH_PROFILE" ] && [ -r "$PALMER_USER_BASH_PROFILE" ] && shopt -q login_shell; then
+  . "$PALMER_USER_BASH_PROFILE"
+elif [ -n "$PALMER_USER_BASHRC" ] && [ -r "$PALMER_USER_BASHRC" ]; then
+  . "$PALMER_USER_BASHRC"
+fi
+case ":$PATH:" in
+  ":$HOME/.palmer/bin:"*) ;;
+  *) PATH="$HOME/.palmer/bin:$PATH"; export PATH ;;
+esac
 """
 
 SHIM = """#!/bin/sh
@@ -418,9 +432,18 @@ class Session:
         # PATH 를 앞세우는 것만으로는 진다 — 사용자 rc 가 나중에 실행돼 자기 것을 다시 앞에 붙인다
         # (실측: ~/.zshrc 의 `export PATH="$HOME/.local/bin:$PATH"` 한 줄에 shim 이 밀렸다).
         # zsh 는 ZDOTDIR 로 감싸 우리 rc 가 **마지막에** 돌게 한다. 사용자 파일은 안 건드린다.
-        if os.path.basename(shell) == "zsh" and (ZDOT_DIR / ".zshrc").exists():
+        base = os.path.basename(shell)
+        argv = [shell]
+        if base == "zsh" and (ZDOT_DIR / ".zshrc").exists():
             env["PALMER_USER_ZDOTDIR"] = env.get("ZDOTDIR") or str(HOME)
             env["ZDOTDIR"] = str(ZDOT_DIR)
+        elif base == "bash" and BASHRC.exists():
+            # bash 에는 ZDOTDIR 이 없다. --rcfile 이 대화형 셸의 rc 를 갈아끼운다 —
+            # 우리 것이 사용자 것을 먼저 부르고 그 뒤에 PATH 를 되돌린다(실측 2026-09-08).
+            # 로그인 셸(-l)은 .bash_profile 을 보므로 이 수가 안 먹는다 — 아래 래퍼가 그것도 부른다.
+            env["PALMER_USER_BASHRC"] = str(HOME / ".bashrc")
+            env["PALMER_USER_BASH_PROFILE"] = str(HOME / ".bash_profile")
+            argv = [shell, "--rcfile", str(BASHRC)]
         env["PALMER_PANE"] = self.id
         env["TERM"] = "xterm-256color"
         env["TERM_PROGRAM"] = "palmer"     # tmux 가 TERM_PROGRAM=tmux 를 두는 것과 같은 자리. 띄운 터미널 이름을 덮는다
@@ -434,7 +457,7 @@ class Session:
                 except OSError:
                     pass
             try:
-                os.execvpe(shell, [shell], env)
+                os.execvpe(shell, argv, env)
             except OSError:
                 os.write(2, f"palmer: cannot exec {shell}\n".encode())
             os._exit(127)
@@ -958,6 +981,8 @@ def setup_palmer_dir() -> str:
     write_private(TOKEN_FILE, token.encode() + b"\n", 0o600)
     write_private(BIN_DIR / "claude", SHIM.encode(), 0o755)
     ensure_private_dir(ZDOT_DIR)
+    ensure_private_dir(BASHRC.parent)
+    write_private(BASHRC, BASH_RC.encode(), 0o600)
     for name, body in ((".zshenv", ZSHENV), (".zprofile", ZPROFILE),
                        (".zshrc", ZSHRC), (".zlogin", ZLOGIN)):
         write_private(ZDOT_DIR / name, body.encode(), 0o600)
