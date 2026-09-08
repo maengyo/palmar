@@ -907,15 +907,20 @@ class Canvas:
     (protocol.md "없는 것"). id 는 세션 id 와 **같은 모양**이다. 캔버스 id 에는 권한이 걸려 있지
     않지만(훅 URL 도 /pty 도 안 연다) id 모양을 하나로 두려고 같게 한다. 순번은 어느 쪽에도 안 쓴다.
     """
-    __slots__ = ("id", "name", "order")
+    __slots__ = ("id", "name", "order", "seq")
 
-    def __init__(self, cid: str, name=None):
+    def __init__(self, cid: str, name=None, seq: int = 1):
         self.id = cid
         self.name = name
         self.order = 0      # 레지스트리가 자리에서 다시 매긴다 — 0부터 빈틈없이, 작은 것이 왼쪽
+        # 몇 번째로 만들어졌나. **이름 없는 캔버스의 이름표는 이것으로 만든다** — order 로 만들면
+        # 탭을 끌어 자리를 바꾸는 순간 이름표가 서로 바뀌어, 사용자에게는 캔버스 이름이 저절로
+        # 바뀐 것으로 보인다(사용자 보고 2026-09-08). 자리는 움직여도 이 수는 안 움직인다.
+        # 지우고 새로 만들면 번호가 건너뛴다 — 그게 맞다. 번호는 자리표이지 순번이 아니다.
+        self.seq = seq
 
     def to_json(self) -> dict:
-        return {"id": self.id, "name": self.name, "order": self.order}
+        return {"id": self.id, "name": self.name, "order": self.order, "seq": self.seq}
 
 
 # ── 세션 레지스트리 + /events 방송 ──────────────────────────────────────────────────
@@ -925,6 +930,8 @@ class Registry:
         #: 탭 줄에 보이는 순서 그대로. 파이썬 dict 는 삽입 순서를 지키므로 이것이 곧 order 다 —
         #: order 를 따로 정렬해 두지 않으니 "0부터 빈틈없이" 가 깨질 자리가 없다.
         self.canvases: dict[str, Canvas] = {}
+        #: 만든 차례. **되쓰지 않는다** — 지운 번호를 다시 주면 이름표가 다시 겹친다.
+        self.canvas_seq = 0
         self.event_clients: set = set()
 
     # ── 세션 ─────────────────────────────────────────────
@@ -960,7 +967,8 @@ class Registry:
 
     def new_canvas(self, name=None) -> Canvas:
         """**끝에 붙는다** — 있던 캔버스의 order 가 안 바뀌므로 방송은 canvas 하나면 된다."""
-        c = Canvas(secrets.token_urlsafe(16), name)
+        self.canvas_seq += 1
+        c = Canvas(secrets.token_urlsafe(16), name, self.canvas_seq)
         self.canvases[c.id] = c
         self._renumber()
         return c

@@ -763,13 +763,20 @@ addTabEl.title = 'new canvas';
 // **자리표라 순서를 바꾸면 글자도 바뀐다**(끌어서 앞으로 보낸 "canvas 2" 는 "canvas 1" 이 된다) —
 // 이름 없는 캔버스에만 해당하고, 사람이 이름을 주면 사라지는 성질이다. 폴더에서 따기로 정해지면
 // 이 함수 하나만 바뀐다.
-function canvasLabel(c) { return (c && c.name) || ('canvas ' + ((c ? c.order : 0) + 1)); }
+// 이름 없는 캔버스의 이름표는 **만든 차례(seq)** 로 만든다. order 로 만들면 탭을 끌어 자리를 바꾼
+// 순간 이름표가 서로 바뀌어, 사용자 눈에는 캔버스 이름이 저절로 바뀐 것으로 보인다(보고 2026-09-08).
+// seq 를 모르는 옛 데몬에는 옛 길로 돌아간다 — 그때는 자리가 곧 이름이었다.
+function canvasLabel(c) {
+  if (c && c.name) return c.name;
+  return 'canvas ' + (c && c.seq ? c.seq : ((c ? c.order : 0) + 1));
+}
 function canvasById(id) { return canvases.get(id) || null; }
 
-// 탭의 점은 저장하지 않는다 — 계산한다(protocol.md "탭의 점"). waiting 이 하나라도 있으면 켠다. 그게 전부다.
-function canvasWaiting(id) {
-  for (const s of sessions.values()) if (s.canvas === id && s.status === 'waiting') return true;
-  return false;
+// 탭의 점은 저장하지 않는다 — 계산한다(protocol.md "탭의 점"). 이 캔버스에 나를 부르는 것이 있으면 켠다.
+function canvasWant(id) {
+  const mine = [];
+  for (const s of sessions.values()) if (s.canvas === id) mine.push(s);
+  return wantClass(mine);
 }
 
 function setCanvases(list) {          // hello · canvases — 전체를 갈아 낀다
@@ -863,10 +870,12 @@ function paintTab(id) {
   const cur = id === current;
   t.classList.toggle('cur', cur);
   t.setAttribute('aria-selected', cur ? 'true' : 'false');
-  // 점 하나. 색은 --st-wait 이고 새 색이 아니다(⑥ 미정) — 눌러도 안 꺼진다(waiting 은 훅이 꺼 준다)
-  const dot = $('.dot', t), want = canvasWaiting(id);
-  if (want && !dot) t.appendChild(el('span', 'dot wait'));
-  else if (!want && dot) dot.remove();
+  // 점 하나. 색은 상태 색 그대로다(⑥ 미정, 새 색 없음). waiting 은 눌러도 안 꺼지고(훅이 꺼 준다),
+  // done 은 그 창을 봐야 꺼진다 — 둘 다 "탭을 누르면 꺼진다" 가 아니다.
+  const dot = $('.dot', t), want = canvasWant(id);
+  if (!want) { if (dot) dot.remove(); }
+  else if (!dot) t.appendChild(el('span', 'dot ' + want));
+  else if (dot.className !== 'dot ' + want) dot.className = 'dot ' + want;
 }
 
 function renderTabs() {
@@ -1162,8 +1171,11 @@ function renderByCanvas() {
     buckets.get(k).push(s);
   }
   const keys = [...buckets.keys()].filter((k) => buckets.get(k).length);
-  const waits = (k) => buckets.get(k).some((s) => s.status === 'waiting');
-  keys.sort((a, b) => (waits(b) ? 1 : 0) - (waits(a) ? 1 : 0));   // 1) 기다리는 캔버스가 위로
+  // 1) 나를 부르는 캔버스가 위로. **막힌 것(waiting)이 끝난 것(done)보다 위다.**
+  //    done 도 올리는 것은 제목으로 읽는 에이전트가 waiting 을 못 내기 때문이다(#38) — waiting 만
+  //    보면 codex 를 쓰는 사람에게는 이 줄이 영영 안 움직인다.
+  const rank = (k) => { const c = wantClass(buckets.get(k)); return c === 'wait' ? 0 : c === 'done' ? 1 : 2; };
+  keys.sort((a, b) => rank(a) - rank(b));   // 안정 정렬이라 같은 편끼리는 데몬이 준 차례 그대로다
   for (const k of keys) {
     const arr = buckets.get(k);
     arr.sort((a, b) => statusRank(a) - statusRank(b) || a.created - b.created);   // 묶음 안은 상태 차례
@@ -1173,17 +1185,25 @@ function renderByCanvas() {
     const shown = off ? waiting : arr;
     const g = el('div', 'grp cvg' + (off ? ' collapsed' : '') + (k === current ? ' cur' : ''));
     g.dataset.canvas = k;
+    const hiddenWant = off ? arr.filter((s) => WANTS_YOU.has(s.status) && !waiting.includes(s)).length : 0;
     g.title = (off ? 'expand ' : 'collapse ') + label +
-              (waiting.length ? ' — ' + waiting.length + ' waiting stay visible either way' : '');
+              (waiting.length ? ' — ' + waiting.length + ' waiting stay visible either way' : '') +
+              (hiddenWant ? ' — ' + hiddenWant + ' more want you, hidden by this fold' : '');
     g.append(el('span', 'car', off ? '▸' : '▾'), el('span', 'nm', label));
-    // 머리글의 점은 탭의 점과 같은 뜻·같은 색이다(protocol.md "탭의 점"): 기다리는 것이 있다. 새 색은 없다(⑥).
-    if (waiting.length) g.appendChild(el('span', 'dot wait'));
+    // 머리글의 점은 탭의 점과 같은 뜻·같은 색이다(protocol.md "탭의 점"): 나를 부르는 것이 있다.
+    // 새 색은 없다(⑥). 접혀 있을 때 이 점이 **접힌 묶음 안을 가리키는 유일한 표시**다.
+    const wc = wantClass(arr);
+    if (wc) g.appendChild(el('span', 'dot ' + wc));
     g.appendChild(el('span', 'ct', String(arr.length)));       // 접혀도 **캔버스 전체**의 수다
     g.addEventListener('click', () => toggleCvGroup(k));
     listEl.appendChild(g);
     for (const s of shown) { const it = buildItem(s, off); items.set(s.id, it); listEl.appendChild(it); }
     if (arr.length > shown.length) {
-      const more = el('div', 'grest', '+' + (arr.length - shown.length) + ' more, collapsed');
+      // 접힘이 감춘 것 중 **나를 부르는 것이 몇인지** 여기서 말한다. 접힌 묶음 안에서 done 은 줄로
+      // 남지 않으므로(줄로 남기면 접힘이 쓸모없어진다) 이 수와 머리글의 점이 그 자리를 대신한다.
+      const more = el('div', 'grest' + (hiddenWant ? ' wants' : ''),
+                      '+' + (arr.length - shown.length) + ' more, collapsed'
+                      + (hiddenWant ? ' · ' + hiddenWant + ' want' + (hiddenWant > 1 ? '' : 's') + ' you' : ''));
       more.title = 'expand ' + label;
       more.addEventListener('click', () => toggleCvGroup(k));
       listEl.appendChild(more);
@@ -1313,6 +1333,18 @@ let notifyOn = false;
 try { notifyOn = localStorage.getItem(LS_NOTIFY) === '1'; } catch (e) {}
 
 function labelOf(s) { return s ? (s.name || shortPath(s.cwd)) : '?'; }
+
+// 이 무리 중 가장 급한 "나를 부름" 의 상태 클래스. 없으면 null.
+// **waiting 만 보면 안 된다** — 제목으로 읽는 에이전트(#38)는 waiting 을 낼 수 없어 done 으로 온다.
+// 그것만 보던 탓에 codex 가 일을 끝내도 탭과 접힌 묶음이 깜깜했다(사용자 보고 2026-09-08).
+function wantClass(list) {
+  let d = null;
+  for (const s of list) {
+    if (s.status === 'waiting') return 'wait';   // 막혀 있는 쪽이 늘 이긴다
+    if (s.status === 'done') d = 'done';
+  }
+  return d;
+}
 function wantsYouIds() {
   const out = [];
   for (const s of sessions.values()) if (WANTS_YOU.has(s.status)) out.push(s.id);

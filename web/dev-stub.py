@@ -96,13 +96,17 @@ async def read_frame(reader):
 
 # ── 캔버스 (⑪) ─────────────────────────────────────────────
 class Canvas:
+    _seq = 0
+
     def __init__(self, name=None):
         self.id = secrets.token_urlsafe(16)      # 세션 id 와 같은 모양 (protocol.md "캔버스")
         self.name = name
         self.order = 0
+        Canvas._seq += 1
+        self.seq = Canvas._seq                   # 만든 차례. 이름표는 이것으로 만든다 (protocol.md "캔버스")
 
     def json(self):
-        return {"id": self.id, "name": self.name, "order": self.order}
+        return {"id": self.id, "name": self.name, "order": self.order, "seq": self.seq}
 
 
 CANVASES = []   # order 순. 빈틈없이 0부터 다시 매긴다

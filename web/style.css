@@ -241,6 +241,9 @@ kbd {
   cursor: pointer; border-radius: 6px;
 }
 .grest:hover { background: var(--hover); color: var(--ink-2); }
+/* 접힘이 감춘 것 중 나를 부르는 것이 있으면 이 줄이 흐린 글자로 남지 않는다 — 접어 둔 캔버스 안을
+   가리키는 표시가 머리글의 점과 이 줄 둘뿐이라, 둘 다 안 보이면 접힘이 신호를 삼킨다(#43). */
+.grest.wants { color: var(--ink-2); font-weight: 500; }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .dot.work { background: var(--st-work); box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-work) 16%, transparent); }
 .dot.wait { background: var(--st-wait); box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-wait) 18%, transparent); }
