@@ -715,7 +715,86 @@ addEventListener('keydown', (e) => {
 // #21: 펼친 직후엔 포커스가 터미널 안이라 위 Esc 가 안 먹는다. 안내 알약을 눌러도 캔버스로 돌아가게 한다
 // (터미널의 Esc 는 그대로 앱에 넘긴다 — 이 길은 알약 클릭만).
 $('.esc').addEventListener('click', () => { if (maxed) setMax(maxed, false); });
-addEventListener('resize', () => { if (maxed) maxed.refit(); renderMinimap(); refreshOff(); });
+addEventListener('resize', () => {
+  // 창이 좁아지면 지금 레일 폭이 캔버스를 최소치 아래로 밀 수 있다 — 여기서 다시 가둔다.
+  // **폭만 고치고 뒷정리는 아래에서 한 번만** 한다 — setRail 을 쓰면 미니맵을 세 번 다시 그린다.
+  railPut('l', railW('l')); railPut('r', railW('r'));
+  if (maxed) maxed.refit(); renderMinimap(); refreshOff();
+});
+
+// ── 레일 폭 (#19) ──────────────────────────────────────────
+// 폭은 CSS 변수 --rail-l·--rail-r 하나에만 있고 .top 과 .body 가 그것을 함께 본다 — 전에는 둘이
+// 같은 값을 따로 적고 있어서 한쪽만 고치면 위 줄과 아래 몸이 어긋났다.
+// **레일이 좁아지면 캔버스가 넓어진다.** 창이 그대로여도 보이는 자리가 달라지므로, 창 크기가
+// 바뀔 때와 **똑같은 뒷정리**가 필요하다(펼친 창 refit · 미니맵 눈금 · 화면 밖 표시).
+const LS_RAILS = 'palmar.rails';
+const RAIL_DEF = { l: 256, r: 232 };
+const RAIL_MIN = { l: 180, r: 160 };   // 이보다 좁으면 왼쪽은 이름표가, 오른쪽은 위 줄 단추가 깨진다
+const RAIL_MAX = 480;
+const CANVAS_MIN = 320;                // 레일 둘이 캔버스를 이만큼 아래로 밀지 못한다
+
+function railClamp(side, px) {
+  const other = side === 'l' ? railW('r') : railW('l');
+  const room = innerWidth - other - CANVAS_MIN;
+  return Math.round(Math.max(RAIL_MIN[side], Math.min(px, RAIL_MAX, room)));
+}
+function railW(side) {
+  const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--rail-' + side));
+  return isFinite(v) ? v : RAIL_DEF[side];
+}
+function railPut(side, px) {   // 폭만 고친다. 뒷정리 없음
+  document.documentElement.style.setProperty('--rail-' + side, railClamp(side, px) + 'px');
+}
+function setRail(side, px, save) {
+  railPut(side, px);
+  if (save !== false) saveRails();
+  if (maxed) maxed.refit();
+  renderMinimap();
+  refreshOff();
+}
+function saveRails() {
+  try { localStorage.setItem(LS_RAILS, JSON.stringify({ l: railW('l'), r: railW('r') })); } catch (e) {}
+}
+function loadRails() {
+  let v = null;
+  try { v = JSON.parse(localStorage.getItem(LS_RAILS) || 'null'); } catch (e) {}
+  if (!v) return;
+  // 저장된 값이 지금 창에 안 맞을 수 있다(작은 화면으로 옮겼다) — 그대로 쓰지 않고 다시 가둔다.
+  for (const side of ['l', 'r']) if (typeof v[side] === 'number') railPut(side, v[side]);
+}
+
+function rzGrip(el, side) {
+  el.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    el.setPointerCapture(ev.pointerId);
+    el.classList.add('on');
+    document.body.classList.add('rz-drag');
+    const x0 = ev.clientX, w0 = railW(side);
+    // 끄는 동안은 저장하지 않는다 — 손을 뗄 때 한 번만 쓴다(그 사이 localStorage 를 초당 60번 쓰지 않게).
+    const move = (e2) => setRail(side, side === 'l' ? w0 + (e2.clientX - x0) : w0 - (e2.clientX - x0), false);
+    const up = () => {
+      el.classList.remove('on');
+      document.body.classList.remove('rz-drag');
+      removeEventListener('pointermove', move);
+      removeEventListener('pointerup', up);
+      removeEventListener('pointercancel', up);
+      saveRails();
+    };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+    addEventListener('pointercancel', up);
+  });
+  // 두 번 누르면 기본값으로. 끌어서 되돌리기 어려운 값을 만들어 놓고 못 빠져나오는 일이 없게 한다.
+  el.addEventListener('dblclick', () => setRail(side, RAIL_DEF[side]));
+  // 키보드로도 닿아야 한다 — 닫기 단추를 <button> 으로 둔 것과 같은 이유다.
+  el.addEventListener('keydown', (ev) => {
+    const step = ev.shiftKey ? 48 : 16;
+    if (ev.key === 'ArrowLeft')  { ev.preventDefault(); setRail(side, railW(side) + (side === 'l' ? -step : step)); }
+    else if (ev.key === 'ArrowRight') { ev.preventDefault(); setRail(side, railW(side) + (side === 'l' ? step : -step)); }
+    else if (ev.key === 'Home' || ev.key === 'Escape') { ev.preventDefault(); setRail(side, RAIL_DEF[side]); }
+  });
+}
 
 // ── 캔버스 밖 표시 ("↗ off") ────────────────────────────
 // **자리는 좌표 스토어에서 읽는다 — 미니맵과 같은 이유다**(AGENTS.md "스크롤마다 DOM 레이아웃을 읽지 마라",
@@ -1702,6 +1781,9 @@ function boot() {
     const k = document.getElementById('kmod');
     if (k) k.firstElementChild.textContent = '⌘';
   }
+  loadRails();
+  rzGrip(document.getElementById('rz-l'), 'l');
+  rzGrip(document.getElementById('rz-r'), 'r');
   setNotify(notifyOn && 'Notification' in window && Notification.permission === 'granted');
   applyTheme(storedTheme());
   renderBadge(true);

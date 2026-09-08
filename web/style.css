@@ -12,6 +12,8 @@
 
 /* ── tokens: light is the base, dark overrides ── */
 :root {
+  --rail-l: 256px;   /* 왼쪽 레일 폭. 사람이 끌면 JS 가 여기를 고쳐 쓴다 */
+  --rail-r: 232px;
   color-scheme: light dark;
   --ground:   #f3f1ec;
   --canvas:   #ecebe5;
@@ -136,7 +138,7 @@ body {
 
 /* ── top bar ────────────────────────────────── */
 .top {
-  display: grid; grid-template-columns: 256px 1fr 232px; align-items: center;
+  display: grid; grid-template-columns: var(--rail-l) 1fr var(--rail-r); align-items: center;
   border-bottom: 1px solid var(--line); background: var(--topbar);
   -webkit-app-region: drag;
 }
@@ -196,7 +198,26 @@ kbd {
 .bell[data-on="1"] { color: var(--st-wait); border-color: var(--st-wait); }
 
 /* ── body grid ──────────────────────────────── */
-.body { display: grid; grid-template-columns: 256px 1fr 232px; min-height: 0; }
+/* 레일 폭은 **한 곳에만** 있다(:root 의 --rail-l·--rail-r). 전에는 .top 과 .body 가 같은 값을
+   `256px 1fr 232px` 로 따로 적고 있어서, 한쪽만 고치면 위 줄과 아래 몸이 어긋났다. */
+.body { display: grid; grid-template-columns: var(--rail-l) 1fr var(--rail-r); min-height: 0;
+        position: relative; }
+
+/* 레일 경계를 끄는 손잡이. 격자에 칸을 더하지 않고 경계 위에 얹는다 — 칸을 더하면 위 줄(.top)과
+   칸 수가 달라져 둘을 같은 변수로 묶을 수 없다. */
+.rz {
+  position: absolute; top: 0; bottom: 0; width: 7px; z-index: 40;
+  cursor: col-resize; touch-action: none; background: transparent;
+}
+.rz::after {                                   /* 잡는 자리를 보여 주는 얇은 선. 평소엔 안 보인다 */
+  content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px;
+  background: var(--accent); opacity: 0; transition: opacity .12s;
+}
+.rz:hover::after, .rz:focus-visible::after, .rz.on::after { opacity: .85; }
+.rz:focus-visible { outline: none; }
+.rz.l { left: calc(var(--rail-l) - 3px); }
+.rz.r { left: auto; right: calc(var(--rail-r) - 3px); }
+body.rz-drag { cursor: col-resize; user-select: none; }
 .rail { background: var(--rail); display: flex; flex-direction: column; min-height: 0; }
 .rail.left  { border-right: 1px solid var(--line); }
 .rail.right { border-left:  1px solid var(--line); }
