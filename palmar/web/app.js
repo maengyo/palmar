@@ -979,6 +979,14 @@ addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !maxed) return;
   // 터미널 안의 Esc 는 앱(vim·claude)의 것이다 — 빼앗지 않는다. 캔버스·레일에서 누른 Esc 만 되돌린다.
   if (e.target && e.target.closest && e.target.closest('.xterm')) return;
+  // **이미 임자가 있는 Esc 도 빼앗지 않는다.** 이 리스너가 셋 중 먼저 붙어 있어서, 나중 것이
+  // `stopPropagation` 을 해도 소용이 없다 — 여기서 물러나는 것이 유일한 길이다. 안 그러면
+  // 찾기 칸을 지우거나 단축키 창을 닫는 Esc 한 번에 펼친 터미널까지 같이 접힌다.
+  const t = e.target;
+  if (t === searchEl) return;                                    // 찾기 칸을 비운다
+  if (t && t.closest && t.closest('.rz')) return;                // 레일 너비를 되돌린다
+  const keys = document.getElementById('keys');
+  if (keys && !keys.hidden) return;                              // 단축키 창을 닫는다
   setMax(maxed, false);
 });
 // #21: 펼친 직후엔 포커스가 터미널 안이라 위 Esc 가 안 먹는다. 안내 알약을 눌러도 캔버스로 돌아가게 한다
@@ -2432,7 +2440,10 @@ async function launch() {
 }
 launchBtn.addEventListener('click', launch);
 addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && e.target && e.target.closest && e.target.closest('.rail.right')) { e.preventDefault(); launch(); }
+  // **맨 Enter 만.** 조정 키가 붙은 Enter 는 전역 단축키의 것이다(Ctrl/⌘+Enter = 새 터미널).
+  // 둘 다 받으면 폴더를 한 번 누른 뒤로는 그 한 번에 터미널이 둘 열린다.
+  if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey &&
+      e.target && e.target.closest && e.target.closest('.rail.right')) { e.preventDefault(); launch(); }
 });
 
 // 콘솔·개발 도구에서 들여다보는 손잡이. 제품 동작은 이것에 기대지 않는다.
