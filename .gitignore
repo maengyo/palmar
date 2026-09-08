@@ -5,3 +5,6 @@ __pycache__/
 # 패키징이 지어 내는 것 (#23)
 /dist/
 *.egg-info/
+
+# 로고 시안 — 다른 세션이 만들고 있다. `git add -A` 에 쓸려 들어가지 않게 여기 적어 둔다.
+/docs/img/brand/
