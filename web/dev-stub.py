@@ -8,7 +8,7 @@
     GET  /api/sessions           목록 — **캔버스로 거르지 않는다**(왼쪽 목록이 전부를 본다)
     POST /api/sessions?token=    가짜 세션을 하나 더 만든다(셸은 안 뜬다). cwd·canvas·name 을 받는다
     PATCH /api/sessions/<id>     이름 바꾸기·캔버스 옮기기 (⑫ ⑪)
-    DELETE /api/sessions/<id>    지운다
+    DELETE /api/sessions/<id>    지운다 (--delay-gone 으로 `gone` 방송만 늦출 수 있다 — 아래 DELAY_GONE)
     GET  /api/canvases           order 순 목록                      (⑪)
     POST /api/canvases?token=    끝에 하나 붙인다
     POST /api/canvases/order     지금 있는 전부를 새 순서로 (409 로 어긋남을 알린다)
@@ -43,6 +43,10 @@ TOKEN = secrets.token_urlsafe(32)
 PORT = [8801]
 HOME = Path.home().resolve()
 DEBUG = [False]
+# --delay-gone: DELETE 에 204 를 준 뒤 `gone` 방송을 이만큼 늦춘다(초). 0 이면 지금처럼 바로.
+# 브라우저가 **DELETE 를 낸 뒤 gone 이 올 때까지 줄과 타일을 그대로 두는지** 를 눈으로 보려고 둔 손잡이다
+# (protocol.md 는 "지우는 것은 gone" 이라고만 하지 그 사이를 안 적는다 — 그 사이가 없으면 못 본다).
+DELAY_GONE = [0.0]
 
 
 def log(*a):
@@ -214,14 +218,29 @@ def seed():
 
 
 # ── 디렉터리 (읽기 전용) ─────────────────────────────────────
+def owned_by_me(p) -> bool:
+    """resolve() 된 경로의 소유자가 지금 uid 인가. palmerd.owned_by_me 와 같은 술어다 (#31)."""
+    try:
+        return os.stat(str(p)).st_uid == os.getuid()
+    except OSError:
+        return False
+
+
 def roots():
+    """사용자 홈 + **내가 가진** /Users/* /home/*.
+
+    이 스텁은 `/api/dirs` 에서 진짜 파일시스템을 읽으므로 뿌리 규칙도 진짜와 같아야 한다
+    (protocol.md "뿌리(roots)": 데몬 자리에 서는 것은 같은 규칙을 지킨다). uid 검사가 빠져 있으면
+    WSL 에서 `aa` 로 스텁을 띄웠을 때 `/home/bb` 가 디렉터리 레일에 그대로 뜬다 — #31 ② 가 데몬에서
+    고친 바로 그 자리다. 소유자는 palmerd 와 같이 **푼 경로(resolve)** 에서 잰다."""
     out = [HOME]
     for base in (Path("/Users"), Path("/home")):
         if base.is_dir():
             try:
                 for p in sorted(base.iterdir()):
                     r = p.resolve()
-                    if r != HOME and p.is_dir() and not p.name.startswith(".") and os.access(r, os.R_OK | os.X_OK):
+                    if (r != HOME and p.is_dir() and not p.name.startswith(".")
+                            and owned_by_me(r) and os.access(r, os.R_OK | os.X_OK)):
                         out.append(r)
             except OSError:
                 pass
@@ -469,7 +488,11 @@ async def handle(reader, writer):
                         w.close()
                     except Exception:
                         pass
-                broadcast({"t": "gone", "id": s.id})
+                if DELAY_GONE[0] > 0:
+                    asyncio.get_event_loop().call_later(
+                        DELAY_GONE[0], broadcast, {"t": "gone", "id": s.id})
+                else:
+                    broadcast({"t": "gone", "id": s.id})
                 respond(writer, 204)
     elif path == "/api/canvases" and method == "GET":
         respond(writer, 200, jbody([c.json() for c in CANVASES]))
@@ -664,9 +687,12 @@ async def main():
     ap = argparse.ArgumentParser(description="palmer dev stub — NOT the product")
     ap.add_argument("--port", type=int, default=8801)
     ap.add_argument("--debug", action="store_true", help="log every request to stderr")
+    ap.add_argument("--delay-gone", type=float, default=0.0, metavar="SEC",
+                    help="delay the /events `gone` broadcast after DELETE (to watch what the browser does meanwhile)")
     args = ap.parse_args()
     PORT[0] = args.port
     DEBUG[0] = args.debug
+    DELAY_GONE[0] = max(0.0, args.delay_gone)
     seed()
     server = await asyncio.start_server(handle, "127.0.0.1", args.port)
     print(f"dev-stub (not the product)  pid {os.getpid()}  token {TOKEN}", flush=True)

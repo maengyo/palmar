@@ -75,6 +75,17 @@ KILL_GRACE_S = 2.0
 ALT_ON = b"\x1b[?1049h"
 ALT_OFF = b"\x1b[?1049l"
 
+#: 에이전트는 바쁨을 **창 제목**에 싣는다 (#38, 2026-09-08 실측). OSC 0/1/2 = 제목 세우기.
+#: codex 는 점자 스피너(⠋⠙⠹…), Claude Code 는 ◐◑ 를 앞에 붙이고 한가해지면 뗀다.
+#: **글자표는 만들지 않는다** — 새 에이전트가 나오면 그 자리에서 깨진다. 대신 제목이 계속
+#: 바뀌는 것만 본다: 스피너는 정의상 계속 바뀐다. 잰 빈도는 codex ~12회/초, Claude Code ~1회/초라
+#: 3초 창이면 둘 다 덮는다. 두 번을 요구하는 것은 한 번짜리 제목 바꾸기(Claude Code 는 턴이
+#: 시작될 때 제목을 그 턴의 말로 바꾼다)를 "돌고 있다" 로 읽지 않기 위해서다.
+OSC_TITLE = re.compile(rb"\x1b\][012];([^\x07\x1b]{0,255})(?:\x07|\x1b\\)")
+TITLE_WINDOW_S = 3.0
+TITLE_BUSY_N = 2
+OSC_CARRY_MAX = 512          # 종결자 없는 ESC] 가 계속 와도 carry 가 자라지 않게 하는 상한
+
 # ── 경로 ──────────────────────────────────────────────────────────────────────────
 HOME = Path.home().resolve()
 PALMER_DIR = Path.home() / ".palmer"        # shim 의 "$HOME/.palmer" 와 같은 글자여야 한다
@@ -405,6 +416,11 @@ class Session:
         self.last_event = None
         self.alt = False
         self.created = time.time()
+        self.title = ""              # 에이전트가 마지막으로 세운 창 제목 (#38)
+        self.title_hits = []         # 최근 제목 변경 시각(monotonic). TITLE_WINDOW_S 밖은 버린다
+        self.title_timer = None
+        self.osc_carry = b""         # 조각 경계에 걸린 OSC 후보
+        self.derived = "idle"        # 훅이 없을 때 제목으로 읽은 상태
 
         self.ring = Ring(RING)
         self.produced = 0            # 지금까지 클라이언트에 나간 총 바이트 (절대 오프셋)
@@ -466,7 +482,8 @@ class Session:
     def to_json(self) -> dict:
         return {
             "id": self.id, "cwd": self.cwd, "cols": self.cols, "rows": self.rows,
-            "status": self.status, "agent": self.agent, "alt": self.alt,
+            "status": self.eff_status(), "agent": self.agent, "alt": self.alt,
+            "title": self.title or None,
             "created": self.created, "last_event": self.last_event,
             "canvas": self.canvas, "name": self.name,
         }
@@ -523,6 +540,7 @@ class Session:
 
     def _emit(self, data: bytes) -> None:
         """링버퍼에 넣고(alt 구간은 빼고) 붙어 있는 모두에게 한 프레임으로 보낸다."""
+        self._scan_title(data)          # 제목은 **바이트를 건드리지 않고** 지켜보기만 한다 (#38)
         alt_changed = self._absorb(data)
         frame = Frame.build(data)
         for a in list(self.attached):
@@ -534,6 +552,66 @@ class Session:
         self._flow()
         if alt_changed:
             registry.changed(self)   # alt 가 바뀌면 /events 로 session 을 보낸다
+
+    # ── 제목으로 상태 읽기 (#38) ─────────────────────────
+    def _scan_title(self, data: bytes) -> None:
+        """제목 시퀀스를 세기만 한다. 링에서 빼지도, 브라우저로 가는 프레임에서 빼지도 않는다 —
+        xterm 이 그대로 받아 제 일을 해야 한다(alt 마커와 다른 점이다)."""
+        buf = self.osc_carry + data
+        last = 0
+        hit = False
+        for m in OSC_TITLE.finditer(buf):
+            last = m.end()
+            t = m.group(1).decode("utf-8", "replace")
+            if t != self.title:        # 같은 제목을 다시 세우는 것은 변화가 아니다
+                self.title = t
+                self.title_hits.append(time.monotonic())
+                hit = True
+        rest = buf[last:]
+        i = rest.rfind(b"\x1b]")
+        # 하이퍼링크(OSC 8) 처럼 여기 규칙에 안 걸리는 OSC 도 여기 남는다 — 상한이 그것을 받아 낸다.
+        self.osc_carry = rest[i:][-OSC_CARRY_MAX:] if i >= 0 else b""
+        if hit:
+            self._title_tick()
+            self._arm_settle()
+
+    def _arm_settle(self) -> None:
+        """제목이 멎는 순간에는 바이트가 안 온다 — 멎었는지는 시계로만 알 수 있다.
+        **마지막 변경에 맞춰** 깨운다. 고정 간격으로 깨우면 실제로 멎은 시각과 그것을 알아채는
+        시각이 최대 한 주기만큼 벌어진다(실측: codex 가 3.4초에 한가해졌는데 9.4초에 알았다)."""
+        if self.title_timer is not None:
+            self.title_timer.cancel()
+        last = self.title_hits[-1] if self.title_hits else time.monotonic()
+        delay = max(0.05, TITLE_WINDOW_S - (time.monotonic() - last) + 0.05)
+        self.title_timer = asyncio.get_running_loop().call_later(delay, self._title_settle)
+
+    def _title_busy(self) -> bool:
+        now = time.monotonic()
+        self.title_hits = [t for t in self.title_hits if now - t <= TITLE_WINDOW_S]
+        return len(self.title_hits) >= TITLE_BUSY_N
+
+    def _title_tick(self) -> None:
+        """돌고 있으면 working, **돌다가** 멎으면 done. 돌지도 않았는데 done 이 되지는 않는다 —
+        가만히 떠 있는 TUI(vim 같은 것)를 '끝났다' 로 만들면 신호등이 늘 켜져 있게 된다."""
+        want = "working" if self._title_busy() else ("done" if self.derived == "working" else self.derived)
+        if want != self.derived:
+            self.derived = want
+            if self.status == "unknown":      # 훅이 말해 주는 세션이면 화면을 흔들지 않는다
+                registry.changed(self)
+
+    def _title_settle(self) -> None:
+        self.title_timer = None
+        if self.closed:
+            return
+        if self._title_busy():
+            self._arm_settle()
+        else:
+            self._title_tick()
+
+    def eff_status(self) -> str:
+        """훅이 말해 주면 그 말을 쓴다 — 훅은 정확하고 제목은 짐작이다. 훅이 없는 에이전트만
+        제목으로 읽는다(회사에서 쓰는 codex 처럼 훅이 안 열려 있을 수 있다 — #15)."""
+        return self.status if self.status != "unknown" else self.derived
 
     def _absorb(self, data: bytes) -> bool:
         """스파이크 F 의 alt 감지: ESC[?1049h → alt, ESC[?1049l → 해제. 마커 자체와 alt 안의 바이트는
@@ -708,6 +786,9 @@ class Session:
         if self.status == "done":
             self.status = "idle"
             registry.changed(self)
+        elif self.status == "unknown" and self.derived == "done":   # 제목으로 켜진 done (#38)
+            self.derived = "idle"
+            registry.changed(self)
 
     # ── 죽음 ────────────────────────────────────────
     def die(self, reason: str) -> None:
@@ -718,6 +799,9 @@ class Session:
         if self.flush_handle is not None:
             self.flush_handle.cancel()
             self.flush_handle = None
+        if self.title_timer is not None:
+            self.title_timer.cancel()
+            self.title_timer = None
         self.stop_reading()
         if self.writing:                     # add_writer 를 fd 닫기 전에 뗀다 (#1)
             try:
@@ -725,8 +809,14 @@ class Session:
             except Exception:
                 pass
             self.writing = False
-        # 셸이 죽기 직전 낸 것(예: exit 에코)을 건진다.
-        while True:
+        # 셸이 죽기 직전 낸 것(예: exit 에코)을 건진다. **예산 안에서만** — 아직 SIGHUP 을 안 보냈으니
+        # 자식은 여기서도 계속 쓸 수 있고, 그러면 이 루프가 언제 끝나는지는 자식의 속도에 달린다.
+        # `_on_readable` 의 PUMP_BUDGET 과 같은 이유로 상한을 둔다.
+        # **안 잰 것이 아니라 재서 안 나온 것이다** — macOS 에서 `yes` 를 돌리는 pane 을 DELETE 해 봤을 때
+        # 예산 없는 옛 루프도 2048바이트에서 EAGAIN 으로 스스로 끝났다(2026-09-08, 1회). 리눅스는 안 쟀다.
+        # 즉 이건 관측된 멈춤을 고친 것이 아니라 상한이 없던 자리에 상한을 둔 것이다.
+        drained = 0
+        while drained < PUMP_BUDGET:
             try:
                 chunk = os.read(self.master, 65536)
             except OSError:
@@ -734,6 +824,7 @@ class Session:
             if not chunk:
                 break
             self.pending += chunk
+            drained += len(chunk)
         if self.pending:
             self._emit(bytes(self.pending))
             self.pending.clear()
@@ -745,7 +836,7 @@ class Session:
             os.kill(self.pid, signal.SIGHUP)
         except ProcessLookupError:
             pass
-        asyncio.get_running_loop().call_later(KILL_GRACE_S, reaper.kill_if_alive, self.pid)
+        asyncio.get_running_loop().call_later(KILL_GRACE_S, reaper.kill_if_alive, self)
         for a in list(self.attached):
             try:
                 a.writer.write(Frame.close())
@@ -756,6 +847,14 @@ class Session:
             self.settings_path.unlink()          # pane 이 죽으면 <id>.json 을 지운다
         except OSError:
             pass
+        # 링버퍼(pane 당 256KB)와 큐를 여기서 비운다. 이 세션은 곧 registry 에서 빠져 다시 붙을 길이
+        # 없으니 재생할 것이 없고, **데몬은 재시작하지 않으므로**(⑦=b) 참조가 언제 풀리는지에
+        # 기대지 않는다 — reaper 는 SIGCHLD 로 pid 를 거둘 때까지 이 객체를 들고 있다.
+        self.ring.segs.clear()
+        self.ring.size = 0
+        self.pending.clear()
+        self.inq.clear()
+        self.carry = b""
         registry.gone(self)
 
 
@@ -789,10 +888,13 @@ class Reaper:
                 how = f"status {status}"
             s.die(f"shell {how}")
 
-    def kill_if_alive(self, pid: int) -> None:
-        if pid in self.pids:
+    def kill_if_alive(self, s: Session) -> None:
+        """SIGHUP 뒤 유예(KILL_GRACE_S)가 지났는데 아직 안 거둬졌으면 SIGKILL.
+        **pid 가 아니라 세션 객체로 견준다** — 유예 사이에 그 pid 가 거둬지고 재사용되면
+        `pid in self.pids` 는 다시 참이 되고, 그때 죽는 것은 남의(새 세션의) 셸이다."""
+        if self.pids.get(s.pid) is s:
             try:
-                os.kill(pid, signal.SIGKILL)
+                os.kill(s.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
 
@@ -996,18 +1098,42 @@ def setup_palmer_dir() -> str:
 
 
 # ── 디렉터리 (protocol.md /api/dirs) ─────────────────────────────────────────────
+def owned_by_me(p) -> bool:
+    """resolve() 된 경로의 소유자가 지금 uid 인가. 뿌리를 가르는 술어 하나 (#31).
+    stat 은 심볼릭 링크를 따라간다 — 부르는 쪽이 이미 resolve() 한 것을 넘긴다."""
+    try:
+        return os.stat(str(p)).st_uid == os.getuid()
+    except OSError:
+        return False
+
+
 def roots() -> list[Path]:
-    """사용자 홈 + 읽을 수 있는 /Users/* /home/*. 요청마다 다시 본다 — scandir 둘이라 싸다."""
+    """사용자 홈 + **내가 가진** /Users/* /home/*. 요청마다 다시 본다 — scandir 둘이라 싸다.
+
+    남의 홈은 뿌리가 아니다(#31). WSL 에서 `aa` 로 돌리는데 `/home/bb` 가 디렉터리 레일에 떠서
+    거기 셸을 열 수 있었다 — 리눅스 홈은 보통 drwxr-xr-x 라 R_OK|X_OK 만으로는 다 통과한다.
+    셸은 그대로 `aa` 로 도니 권한 상승은 아니지만 남의 자리고, 무엇보다 **뿌리는 cwd 검사의
+    바닥이라**(`under_roots`) 넓은 만큼 `POST /api/sessions` 가 받아 준다.
+    그래서 `$HOME` 은 언제나 넣고, 나머지는 **소유자가 나인 것만** 넣는다 — 홈이 여럿인 사람은
+    자기 것을 다 본다. 심볼릭 링크는 먼저 푼다(전과 같다): 링크가 남의 홈을 가리키면 그 홈으로 잰다.
+
+    macOS 에서는 이 규칙에 `/Users/Shared`(root 소유, drwxrwxrwt)가 걸려 빠진다 — 실측 확인.
+    남의 것을 안 보이게 하는 값이 그것보다 크다고 보고 넣지 않았다. 되돌리려면 여기 한 줄이다."""
     out = [HOME]
     for base in ("/Users", "/home"):
         try:
             with os.scandir(base) as it:
                 for e in sorted(it, key=lambda e: e.name):
                     try:
-                        if e.is_dir(follow_symlinks=True) and os.access(e.path, os.R_OK | os.X_OK):
-                            p = Path(e.path).resolve()
-                            if p not in out:
-                                out.append(p)
+                        if not e.is_dir(follow_symlinks=True):
+                            continue
+                        p = Path(e.path).resolve()
+                        if not owned_by_me(p):
+                            continue                    # 남의 홈 — 뿌리가 아니다 (#31)
+                        if not os.access(str(p), os.R_OK | os.X_OK):
+                            continue
+                        if p not in out:
+                            out.append(p)
                     except OSError:
                         pass
         except OSError:

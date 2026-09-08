@@ -165,7 +165,10 @@ kbd {
   padding: 1px 5px 0; line-height: 15px; display: inline-block;
 }
 .top .r { display: flex; align-items: center; gap: 12px; justify-content: flex-end; padding: 0 14px; color: var(--ink-3); font-size: 11.5px; }
-.top .r .hint { display: flex; align-items: center; gap: 5px; }
+.top .r .hint { display: flex; align-items: center; gap: 5px; white-space: nowrap; min-width: 0; overflow: hidden; }
+/* 컨트롤은 절대 줄지 않는다. 안 그러면 좁은 레일에서 힌트가 자리를 먹고 단추가 찌그러진다 —
+   벨을 넣기 전에도 그랬고(실측: 톱니가 16px 에서 2px 로 눌렸다) 그냥 안 보였을 뿐이다. */
+.top .r .bell, .top .r .theme, .top .r .gear { flex: none; }
 .gear { width: 16px; height: 16px; border: 1.5px solid var(--ink-3); border-radius: 50%; position: relative; }
 .gear::after { content: ""; position: absolute; inset: 4px; border-radius: 50%; border: 1.5px solid var(--ink-3); }
 .theme {
@@ -181,6 +184,16 @@ kbd {
 /* 세 상태 표시: system 은 반원(위 기본), light 는 빈 원, dark 는 꽉 찬 원 */
 .theme[data-mode="light"] i { background: transparent; }
 .theme[data-mode="dark"] i { background: currentColor; }
+
+/* #40 알림 스위치. .theme 과 같은 상자다 — 위 줄에 새 모양을 만들지 않는다.
+   꺼짐은 흐린 글자색, 켜짐은 --st-wait 다(⑥ 의 상태 색을 그대로 쓴다 — 새 색은 없다). */
+.bell {
+  width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--btn);
+  display: grid; place-items: center; cursor: pointer; color: var(--ink-3);
+  -webkit-app-region: no-drag;
+}
+.bell:hover { border-color: var(--accent); color: var(--ink); }
+.bell[data-on="1"] { color: var(--st-wait); border-color: var(--st-wait); }
 
 /* ── body grid ──────────────────────────────── */
 .body { display: grid; grid-template-columns: 256px 1fr 232px; min-height: 0; }
@@ -210,26 +223,54 @@ kbd {
   cursor: pointer; user-select: none;
 }
 .grp:hover { color: var(--ink-2); }
+/* #31 ③ 접히지 않는 묶음(상태 묶음의 waiting). 누를 것이 아니므로 손가락도 hover 도 안 준다 —
+   "여기는 접을 수 없다" 를 커서로 먼저 말한다. 캐럿 자리는 빈 채로 남겨 줄이 안 밀리게 한다. */
+.grp.nofold { cursor: default; }
+.grp.nofold:hover { color: var(--ink-3); }
 /* 접기 캐럿은 오른쪽 트리(.row .car)와 같은 글리프·같은 폭이다 — 두 곳에서 다르게 생기지 않게 */
 .grp .car { color: var(--ink-3); font-size: 9px; width: 8px; flex: none; letter-spacing: 0; }
 .grp .ct { margin-left: auto; color: var(--ink-3); letter-spacing: 0; }
+/* #31 ③ 캔버스 묶음의 머리글. 이름은 사람이 지은 것이라 대문자로 바꾸지 않는다 — 상태 묶음(대문자)과
+   눈으로 갈린다. 지금 보고 있는 캔버스의 머리글만 글자가 진하다(.tab.cur / .ses.cur 와 같은 뜻). */
+.grp.cvg .nm { text-transform: none; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grp.cvg.cur .nm { color: var(--ink); }
+.grp.cvg .dot { margin-left: 2px; }
+/* 접힌 묶음이 감춘 개수. 눌러도 펴진다 — 감춘 것에 닿는 길이 머리글 말고도 하나 더 있게. */
+.grest {
+  margin: 0 6px 2px; padding: 3px 14px 5px 32px; font-size: 10.5px; color: var(--ink-3);
+  cursor: pointer; border-radius: 6px;
+}
+.grest:hover { background: var(--hover); color: var(--ink-2); }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .dot.work { background: var(--st-work); box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-work) 16%, transparent); }
 .dot.wait { background: var(--st-wait); box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-wait) 18%, transparent); }
 .dot.done { background: var(--st-done); box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-done) 16%, transparent); }
 .dot.idle { background: var(--st-idle); }
 .ses {
-  display: grid; grid-template-columns: 7px 1fr auto; column-gap: 9px; row-gap: 2px;
-  align-items: center; padding: 8px 14px 9px; margin: 0 6px; border-radius: 6px;
+  display: grid; grid-template-columns: 7px 1fr auto 16px; column-gap: 9px; row-gap: 2px;
+  align-items: center; padding: 8px 14px 9px 14px; margin: 0 6px; border-radius: 6px;
   cursor: pointer; border: 1px solid transparent;
 }
 .ses:hover { background: var(--hover); }
+/* #31 ③ 접힌 캔버스 묶음 안에서도 남아 있는 줄 — 기다리는 것이다. 왼쪽에 --st-wait 선 하나로 표시한다.
+   새 색이 아니다(⑥ 은 여전히 미정). "왜 접었는데 이건 보이나" 에 답하는 표시다. */
+.ses.pinned { box-shadow: inset 2px 0 0 var(--st-wait); }
 .ses.cur { background: var(--accent-2); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 .ses .who { font-size: 12.5px; font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ses .who span { color: var(--ink-3); font-weight: 400; }
 .ses .ago { font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
-.ses .msg { grid-column: 2 / 4; font-size: 11px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ses .msg { grid-column: 2 / 5; grid-row: 2; font-size: 11px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ses.wait .msg { color: var(--st-wait); }
+/* #31 ④ 목록 행의 닫기. **자리는 늘 잡아 둔다**(칸 하나) — 손이 닿을 때 칸이 생기면 줄이 흔들린다.
+   손이 닿거나(hover) 포커스가 들어와야 보이고, 그래야 눌린다. 키보드로는 Tab 으로 닿는다. */
+.ses .cl { grid-column: 4; grid-row: 1; width: 16px; height: 16px; opacity: 0; }
+.ses .cl::before { width: 8px; height: 8px; }
+.ses:hover .cl, .ses:focus-within .cl { opacity: 1; }
+/* 확인 줄이 열려 있는 동안 그 행의 둘째 줄은 물음이 차지한다 — 마지막 줄 글자는 잠시 내린다 */
+.ses.cfm-on .msg { display: none; }
+.ses .cfm { grid-column: 2 / 5; grid-row: 2; }
+.ses.closing, .tile.closing { opacity: .5; }
+.ses.closing .cl, .tile.closing .cl { pointer-events: none; }
 /* ⑪: 다른 캔버스의 세션에 붙는 이름표. "↗ off" 와 **같은 칸·같은 생김새**다 — 둘 다 "여기 안 보인다" 는 말이다.
    (한 세션에 둘이 같이 붙지는 않는다: 다른 캔버스면 이 캔버스에서 화면 밖인지를 따지지 않는다.) */
 .ses .off, .ses .cvb {
@@ -325,20 +366,46 @@ kbd {
 .tb .st.wait { color: var(--st-wait); background: color-mix(in srgb, var(--st-wait) 14%, transparent); }
 .tb .st.work { color: var(--st-work); background: color-mix(in srgb, var(--st-work) 14%, transparent); }
 .tb .st.done { color: var(--st-done); background: color-mix(in srgb, var(--st-done) 14%, transparent); }
-.xp, .rn {
+/* #31 ① 닫기(.cl)는 확대(.xp)·이름 바꾸기(.rn)와 **같은 규칙 한 줄** 안에 있다 — 크기·테·hover 가
+   두 곳에서 갈릴 자리를 안 만든다. .cl 만 <button> 이라(키보드로 닿아야 한다) 단추 기본값을 여기서 지운다. */
+.xp, .rn, .cl {
   width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--line-2); flex: none;
   display: grid; place-items: center; cursor: pointer; color: var(--ink-3); background: transparent;
+  padding: 0; font: inherit; -webkit-appearance: none; appearance: none;
 }
 .xp::before { content: ""; width: 7px; height: 7px; border: 1.5px solid currentColor; border-radius: 1px; }
+/* 획 둘(×). 글리프(✕)를 안 쓴 이유는 .rn 과 같다 — 폰트마다 다르게 그려진다(AGENTS.md).
+   hover 색을 빨강으로 하지 않는다: 빨강은 신호등의 것이다(AGENTS "신호등 색을 다른 데 쓰지 마라", #18 과 같은 자리).
+   그래서 .xp·.rn 과 **똑같이** --accent 로 든다. 부수는 것을 색이 아니라 확인 한 걸음이 막는다. */
+.cl::before {
+  content: ""; width: 9px; height: 9px;
+  background: linear-gradient(45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%),
+              linear-gradient(-45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%);
+}
 /* ⑫ 이름 바꾸기. 상자는 확대 상자(.xp)와 같은 몸이고 안의 그림만 다르다 — 획 하나(연필).
    글리프(✎)를 안 쓴 이유는 신호등과 같다: 폰트마다 다르게 그려진다(AGENTS.md). */
 .rn::before {
   content: ""; width: 10px; height: 10px;
   background: linear-gradient(135deg, transparent 0 40%, currentColor 40% 60%, transparent 60%);
 }
-.xp:hover, .rn:hover, .tile.focus .xp, .tile.focus .rn {
+.xp:hover, .rn:hover, .cl:hover, .cl:focus-visible,
+.tile.focus .xp, .tile.focus .rn, .tile.focus .cl {
   color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent);
 }
+/* ── 닫기 확인 (#31 ①④) ─────────────────────
+   타일 제목줄과 목록 행이 **같은 줄·같은 두 단추**를 쓴다. 있는 동안 host 는 .cfm-on 을 달고,
+   그동안 host 의 다른 자식은 내려간다 — 자식을 떼었다 붙이지 않아 방송이 와도 안 부서진다. */
+.tb.cfm-on > :not(.cfm) { display: none; }
+.cfm { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
+.cfm .q { font-size: 11px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cbtn {
+  flex: none; height: 18px; padding: 0 8px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--line-2); background: var(--btn); color: var(--ink-2);
+  font: 500 10.5px var(--mono); -webkit-appearance: none; appearance: none;
+}
+.cbtn:hover, .cbtn:focus-visible { border-color: var(--accent); color: var(--ink); }
+.cbtn.yes { margin-left: auto; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.cbtn.yes:hover, .cbtn.yes:focus-visible { color: var(--on-accent); opacity: .88; }
 /* 제자리에서 이름을 고치는 칸. 탭과 타일 제목이 같이 쓴다 — 글꼴은 놓인 자리에서 물려받는다 */
 .ed {
   font: inherit; color: var(--ink); background: var(--btn); min-width: 60px; width: 100%;

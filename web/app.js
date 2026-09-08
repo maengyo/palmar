@@ -13,7 +13,7 @@
 //      기본 크기 DEFAULT_W/H 도 ⑩ 에 딸린 미정이다.
 //   ⑪⑫ 캔버스 목록·순서·이름과 세션의 canvas·name 은 **데몬이 갖는다**(protocol.md "캔버스"). 이 파일은
 //      사본을 들고 hello 로 갈아 낀다. 브라우저에만 있는 것은 셋뿐이다 — 지금 보고 있는 탭, 목록 그룹의
-//      접힘(localStorage 'palmer-groups'), 미니맵. 데몬은 그 셋을 모른다(protocol.md "없는 것").
+//      접힘(localStorage 'palmer-groups' · 'palmer-canvas-groups'), 미니맵. 데몬은 그 셋을 모른다(protocol.md "없는 것").
 //      PROVISIONAL 둘: 이름 없는 캔버스의 이름표를 무엇으로 만드는지(⑪ 미정 → canvasLabel 하나에 있다),
 //      새 세션이 어느 캔버스에 뜨는지(⑪ "지금 캔버스인가 그 폴더의 캔버스인가" 미정 → launch 하나에 있다).
 //
@@ -39,6 +39,10 @@ const GROUPS = [
   ['idle',    'idle', 'idle'],
 ];
 const PILL = new Set(['waiting', 'working', 'done']);   // 알약을 보이는 상태 (목업: idle 은 알약 없음)
+// #31 ③: 캔버스로 묶은 뒤에도 **묶음 안의 차례는 GROUPS 그대로다**(기다림 → 일하는 중 → 끝남 → 대기).
+// unknown 은 idle 과 같은 자리(⑥ 임시, STATUS_CLASS 와 같은 규칙).
+const STATUS_RANK = { waiting: 0, working: 1, done: 2, idle: 3, unknown: 3 };
+function statusRank(s) { const r = STATUS_RANK[s.status]; return r === undefined ? 3 : r; }
 // #24: 목록 둘째 줄은 사람 말이어야 한다(목업). 훅 이벤트명을 짧은 문구로 바꾼다 — 표시만이고 상태 판정엔 안 쓴다.
 // 모르는 이벤트명은 그대로 보인다(fallback).
 const EVENT_PHRASE = {
@@ -51,6 +55,10 @@ const MIN_W = 220, MIN_H = 110;
 const LS_TILES = 'palmer-tiles';                        // ③ 임시
 const LS_THEME = 'palmer-theme';
 const LS_GROUPS = 'palmer-groups';                      // 목록 그룹 접힘 — 브라우저에만 있는 것(⑪)
+const LS_CVGROUPS = 'palmer-canvas-groups';             // 캔버스 묶음 접힘 — 캔버스 id 로 건다(#31 ③)
+// 캔버스가 사라진 세션이 떨어지는 자리. 계약상 없어야 하지만(protocol.md: hello 한 프레임 안에서 모든
+// session.canvas 가 그 canvases 안에 있다) 목록이 세션을 잃는 것보다는 낫다.
+const OTHER_KEY = '__other';
 const MM_PAD = 4;                                       // 미니맵 상자 안쪽 여백
 // 목업 .term 은 11.5px 이다. WebGL 렌더러는 셀 폭을 장치 픽셀로 **내림**한다(addon-webgl: device.char.width =
 // Math.floor(charWidth × dpr)) — 11.5px × 0.6em = 6.9px 가 dpr 1 에서 6px 셀이 되어 글자가 13% 잘리고 520px 에
@@ -86,8 +94,13 @@ const canvases = new Map();   // id → Canvas
 let canvasOrder = [];         // id[] — 데몬이 준 order 순
 let current = null;           // 지금 보고 있는 캔버스 id
 let groupsCollapsed = loadGroups();   // 목록 그룹 접힘 — 브라우저에만 있다
+let cvCollapsed = loadCvGroups();     // 캔버스 묶음 접힘 — 같은 자리, 캔버스 id 로 건다(#31 ③)
 let tabDragged = false;       // 끌어 놓은 직후의 click 은 전환이 아니다
 let tabsPending = false;      // 이름을 고치는 동안 미뤄 둔 탭 줄 다시 그리기
+// #31 ①④ 닫기. DELETE 를 낸 뒤 **여기서 지우지 않는다** — /events 의 gone 이 지운다(둘째 브라우저와 같이
+// 움직이려면 지우는 길이 하나여야 한다). 그동안 무엇이 도는 중인지만 들고 있는다.
+const closing = new Set();    // DELETE 를 냈고 아직 gone 이 안 온 세션 id
+let rowConfirm = null;        // 확인 줄이 열려 있는 목록 행의 세션 id (목록은 통째로 다시 지어진다)
 
 // ── 작은 도구 ──────────────────────────────────────────
 function el(tag, cls, text) {
@@ -111,6 +124,20 @@ function loadGroups() {
   catch (e) { return {}; }
 }
 function saveGroups() { try { localStorage.setItem(LS_GROUPS, JSON.stringify(groupsCollapsed)); } catch (e) {} }
+// 캔버스 묶음의 접힘은 **캔버스 id** 로 건다. 상태 키('waiting'…)와 한 통에 두면 어느 쪽을 솎아야 할지
+// 알 수 없어 통을 따로 뒀다. id 는 데몬이 살아 있는 동안만 뜻이 있으므로(protocol.md "아무것도 디스크에
+// 안 쓴다") 저장할 때 지금 없는 캔버스의 키를 솎는다 — 데몬이 다시 뜰 때마다 쌓이지 않게.
+function loadCvGroups() {
+  try { const v = JSON.parse(localStorage.getItem(LS_CVGROUPS) || '{}'); return v && typeof v === 'object' ? v : {}; }
+  catch (e) { return {}; }
+}
+function saveCvGroups() {
+  for (const k in cvCollapsed) {
+    if (!cvCollapsed[k]) delete cvCollapsed[k];                        // 펴 둔 것은 기본값이라 안 적는다
+    else if (k !== OTHER_KEY && !canvases.has(k)) delete cvCollapsed[k];
+  }
+  try { localStorage.setItem(LS_CVGROUPS, JSON.stringify(cvCollapsed)); } catch (e) {}
+}
 
 // ⑫ 제자리에서 이름 고치기 — 탭과 타일 제목이 같이 쓴다. 이름은 textContent 로만 넣는다
 // (protocol.md "이름은 셸에 안 닿는다": innerHTML 금지). 취소하면 있던 자식들을 그대로 되돌린다.
@@ -145,6 +172,82 @@ function inlineEdit(host, initial, commit, after) {
   inp.addEventListener('blur', () => end(true));
   // 이 칸 위의 누름은 탭 끌기·타일 끌기가 아니다
   for (const t of ['pointerdown', 'click', 'dblclick']) inp.addEventListener(t, (ev) => ev.stopPropagation());
+}
+
+// #31 ①④ 제자리에서 묻기 — **터미널은 누군가 돌리고 있는 일이다. 부수기 전에 한 번 묻는다.**
+// `window.confirm` 을 쓰지 않는 이유 둘: (1) 그것은 페이지 전체를 멈춰 /events 프레임 처리까지 멈춘다,
+// (2) 생김새를 우리가 못 정한다 — 신호등을 이모지로 안 그리는 것과 같은 이유다(AGENTS.md).
+// 확인 줄은 host 안에 놓이고, 있는 동안 host 는 `.cfm-on` 을 단다 — CSS 가 host 의 다른 자식을 내린다.
+// 자식을 떼었다 붙이지 않는 이유: 그 사이에 방송이 와서 host 를 고쳐도(Tile.update·noteOutput) 안 부서진다.
+let activeConfirm = null;   // 확인 줄은 한 번에 하나다 — 새로 열면 먼저 것을 거둔다(떠도는 리스너를 안 남긴다)
+function askClose(host, question, onYes, onEnd) {
+  if (host.querySelector('.cfm')) return null;
+  if (activeConfirm) activeConfirm.cancel();
+  const row = el('span', 'cfm');
+  const yes = el('button', 'cbtn yes', 'Close');
+  const no = el('button', 'cbtn', 'Cancel');
+  yes.type = 'button'; no.type = 'button';
+  yes.title = question;
+  row.append(el('span', 'q', question), yes, no);
+  let done = false;
+  const end = (ok) => {
+    if (done) return;
+    done = true;
+    document.removeEventListener('pointerdown', outside, true);
+    row.remove();
+    host.classList.remove('cfm-on');
+    if (activeConfirm && activeConfirm.row === row) activeConfirm = null;
+    if (onEnd) onEnd(ok);
+    if (ok) onYes();
+  };
+  // 밖을 누르면 그만둔다. **focusout 으로 그만두면 안 된다** — 크롬(맥)은 단추를 마우스로 눌러도 포커스를
+  // 안 주므로 "Close" 를 누르는 pointerdown 이 focusout 을 먼저 내고, 그 취소가 click 보다 앞서 들어온다.
+  function outside(ev) { if (!row.contains(ev.target)) end(false); }
+  document.addEventListener('pointerdown', outside, true);
+  yes.addEventListener('click', (ev) => { ev.stopPropagation(); end(true); });
+  no.addEventListener('click', (ev) => { ev.stopPropagation(); end(false); });
+  for (const t of ['pointerdown', 'click', 'dblclick']) row.addEventListener(t, (ev) => ev.stopPropagation());
+  row.addEventListener('keydown', (ev) => {
+    ev.stopPropagation();                      // Esc 는 이 줄의 것이다 — 펼침 되돌리기에 안 넘긴다
+    if (ev.key === 'Escape') { ev.preventDefault(); end(false); }
+  });
+  host.appendChild(row);
+  host.classList.add('cfm-on');
+  yes.focus();                                 // 키보드만으로 닫을 수 있어야 한다. Esc 가 그만두기다
+  activeConfirm = { row, cancel: () => end(false) };
+  return activeConfirm;
+}
+
+// #31 ① DELETE /api/sessions/<id>. **여기서 지우지 않는다** — /events 의 gone 이 지운다.
+// 낙관적으로 지우고 gone 도 받으면 지우는 길이 둘이 되고, 그때 둘째 브라우저와 어긋난다(protocol.md
+// "낸 쪽도 방송을 되받는다"). 실패하면 표시만 되돌리고 토스트로 말한다.
+async function closeSession(id) {
+  if (closing.has(id)) return;
+  closing.add(id);
+  paintClosing(id);
+  try {
+    await api('DELETE', '/api/sessions/' + encodeURIComponent(id));
+  } catch (e) {
+    closing.delete(id);
+    paintClosing(id);
+    // **404 는 성공이다** — 둘째 브라우저(또는 셸 종료)가 먼저 닫았고, 사용자가 시킨 결과는 이미 나 있다.
+    // 2026-09-08 실측(f2.py, 브라우저 둘이 같은 세션의 확인을 열고 거의 동시에 Close): A 가 204,
+    // B 가 404 를 받고 B 에만 'close terminal: Not Found' 토스트가 떴다 — 닫혔는데 실패를 통보받는다.
+    // 데몬은 계약대로다(protocol.md `DELETE`: 없으면 404). 지우는 것은 `gone` 하나뿐이므로 여기서
+    // 아무것도 안 한다 — 재접속도 되살리지 않는다(404 가 gone 보다 먼저 와도 없는 pane 에 다시 붙지 않게).
+    if (e.status === 404) return;
+    // 안 죽었다 — 그동안 미뤄 둔 pane 재접속을 여기서 되살린다(위 onclose 참고)
+    const t = tiles.get(id);
+    if (t && !t.closed && !t.ws) t.connect();
+    toast(['close terminal: ' + e.message]);
+  }
+}
+function paintClosing(id) {
+  const on = closing.has(id);
+  const t = tiles.get(id);
+  if (t) t.el.classList.toggle('closing', on);
+  const it = items.get(id);
+  if (it) it.classList.toggle('closing', on);
 }
 
 let toastTimer = null;
@@ -182,6 +285,7 @@ function applyTheme(mode) {   // mode: 'light' | 'dark' | null(system)
   themeBtn.dataset.mode = mode || 'system';
   themeBtn.title = 'theme: ' + (mode || 'system') + ' — click to change';
   try { if (mode) localStorage.setItem(LS_THEME, mode); else localStorage.removeItem(LS_THEME); } catch (e) {}
+  if (typeof renderBadge === 'function') renderBadge(true);   // 파비콘 색은 --st-* 를 읽는다
   rethemeTerminals();
 }
 function cycleTheme() {
@@ -226,7 +330,13 @@ async function api(method, path, body) {
   const text = await r.text();
   let data = null;
   if (text) { try { data = JSON.parse(text); } catch (e) { data = null; } }
-  if (!r.ok) throw new Error((data && data.error) || (r.status + ' ' + r.statusText));
+  // 실패에 **상태를 실어 준다** — 부르는 쪽이 "남이 먼저 했다"(404·409)와 진짜 실패를 가려야 한다.
+  // 몸의 한 줄은 그대로 message 다(protocol.md: 4xx 의 몸은 `{"error": "사람이 읽는 한 줄"}`).
+  if (!r.ok) {
+    const err = new Error((data && data.error) || (r.status + ' ' + r.statusText));
+    err.status = r.status;
+    throw err;
+  }
   return data;
 }
 
@@ -256,7 +366,13 @@ class Tile {
     this.szEl = el('span', 'sz');
     this.rnEl = el('span', 'rn'); this.rnEl.title = 'rename (or double-click the name)';
     this.xpEl = el('span', 'xp'); this.xpEl.title = 'expand';
-    tb.append(this.dotEl, this.nameEl, this.pillEl, this.szEl, this.rnEl, this.xpEl);
+    // #31 ① 닫기. **상자는 .rn·.xp 와 같은 몸이다**(같은 CSS 규칙 한 줄에 들어 있다 — 크기·테·hover 가
+    // 갈릴 자리가 없다) 그리고 같은 자리에 이어 붙는다. 안의 그림만 다르다 — 획 둘(×).
+    // 글리프(✕)를 안 쓴 이유는 .rn 과 같다: 폰트마다 다르게 그려진다(AGENTS.md).
+    // <button> 인 것만 다르다 — 부수는 것은 키보드로도 닿아야 한다(#31 ④). 생김새는 span 과 같다.
+    this.clEl = el('button', 'cl'); this.clEl.type = 'button';
+    this.clEl.title = 'close terminal'; this.clEl.setAttribute('aria-label', 'close terminal');
+    tb.append(this.dotEl, this.nameEl, this.pillEl, this.szEl, this.rnEl, this.xpEl, this.clEl);
     this.termEl = el('div', 'term');
     this.gripEl = el('div', 'grip');
     e.append(tb, this.termEl, this.gripEl);
@@ -305,6 +421,7 @@ class Tile {
 
     this.xpEl.addEventListener('click', (ev) => { ev.stopPropagation(); setMax(this, !this.el.classList.contains('max')); });
     this.rnEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.rename(); });
+    this.clEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.askClose(); });
     this.nameEl.addEventListener('dblclick', (ev) => { ev.stopPropagation(); this.rename(); });
     e.addEventListener('pointerdown', () => focusTile(this.id, { user: true, keyboard: false }), true);
     this.dragify();
@@ -325,6 +442,9 @@ class Tile {
       catch (e) { toast(['rename: ' + e.message]); }
     }, () => { if (!this.closed) this.update(this.s); });   // 고치는 동안 온 방송을 지금 반영한다
   }
+
+  // #31 ① 제목줄 안에서 묻는다. 확인이 열려 있는 동안 제목줄의 다른 것은 CSS 가 내린다(.tb.cfm-on).
+  askClose() { askClose(this.el.firstChild, 'Close this terminal?', () => closeSession(this.id)); }
 
   // ── pane 채널 /pty/<id> ──
   connect() {
@@ -372,6 +492,10 @@ class Tile {
       if (this.ws !== ws) return;
       this.ws = null;
       if (this.closed || !sessions.has(this.id)) return;
+      // #31 ①: 우리가 닫아 달라고 한 pane 이다. 데몬은 pane 소켓을 먼저 닫고 gone 을 그 뒤에 보낼 수 있는데,
+      // 그 사이에 다시 두드리면 /pty/<id> 가 404 로 답해 콘솔에 오류가 남는다(실측: dev-stub --delay-gone 1.2).
+      // gone 이 오면 dispose 가 이 타일을 거둔다 — **여기서 세션을 지우는 것이 아니다.**
+      if (closing.has(this.id)) return;
       this.retry = Math.min(10000, this.retry ? this.retry * 2 : 500);
       setTimeout(() => this.connect(), this.retry);
     };
@@ -436,7 +560,8 @@ class Tile {
     const bar = this.el.firstChild, grip = this.gripEl;
     let mode = null, sx = 0, sy = 0, ox = 0, oy = 0, ow = 0, oh = 0;
     const down = (m) => (ev) => {
-      if (ev.button !== 0 || ev.target.closest('.xp, .rn, .ed') || this.el.classList.contains('max')) return;
+      // 제목줄 위의 단추·입력칸·확인 줄은 끌기가 아니다 (#31: .cl 과 .cfm 이 여기 붙었다)
+      if (ev.button !== 0 || ev.target.closest('.xp, .rn, .cl, .ed, .cfm') || this.el.classList.contains('max')) return;
       mode = m; sx = ev.clientX; sy = ev.clientY;
       ({ x: ox, y: oy, w: ow, h: oh } = this.rect());
       this.el.classList.add('drag');
@@ -544,6 +669,18 @@ function focusTile(id, opts) {
   // done 은 사용자가 그 창을 봐야 꺼진다 — 사용자의 손이 닿은 포커스만 "봤다" 로 친다
   if (opts.user && t.s.status === 'done') sendSeen(id);
   if (opts.keyboard !== false) t.term.focus();
+}
+
+// 그 세션 앞으로 간다. 목록 클릭과 알림 클릭이 같은 길을 쓴다 (#40).
+function goToSession(id) {
+  const tile = tiles.get(id);
+  if (!tile) return;
+  // ⑪ 다른 캔버스의 것이면 그 캔버스로 넘어가서 그 창으로 간다
+  if (current !== null && sessions.has(id) && sessions.get(id).canvas !== current) switchCanvas(sessions.get(id).canvas);
+  if (maxed && maxed !== tile) setMax(maxed, false);
+  tile.el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  focusTile(id, { user: true });
+  tile.el.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.012)' }, { transform: 'scale(1)' }], { duration: 260 });
 }
 
 function sendSeen(id) {
@@ -934,11 +1071,20 @@ function msgText(s) {
   if (s.status === 'unknown') return s.agent ? 'no hook event yet' : 'no hook seen — status unknown';
   return 'just opened';
 }
-function buildItem(s) {
+// 목록 행의 확인 줄. 어느 행이 열려 있는지를 들고 있어야 다시 지어도 살아남는다.
+function openRowConfirm(it, s) {
+  const h = askClose(it, 'Close this terminal?', () => closeSession(s.id),
+                     () => { if (rowConfirm === s.id) rowConfirm = null; });
+  if (h) rowConfirm = s.id;
+}
+function buildItem(s, pinned) {
   const cls = STATUS_CLASS[s.status] || 'idle';
   const t = tiles.get(s.id);
-  const it = el('div', 'ses ' + cls + (s.id === focused ? ' cur' : ''));
+  // pinned: 접힌 캔버스 묶음 안에서도 남아 있는 줄 — 기다리는 것은 절대 숨지 않는다(#31 ③, decisions.md ⑪)
+  const it = el('div', 'ses ' + cls + (s.id === focused ? ' cur' : '') +
+                      (pinned ? ' pinned' : '') + (closing.has(s.id) ? ' closing' : ''));
   it.dataset.id = s.id;
+  if (pinned) it.title = 'waiting on you — kept visible while this group is collapsed';
   it.appendChild(el('span', 'dot ' + cls));
   // ⑫ 사람이 준 이름이 이긴다. 없으면 지금까지의 경로 이름표.
   const who = el('span', 'who');
@@ -957,17 +1103,17 @@ function buildItem(s) {
   it._agoEl = ago;              // 스크롤 중에 "↗ off" 하나만 뒤집으려고 붙들어 둔다(paintOff)
   ago.appendChild(it._ago);
   it._msg = el('span', 'msg', msgText(s));
-  it.append(who, ago, it._msg);
-  it.addEventListener('click', () => {
-    const tile = tiles.get(s.id);
-    if (!tile) return;
-    // ⑪ 다른 캔버스의 것을 누르면 그 캔버스로 넘어가서 그 창으로 간다
-    if (current !== null && sessions.has(s.id) && sessions.get(s.id).canvas !== current) switchCanvas(sessions.get(s.id).canvas);
-    if (maxed && maxed !== tile) setMax(maxed, false);
-    tile.el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
-    focusTile(s.id, { user: true });
-    tile.el.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.012)' }, { transform: 'scale(1)' }], { duration: 260 });
-  });
+  // #31 ④ 목록 행에서도 닫는다 — 사용자가 두 자리 다 짚었기 때문이다. 타일의 것과 **같은 상자·같은 물음**이고,
+  // 평소엔 안 보이다가 행에 손이 닿거나(hover) 포커스가 들어오면 뜬다. <button> 이라 Tab 으로 닿는다.
+  const cl = el('button', 'cl');
+  cl.type = 'button';
+  cl.title = 'close terminal';
+  cl.setAttribute('aria-label', 'close terminal — ' + (s.name || shortPath(s.cwd)));
+  cl.addEventListener('click', (ev) => { ev.stopPropagation(); openRowConfirm(it, s); });
+  it.append(who, ago, it._msg, cl);
+  // 목록은 세션 프레임마다 통째로 다시 지어진다 — 열려 있던 확인 줄을 여기서 되살린다(안 그러면 훅 하나에 사라진다)
+  if (rowConfirm === s.id) openRowConfirm(it, s);
+  it.addEventListener('click', () => goToSession(s.id));
   return it;
 }
 // "↗ off" 하나만 제자리에서 뒤집는다. 스크롤 경로에서 부르는 것이라 목록을 다시 짓지 않는다(refreshOff 참고).
@@ -987,25 +1133,124 @@ function toggleGroup(key) {
   saveGroups();
   renderList();
 }
-function renderList() {
+function cvGroupOff(id) { return !!cvCollapsed[id] && !searchEl.value.trim(); }
+function toggleCvGroup(id) {
+  cvCollapsed[id] = !cvCollapsed[id];
+  saveCvGroups();
+  renderList();
+}
+
+// ── 목록의 묶음 (#31 ③) ────────────────────────────────
+// **캔버스로 묶는다 — 그런데 기다리는 것은 절대 못 숨긴다.**
+//
+// 이 둘은 원래 서로 반대였다. 목업을 견줄 때 캔버스 우선 묶기를 반대한 근거가 정확히
+// "접힌 묶음 안에 기다리는 것이 파묻힌다" 였고, **"기다리는 것이 어디 있든 맨 위" 는 palmer 가
+// 존재하는 이유**다(decisions.md ⑪). 사용자가 매일 쓰면서 캔버스 묶기를 요구했으므로(#31) 묶되,
+// 보장은 두 겹으로 지킨다:
+//   1. **기다리는 세션이 있는 캔버스 묶음이 맨 위로 뜬다.** 나머지는 데몬이 준 캔버스 차례 그대로다
+//      (Array.sort 는 안정 정렬이라 같은 편끼리는 차례가 안 흔들린다).
+//   2. **접힌 묶음도 기다리는 줄은 그대로 그린다.** 접힘이 감추는 것은 나머지뿐이고, 감춘 개수는
+//      묶음 아래 "+N more, collapsed" 한 줄로 말한다. 머리글의 수는 언제나 **캔버스 전체**다.
+// 그래서 접어 두어도 기다리는 줄은 목록 맨 위 근처에 남는다 — 두 겹 다 없어야 파묻힌다.
+// 줄은 한 세션에 하나다(위에 따로 복사해 두지 않는다) — 같은 것이 둘로 보이면 수가 거짓말을 한다.
+function renderByCanvas() {
+  const buckets = new Map();
+  for (const id of canvasOrder) buckets.set(id, []);
+  for (const s of sessions.values()) {
+    const k = buckets.has(s.canvas) ? s.canvas : OTHER_KEY;
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(s);
+  }
+  const keys = [...buckets.keys()].filter((k) => buckets.get(k).length);
+  const waits = (k) => buckets.get(k).some((s) => s.status === 'waiting');
+  keys.sort((a, b) => (waits(b) ? 1 : 0) - (waits(a) ? 1 : 0));   // 1) 기다리는 캔버스가 위로
+  for (const k of keys) {
+    const arr = buckets.get(k);
+    arr.sort((a, b) => statusRank(a) - statusRank(b) || a.created - b.created);   // 묶음 안은 상태 차례
+    const label = k === OTHER_KEY ? 'no canvas' : canvasLabel(canvasById(k));
+    const off = cvGroupOff(k);
+    const waiting = arr.filter((s) => s.status === 'waiting');
+    const shown = off ? waiting : arr;
+    const g = el('div', 'grp cvg' + (off ? ' collapsed' : '') + (k === current ? ' cur' : ''));
+    g.dataset.canvas = k;
+    g.title = (off ? 'expand ' : 'collapse ') + label +
+              (waiting.length ? ' — ' + waiting.length + ' waiting stay visible either way' : '');
+    g.append(el('span', 'car', off ? '▸' : '▾'), el('span', 'nm', label));
+    // 머리글의 점은 탭의 점과 같은 뜻·같은 색이다(protocol.md "탭의 점"): 기다리는 것이 있다. 새 색은 없다(⑥).
+    if (waiting.length) g.appendChild(el('span', 'dot wait'));
+    g.appendChild(el('span', 'ct', String(arr.length)));       // 접혀도 **캔버스 전체**의 수다
+    g.addEventListener('click', () => toggleCvGroup(k));
+    listEl.appendChild(g);
+    for (const s of shown) { const it = buildItem(s, off); items.set(s.id, it); listEl.appendChild(it); }
+    if (arr.length > shown.length) {
+      const more = el('div', 'grest', '+' + (arr.length - shown.length) + ' more, collapsed');
+      more.title = 'expand ' + label;
+      more.addEventListener('click', () => toggleCvGroup(k));
+      listEl.appendChild(more);
+    }
+  }
+}
+
+// 캔버스를 하나도 못 받은 데몬(renderTabs 가 탭 줄을 내리는 그 경우)에서는 옛 길 그대로 상태로 묶는다.
+// **여기서도 기다리는 것은 못 숨긴다** — 그 묶음만 접히지 않는다(아래).
+function renderByStatus() {
   const by = { waiting: [], working: [], done: [], idle: [] };
   for (const s of sessions.values()) (by[s.status] || by.idle).push(s);
   for (const k in by) by[k].sort((a, b) => a.created - b.created);   // 목록의 자리는 안 움직인다 — 만든 순서
-  listEl.textContent = '';
-  items.clear();
   for (const [key, cls, label] of GROUPS) {
     const arr = by[key];
     if (!arr.length) continue;
+    // **기다리는 묶음은 접히지 않는다.** 캔버스 묶음에서는 접어도 기다리는 줄이 남지만, 여기서는
+    // 묶음 전체가 기다리는 것이라 접는 순간 기다리는 것이 하나도 안 보인다 — decisions.md ⑪ 은
+    // 조건 없이 "기다리는 것은 절대 못 숨긴다" 이고, 그 보장이 이 길에서만 빠져 있었다.
+    // 캐럿을 아예 안 그린다: 눌러도 아무 일 없는 캐럿보다 없는 캐럿이 정직하다.
+    // 계약상 캔버스가 0개인 순간은 없어(protocol.md: 마지막 하나는 409) 지금 데몬으로는 이 길에 닿지
+    // 않지만, 캔버스를 모르는 데몬(갈아 끼울 Bun 판)이 그 보장까지 잃을 이유는 없다.
+    const pin = key === 'waiting';
     // 접기·펴기는 오른쪽 트리와 같은 캐럿·같은 몸짓이다. 접혀도 **개수는 남는다**.
-    const off = collapsed(key);
-    const g = el('div', 'grp' + (off ? ' collapsed' : ''));
+    const off = !pin && collapsed(key);
+    const g = el('div', 'grp' + (off ? ' collapsed' : '') + (pin ? ' nofold' : ''));
     g.dataset.key = key;
-    g.title = (off ? 'expand ' : 'collapse ') + label;
-    g.append(el('span', 'car', off ? '▸' : '▾'), el('span', 'dot ' + cls), label, el('span', 'ct', String(arr.length)));
-    g.addEventListener('click', () => toggleGroup(key));
+    g.title = pin ? label + ' — always shown' : (off ? 'expand ' : 'collapse ') + label;
+    g.append(el('span', 'car', pin ? '' : (off ? '▸' : '▾')), el('span', 'dot ' + cls), label,
+             el('span', 'ct', String(arr.length)));
+    if (!pin) g.addEventListener('click', () => toggleGroup(key));
     listEl.appendChild(g);
     if (off) continue;
     for (const s of arr) { const it = buildItem(s); items.set(s.id, it); listEl.appendChild(it); }
+  }
+}
+
+function renderList() {
+  // #31 ④: 확인 줄이 열린 채로 목록을 다시 지으면 **그 줄의 포커스가 body 로 떨어진다.**
+  // buildItem 이 부르는 openRowConfirm → askClose 의 `yes.focus()` 는 그 행이 아직 document 에
+  // 안 붙어 있어서 아무 일도 안 한다(detached 엘리먼트의 focus() 는 무시된다). 줄은 그대로 보이는데
+  // 죽어 있게 된다 — 2026-09-08 통합 실측: 확인을 열어 둔 채 **다른 세션의 훅 하나**가 오면
+  // 그 뒤로 Enter 가 Close 를 안 누르고(DELETE 0건), Escape 도 그 줄이 아니라 document 로 갔다.
+  // 훅·resize 방송은 늘 오므로 키보드로 닫는 길(#31 ④ 가 <button> 을 쓴 이유)이 사실상 없어진다.
+  // 그래서 다시 짓기 **전에** 그 줄이 포커스를 갖고 있었는지 재고, 다 붙인 **뒤에** 돌려준다.
+  // 안 갖고 있었으면 건드리지 않는다 — 남이 쓰던 포커스(검색칸·터미널)를 뺏으면 안 된다.
+  //
+  // **어느 단추였는지도 같이 잰다.** 언제나 Close 로 돌려주면 사용자가 Cancel 에 둔 손이 방송 하나에
+  // Close 로 옮겨 가고, 같은 Enter 가 그만두기에서 부수기로 바뀐다 — 2026-09-08 실측(f3.py):
+  // Cancel 에 포커스를 두고 **다른 세션의 훅 하나**를 넣으니 `cbtn yes`/'Close' 로 옮겨 갔고
+  // 그 자리의 Enter 가 `DELETE /api/sessions/<id>` 를 내 세션이 죽었다. 타일 제목줄은 다시 짓지
+  // 않아 이런 일이 없다(같은 실측에서 'Cancel' 그대로였다) — 목록만 이 자리가 필요하다.
+  const keepEl = (rowConfirm && document.activeElement && document.activeElement.closest &&
+                  document.activeElement.closest('#list .cfm')) ? document.activeElement : null;
+  const keepYes = keepEl ? keepEl.classList.contains('yes') : false;
+  listEl.textContent = '';
+  items.clear();
+  if (canvasOrder.length) renderByCanvas(); else renderByStatus();
+  // #31 ④: **이번 판에 그 줄이 안 그려졌으면 확인은 끝난 것이다.** 접힌 캔버스 묶음은 waiting 인 줄만
+  // 그리므로(renderByCanvas), 훅 하나가 그 세션을 waiting 밖으로 밀면 줄이 조용히 빠진다. 여기서
+  // 안 거두면 rowConfirm 이 남아, 그 세션이 **다시 waiting 이 되는 순간** buildItem 이 아무도 안 물은
+  // 파괴 확인 줄을 되살린다(2026-09-08 실측 f1.py: 되살아난 Close 가 elementFromPoint 로 잡히는
+  // 자리에 있었고, 하필 사용자가 답하러 누르러 가는 그 기다리는 줄이었다).
+  // `document.contains` 로 가려 거두는 것이 중요하다 — 타일 쪽 확인은 목록을 다시 지어도 그대로 있다.
+  if (rowConfirm && !items.has(rowConfirm)) {
+    if (activeConfirm && !document.contains(activeConfirm.row)) activeConfirm.cancel();
+    rowConfirm = null;
   }
   if (!sessions.size) {
     listEl.appendChild(el('div', 'empty', 'No terminals yet. Pick a folder on the right and press "Open terminal here".'));
@@ -1013,6 +1258,11 @@ function renderList() {
   $('#count').textContent = String(sessions.size);
   $('#sb-n').textContent = String(sessions.size);
   applyFilter();
+  if (keepEl && rowConfirm) {
+    const it = items.get(rowConfirm);
+    const b = it && $(keepYes ? '.cfm .cbtn.yes' : '.cfm .cbtn:not(.yes)', it);
+    if (b) b.focus();
+  }
 }
 setInterval(() => { for (const [id, it] of items) it._ago.nodeValue = agoText(id); }, 10000);
 
@@ -1047,12 +1297,123 @@ addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && e.target === searchEl) { searchEl.value = ''; onSearch(); searchEl.blur(); }
 });
 
+// ── 밖으로 나가는 신호 (#40) ──────────────────────────────
+// 신호등은 palmer 를 보고 있을 때만 값이 있다. 에디터가 위에 떠 있으면 아무한테도 안 닿는데,
+// 하필 그때가 신호등이 필요한 순간이다. 두 층으로 내보낸다:
+//   탭 제목·파비콘 — 브라우저가 보일 때의 곁눈질. 공짜다.
+//   알림 — 창이 덮였을 때의 끼어들기. 127.0.0.1 은 secure context 라 HTTPS 없이도 된다
+//          (2026-09-08 실측: isSecureContext=true, Notification.permission='default').
+const LS_NOTIFY = 'palmer.notify';
+const NOTIFY_COALESCE_MS = 500;
+//: "나를 부르는" 상태. **done 도 넣는다** — 훅이 없는 에이전트는 waiting 을 낼 수 없고(#38 은 제목으로
+//: 읽으니 working/done/idle 만 나온다), 회사에서 쓰는 codex 가 정확히 그 경우다(#15).
+const WANTS_YOU = new Set(['waiting', 'done']);
+
+let notifyOn = false;
+try { notifyOn = localStorage.getItem(LS_NOTIFY) === '1'; } catch (e) {}
+
+function labelOf(s) { return s ? (s.name || shortPath(s.cwd)) : '?'; }
+function wantsYouIds() {
+  const out = [];
+  for (const s of sessions.values()) if (WANTS_YOU.has(s.status)) out.push(s.id);
+  return out;
+}
+
+// 탭 제목과 파비콘. **색은 CSS 의 --st-* 를 읽어 쓴다** — JS 에 색을 새로 두지 않는다(AGENTS.md).
+const favEl = document.querySelector('link[rel="icon"]');
+let badgeKey = null;
+function renderBadge(force) {
+  const n = wantsYouIds().length;
+  const key = n + '|' + (document.documentElement.dataset.theme || 'system');
+  if (!force && key === badgeKey) return;      // 세션 프레임마다 캔버스를 다시 그리지 않는다
+  badgeKey = key;
+  document.title = n ? '(' + n + ') palmer' : 'palmer';
+  if (!favEl) return;
+  const css = getComputedStyle(document.documentElement);
+  const c = document.createElement('canvas'); c.width = c.height = 32;
+  const g = c.getContext('2d');
+  if (!g) return;
+  g.beginPath(); g.arc(16, 16, n ? 13 : 7, 0, Math.PI * 2);
+  // 16px 에서 숫자는 못 읽는다 — 점의 크기와 색으로만 말한다.
+  g.fillStyle = (css.getPropertyValue(n ? '--st-wait' : '--st-idle') || '').trim() || '#888';
+  g.fill();
+  try { favEl.href = c.toDataURL('image/png'); } catch (e) {}
+}
+
+const notifyQueue = new Set();
+let notifyTimer = null;
+
+// **상태로 바뀌는 순간에만** 부른다. 상태가 이어지는 동안 다시 울리면 사람들은 알림을 통째로 끈다.
+function onWantsYou(id) {
+  if (!notifyOn || !('Notification' in window) || Notification.permission !== 'granted') return;
+  // palmer 를 보고 있으면 신호등으로 충분하다. hasFocus 는 "다른 창이 위에 있다" 와 "다른 탭이다" 를
+  // 둘 다 잡는다 — visibilityState 는 창이 덮여도 'visible' 이라 여기서는 쓸 수 없다.
+  if (document.hasFocus()) return;
+  notifyQueue.add(id);
+  if (notifyTimer === null) notifyTimer = setTimeout(flushNotify, NOTIFY_COALESCE_MS);
+}
+
+function flushNotify() {
+  notifyTimer = null;
+  const ids = [...notifyQueue].filter((id) => {
+    const s = sessions.get(id);
+    return s && WANTS_YOU.has(s.status);      // 그 사이 스스로 풀렸으면 안 울린다
+  });
+  notifyQueue.clear();
+  if (!ids.length || document.hasFocus()) return;
+  const one = ids.length === 1 ? sessions.get(ids[0]) : null;
+  let n;
+  try {
+    n = new Notification(
+      one ? labelOf(one) + ' wants you' : ids.length + ' terminals want you',
+      { body: one ? one.cwd : ids.map((i) => labelOf(sessions.get(i))).join(', '),
+        tag: 'palmer-wants-you' });          // 같은 tag 라 쌓이지 않고 갈아 끼워진다
+  } catch (e) { return; }
+  // 눌렀는데 그 터미널로 안 가면 "가서 찾아봐" 라고 말하는 셈이라 원래 문제를 그대로 둔다.
+  n.onclick = () => { window.focus(); goToSession(ids[0]); n.close(); };
+}
+
+const bellEl = document.getElementById('bell');
+function setNotify(on) {
+  notifyOn = on;
+  try { if (on) localStorage.setItem(LS_NOTIFY, '1'); else localStorage.removeItem(LS_NOTIFY); } catch (e) {}
+  if (bellEl) {
+    bellEl.dataset.on = on ? '1' : '0';
+    bellEl.title = on ? 'notifications on — click to turn off'
+                      : 'notify me when a terminal wants me (off)';
+  }
+}
+async function toggleNotify() {
+  if (notifyOn) { setNotify(false); return; }
+  if (!('Notification' in window)) { toast(['this browser has no Notification API']); return; }
+  let perm = Notification.permission;
+  // 켜는 손짓이 있을 때만 묻는다 — 뜨자마자 권한을 묻는 것은 모두가 싫어하는 짓이고,
+  // 브라우저도 손짓을 요구한다. 권한은 **포트까지 포함한 origin** 별이라 --port 를 바꾸면 다시 묻는다.
+  if (perm === 'default') { try { perm = await Notification.requestPermission(); } catch (e) { perm = 'denied'; } }
+  if (perm !== 'granted') {
+    toast(['notifications are blocked for ' + location.origin, 'allow them in the browser, then try again']);
+    return;
+  }
+  setNotify(true);
+}
+if (bellEl) {
+  bellEl.addEventListener('click', toggleNotify);
+  bellEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleNotify(); }
+  });
+}
+
 // ── 세션 반영 ───────────────────────────────────────────
 function upsert(s) {
   const old = sessions.get(s.id);
   if (!old) changedAt.set(s.id, (s.created || Date.now() / 1000) * 1000);
-  else if (old.status !== s.status) changedAt.set(s.id, Date.now());
+  else if (old.status !== s.status) {
+    changedAt.set(s.id, Date.now());
+    // 전이할 때만이다. WANTS_YOU 안에서 waiting ↔ done 으로 옮겨 다니는 것은 새 부름이 아니다.
+    if (WANTS_YOU.has(s.status) && !WANTS_YOU.has(old.status)) onWantsYou(s.id);
+  }
   sessions.set(s.id, s);
+  renderBadge();
   let t = tiles.get(s.id);
   if (!t) {
     t = new Tile(s);
@@ -1078,7 +1439,15 @@ function remove(id) {
   const t = tiles.get(id);
   if (t) { if (maxed === t) setMax(t, false); t.dispose(); tiles.delete(id); }
   sessions.delete(id);
+  notifyQueue.delete(id);
+  renderBadge();
   changedAt.delete(id);
+  closing.delete(id);                        // #31 ①: gone 이 왔다 — 여기가 진짜로 지우는 유일한 자리다
+  // 이 세션에 열려 있던 확인 줄은 거둔다. 그냥 두고 목록을 다시 지으면 그 줄은 DOM 에서만 떨어지고
+  // document 에 걸어 둔 pointerdown 리스너가 남는다(askClose 의 outside).
+  if (rowConfirm === id && activeConfirm) activeConfirm.cancel();
+  rowConfirm = rowConfirm === id ? null : rowConfirm;
+  if (activeConfirm && !document.contains(activeConfirm.row)) activeConfirm.cancel();
   delete layout[id];   // id 는 다시 쓰이지 않는다 — 남기면 쌓인다
   saveLayout();
   if (focused === id) focused = null;
@@ -1284,7 +1653,8 @@ addEventListener('keydown', (e) => {
 
 // 콘솔·개발 도구에서 들여다보는 손잡이. 제품 동작은 이것에 기대지 않는다.
 window.palmer = { sessions, tiles, canvases, layout: () => layout,
-                  canvas: () => current, groups: () => groupsCollapsed };
+                  canvas: () => current, groups: () => groupsCollapsed,
+                  cvGroups: () => cvCollapsed, closing: () => [...closing] };
 
 // ── 시작 ────────────────────────────────────────────────
 function boot() {
@@ -1292,7 +1662,9 @@ function boot() {
     toast(['xterm.js is missing under web/vendor/ — see web/vendor/VERSIONS']);
     return;
   }
+  setNotify(notifyOn && 'Notification' in window && Notification.permission === 'granted');
   applyTheme(storedTheme());
+  renderBadge(true);
   renderTabs();        // 캔버스가 오기 전에는 탭 줄이 내려가 있다 — hello 가 오면 그때 뜬다
   connectEvents();
   loadRoots();
