@@ -526,9 +526,16 @@ class Tile {
     if (ta) {
       ta.addEventListener('compositionstart', () => { this.composing = true; this.sawComposition = true; });
       ta.addEventListener('compositionend', () => { this.composing = false; });
+      // **표시는 그 키와 함께 사라져야 한다.** `kdSeen` 은 아래 input 리스너 안에서만 지워지는데,
+      // xterm 이 직접 처리하는 키(Enter·Backspace·Tab·화살표)는 `preventDefault` 로 끝나서
+      // input 이 아예 안 온다. 그러면 표시가 켜진 채 남고, **다음에 친 한글의 첫 자모**가
+      // "평범한 키였다" 로 잘못 읽혀 낱자 그대로 셸에 나간다 — Enter 한 번 뒤의 "나" 가 "ㄴ나".
+      // 평범한 키는 keydown → input → keyup 이라 표시는 input 이 볼 때까지 살아 있다.
+      ta.addEventListener('keyup', () => { this.kdSeen = false; });
       // 안전핀. compositionstart 만 오고 end 가 영영 안 오면 그 판이 키를 통째로 삼킨다 —
       // 그 상태로 갇히느니 포커스가 떠날 때 푼다.
-      ta.addEventListener('blur', () => { this.composing = false; this.imeFlush(); });
+      // 키를 누른 채 포커스가 떠나면 keyup 이 여기로 안 온다 — 나갈 때도 내린다.
+      ta.addEventListener('blur', () => { this.composing = false; this.kdSeen = false; this.imeFlush(); });
     }
     // ── 조합 이벤트를 안 내는 브라우저 (사파리) ─────────────────────────
     // 실측(2026-09-09, Safari 18.6, 한글): `compositionstart`·`compositionend` 가 **한 번도 안 온다.**
