@@ -194,6 +194,23 @@ id 는 22자라 `order` 와 부딪힐 수 없지만, 갈아 끼울 구현이 다
 `waiting` 은 쳐다본다고 안 꺼지므로(아래 "상태") **탭을 눌러도 점은 안 꺼진다** — 다음 훅이 꺼 준다.
 색은 ⑥ 이 미정이라 `status` 의 CSS 변수를 그대로 쓴다. 점을 위한 새 색을 만들지 않는다.
 
+## IME (한글·일본어·중국어 입력)
+
+**조합 중인 키는 xterm 에 넘기지 않는다.** xterm 은 조합 중에 들어온 keydown 의 `keyCode` 가 229 가
+아니면 조합을 통째로 버린다(`_compositionHelper.keydown` → `_finalizeComposition(false)`). 그런데
+macOS 의 IME 는 브라우저에 따라 **진짜 키 코드**를 보낸다 — 그러면 글자마다 조합이 깨진다.
+
+실측(2026-09-09, 같은 입력을 흘려 보고):
+
+| 조합 중 keydown | 결과 |
+|---|---|
+| `keyCode=229` (크롬) | `안녕하십니까` |
+| 진짜 키 코드 | `d안s녕g하t십s니까` |
+
+`attachCustomKeyEventHandler` 는 `_compositionHelper.keydown` 보다 **먼저** 돌고, 거기서 `false` 를
+내면 `_keyDown` 이 그 자리에서 끝난다. 그래서 `ev.isComposing || ev.keyCode === 229` 인 keydown 은
+그대로 돌려보낸다 — 조합이 끝나면 `compositionend` 가 제 몫을 하므로 잃는 것이 없다.
+
 ## 판의 글자 인코딩
 
 xterm.js 는 **UTF-8 전용**이다. 판의 셸이 UTF-8 로케일을 안 갖고 있으면 셸이 멀티바이트 입력을

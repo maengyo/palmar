@@ -470,6 +470,14 @@ class Tile {
     // xterm 이 키를 처리하기 **전에** 본다. true 면 그대로 넘기고, false 면 우리가 가져간다.
     this.term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown') return true;
+      // **IME 가 조합 중인 키는 xterm 이 손대면 안 된다.** xterm 은 조합 중 keydown 의 keyCode 가
+      // 229 가 아니면 조합을 통째로 버린다(`_compositionHelper.keydown` → `_finalizeComposition(false)`).
+      // 그런데 macOS 의 한글 IME 는 브라우저에 따라 **진짜 키 코드**를 보낸다 — 그러면 글자마다
+      // 조합이 깨져 "안녕하십니까" 가 자모로 흩어진다(사용자 보고 2026-09-09).
+      // 실측: 같은 입력을 keyCode 229 로 흘리면 '안녕하십니까', 실제 키 코드로 흘리면 무너졌다.
+      // 여기서 false 를 내면 xterm 의 _keyDown 이 그 자리에서 끝나 조합이 살아남는다. 조합이 끝나면
+      // compositionend 가 제 몫을 하므로 잃는 것이 없다.
+      if (ev.isComposing || ev.keyCode === 229) return false;
       const mod = ev.metaKey || (ev.ctrlKey && ev.shiftKey);
       if (!mod || ev.altKey) return true;
       const k = (ev.key || '').toLowerCase();
