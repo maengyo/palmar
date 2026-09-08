@@ -27,8 +27,12 @@ The canvas grows as you add windows; scroll to reach the rest.
 
 **Canvases are tabs.** A strip above the canvas holds them. **＋** makes one and asks for its name;
 double-click a tab to rename it, drag to reorder. A tab carries one small dot when something in
-that canvas wants you, and nothing else — no counts, no close buttons. Every open browser sees the
-same tabs in the same order, because the daemon owns them, not the page.
+that canvas wants you, and nothing else. Every open browser sees the same tabs in the same order,
+because the daemon owns them, not the page.
+
+A canvas can be removed, **but only when it is empty** — the × appears on the tab you are on once
+the last terminal there is closed, and not before. Removing a canvas must never end a process, so
+there is no version of it that kills what is inside.
 
 **The left list is never filtered by canvas.** Everything you have running is in it, wherever it
 lives. It groups by canvas and folds, but folding can never hide the thing you are needed for: a
@@ -108,8 +112,8 @@ takes you to that terminal.
 
 - **Windows do not push each other aside.** A new one lands in the first free grid slot; dragging
   one onto another overlaps them.
-- **No button deletes a canvas, and none moves a terminal between canvases.** The daemon does both
-  and every open browser follows along — where the handles belong on screen is not settled.
+- **No button moves a terminal between canvases.** The daemon does it and every open browser
+  follows along — where the handle belongs on screen is not settled.
 - **Nothing survives restarting the daemon** — not the canvases, not the names, not the shells.
 - **fish shells do not get the hook shim.** Title-based status still works there.
 - **A settings panel**, and a command palette behind the search box.

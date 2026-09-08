@@ -852,6 +852,28 @@ function canvasLabel(c) {
 function canvasById(id) { return canvases.get(id) || null; }
 
 // 탭의 점은 저장하지 않는다 — 계산한다(protocol.md "탭의 점"). 이 캔버스에 나를 부르는 것이 있으면 켠다.
+// #18 캔버스 지우기. **조건은 데몬이 정한다** — 여기 있는 것은 그 규칙의 사본이 아니라 거울이다.
+// 데몬은 (1) 세션이 하나라도 있으면, (2) 마지막 캔버스면 409 로 거절한다(protocol.md).
+// 그래서 화면은 **그 둘이 아닐 때만** 손잡이를 보여 준다 — 거절당할 요청을 낼 일이 없다.
+// 캔버스 안에서 셸을 죽이며 지우는 길은 만들지 않는다: 화면의 동작이 도는 프로세스를 죽이면 안 된다.
+function canvasEmpty(id) {
+  for (const x of sessions.values()) if (x.canvas === id) return false;
+  return true;
+}
+function canvasRemovable(id) { return canvasEmpty(id) && canvasOrder.length > 1; }
+
+async function removeCanvas(id) {
+  try {
+    await api('DELETE', '/api/canvases/' + encodeURIComponent(id));
+  } catch (e) {
+    // 다른 브라우저가 그 사이에 터미널을 하나 열었을 수 있다 — 그때는 데몬이 맞고 우리가 늦은 것이다.
+    if (e.status === 409) { toast([e.message, 'close its terminals first, then try again']); return; }
+    if (e.status === 404) return;                 // 다른 브라우저가 먼저 지웠다 — 시킨 대로 됐다
+    toast(['remove canvas: ' + e.message]);
+  }
+  // 탭은 여기서 지우지 않는다 — canvas_gone 방송이 지운다(터미널 닫기와 같은 규율).
+}
+
 function canvasWant(id) {
   const mine = [];
   for (const s of sessions.values()) if (s.canvas === id) mine.push(s);
@@ -955,6 +977,27 @@ function paintTab(id) {
   if (!want) { if (dot) dot.remove(); }
   else if (!dot) t.appendChild(el('span', 'dot ' + want));
   else if (dot.className !== 'dot ' + want) dot.className = 'dot ' + want;
+
+  // #18 지우기 손잡이. **지금 보고 있는 탭에만** 둔다 — 탭 줄은 전환기라 탭마다 단추를 달지 않는다
+  // (protocol.md "탭의 점": 탭에 붙는 것은 점 하나뿐이다). 지울 수 없으면 아예 없다.
+  const cx = $('.cx', t), can = cur && canvasRemovable(id);
+  if (!can) { if (cx) cx.remove(); }
+  else if (!cx) {
+    const b = el('button', 'cx'); b.type = 'button';
+    b.title = 'remove this canvas';
+    b.setAttribute('aria-label', 'remove canvas ' + label);
+    // 물어보지 않는다. 이 캔버스는 **비어 있어서** 손잡이가 있는 것이고, 없어지는 것은 이름과 자리뿐이다.
+    // 안 위험한 것에까지 확인을 붙이면, 정말 위험한 것(터미널 닫기)의 확인까지 습관으로 넘기게 된다.
+    b.addEventListener('click', (ev) => { ev.stopPropagation(); removeCanvas(id); });
+    b.addEventListener('pointerdown', (ev) => ev.stopPropagation());   // 탭 끌기가 안 걸리게
+    t.appendChild(b);
+  }
+  // 왜 못 지우는지는 탭 자체가 말한다 — 손잡이가 없는 이유를 짐작하게 두지 않는다.
+  if (cur && !can) {
+    t.title = label + (canvasEmpty(id)
+      ? ' — the last canvas cannot be removed'
+      : ' — has terminals; close them to remove this canvas');
+  }
 }
 
 function renderTabs() {
@@ -1018,7 +1061,7 @@ addTabEl.addEventListener('click', async () => {
 // 여기서 사각형을 읽는 것은 스크롤 핸들러가 아니다 — 미니맵의 금지(스크롤마다 레이아웃 읽기)와 다른 자리다.
 function tabDrag(tabEl) {
   tabEl.addEventListener('pointerdown', (ev) => {
-    if (ev.button !== 0 || ev.target.closest('.ed')) return;
+    if (ev.button !== 0 || ev.target.closest('.ed, .cx')) return;
     const startX = ev.clientX;
     let dragging = false, aborted = false;
     const move = (e2) => {
@@ -1786,7 +1829,10 @@ addEventListener('keydown', (e) => {
 // 콘솔·개발 도구에서 들여다보는 손잡이. 제품 동작은 이것에 기대지 않는다.
 window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   canvas: () => current, groups: () => groupsCollapsed,
-                  cvGroups: () => cvCollapsed, closing: () => [...closing] };
+                  cvGroups: () => cvCollapsed, closing: () => [...closing],
+                  // 화면에서는 지울 수 있을 때만 손잡이가 나오므로, 거절당하는 길(#18 의 409)은
+                  // 콘솔에서만 태워 볼 수 있다. 데몬이 어차피 막으므로 여기 두는 것이 위험을 늘리지 않는다.
+                  removeCanvas };
 
 // ── 시작 ────────────────────────────────────────────────
 function boot() {

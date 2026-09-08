@@ -335,6 +335,22 @@ body.rz-drag { cursor: col-resize; user-select: none; }
   color: var(--ink-2); font-size: 11.5px; cursor: pointer; user-select: none;
 }
 .tab:hover { background: var(--hover); }
+/* 캔버스 지우기(#18). **지울 수 있을 때만 나타난다** — 지금 보고 있는 탭이고, 그 안에 터미널이
+   하나도 없고, 마지막 캔버스가 아닐 때. 데몬이 409 로 거절하는 두 조건을 그대로 뒤집은 것이라
+   화면이 거절당할 요청을 낼 일이 없다. 없는 동안에는 자리도 안 차지한다.
+   × 는 타일의 닫기(.cl)와 **같은 그림**이다 — 같은 뜻에 다른 그림을 쓰지 않는다. */
+.tab .cx {
+  width: 14px; height: 14px; border-radius: 3px; border: 0; flex: none; margin-right: -3px;
+  display: grid; place-items: center; cursor: pointer; color: var(--ink-3); background: transparent;
+  padding: 0; font: inherit; -webkit-appearance: none; appearance: none; opacity: .55;
+}
+.tab .cx::before {
+  content: ""; width: 7px; height: 7px;
+  background: linear-gradient(45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%),
+              linear-gradient(-45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%);
+}
+.tab .cx:hover, .tab .cx:focus-visible { opacity: 1; color: var(--ink); background: var(--btn); }
+.tab .cx:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 /* 고른 것을 표시하는 법은 목록·트리와 같다(.ses.cur / .row.sel) — 새 표현을 만들지 않는다 */
 .tab.cur {
   background: var(--accent-2); color: var(--ink);
