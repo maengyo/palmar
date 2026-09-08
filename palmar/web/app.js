@@ -1853,6 +1853,65 @@ function checkProtocol(m) {
   ].filter(Boolean));
 }
 
+// ── 있었던 일 ─────────────────────────────────────────────
+// 신호등은 **지금**을 말한다. 자리를 비운 사이는 아무 데도 안 남아 있었다 — 무엇이 끝났고
+// 무엇이 물어봤는지, 어떤 차례로. 데몬이 그것을 갖고(브라우저를 닫아 둔 동안이야말로 "없는 동안"
+// 이니까) 붙을 때 hello 로 함께 준다. 여기서는 보여 주고, 눌러서 그리로 가는 일만 한다.
+const LS_SEEN_AT = 'palmar.seenAt';
+const ACT_MAX = 60;                 // 화면에 두는 개수. 데몬은 더 갖고 있다.
+const ACT_CLASS = { waiting: 'wait', done: 'done', created: 'idle', gone: 'idle' };
+let acts = [];
+let seenAt = 0;
+try { seenAt = Number(localStorage.getItem(LS_SEEN_AT)) || 0; } catch (e) {}
+const actsEl = document.getElementById('acts');
+const actNewEl = document.getElementById('act-new');
+
+// **본 것으로 치는 때**: 이 창이 앞에 있을 때. 덮여 있는 동안 쌓인 것이 곧 "없는 동안" 이다.
+function markSeen() {
+  if (!document.hasFocus()) return;
+  seenAt = Date.now() / 1000;
+  try { localStorage.setItem(LS_SEEN_AT, String(seenAt)); } catch (e) {}
+}
+
+function renderActs() {
+  if (!actsEl) return;
+  actsEl.textContent = '';
+  const fresh = acts.filter((e) => e.t > seenAt).length;
+  if (actNewEl) actNewEl.textContent = fresh ? fresh + ' new' : '';
+  if (!acts.length) {
+    actsEl.appendChild(el('div', 'hint2', 'nothing yet — what finishes or asks for you shows up here'));
+    return;
+  }
+  for (const e of acts.slice().reverse().slice(0, ACT_MAX)) {
+    const alive = sessions.has(e.id);
+    const row = el('div', 'act' + (e.t > seenAt ? ' fresh' : '') + (alive ? '' : ' dead'));
+    row.appendChild(el('span', 'dot ' + (ACT_CLASS[e.kind] || 'idle')));
+    const mid = el('span', 'nm');
+    mid.appendChild(el('b', null, e.name || shortPath(e.cwd)));
+    mid.appendChild(document.createTextNode(' '));
+    mid.appendChild(el('span', 'wt', e.what));
+    row.appendChild(mid);
+    row.appendChild(el('span', 'ago', agoShort(e.t)));
+    row.title = (e.name || e.cwd) + ' · ' + e.what + (alive ? '' : ' · this terminal is gone');
+    if (alive) row.addEventListener('click', () => goToSession(e.id));
+    actsEl.appendChild(row);
+  }
+}
+
+function agoShort(t) {
+  const d = Math.max(0, Date.now() / 1000 - t);
+  if (d < 45) return 'now';
+  if (d < 3600) return Math.round(d / 60) + 'm';
+  if (d < 86400) return Math.round(d / 3600) + 'h';
+  return Math.round(d / 86400) + 'd';
+}
+
+function pushAct(e) {
+  acts.push(e);
+  if (acts.length > ACT_MAX * 2) acts = acts.slice(-ACT_MAX);
+  renderActs();
+}
+
 // ── 세션 반영 ───────────────────────────────────────────
 function upsert(s) {
   const old = sessions.get(s.id);
@@ -1911,6 +1970,9 @@ function remove(id) {
   // 창을 움직이는 일이라 시키지 않았으면 안 움직인다.
   if (wasIn && autoTidy) tidyCanvas(wasIn);
   paintTidy();
+  // 있었던 일의 줄은 "그 세션이 아직 있나" 를 보여 준다. `log` 가 `gone` 보다 먼저 오므로
+  // (계약: note 가 broadcast 전이다) 그때 그린 줄은 아직 살아 있는 것으로 그려진다 — 여기서 고친다.
+  renderActs();
   renderTabs();
   renderList();
   renderMinimap();
@@ -1936,7 +1998,11 @@ function connectEvents() {
     try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (!m) return;
     // hello 한 프레임 안에서 모든 session.canvas 가 이 canvases 안에 있다(protocol.md) — 캔버스를 먼저 넣는다
-    if (m.t === 'hello') { checkProtocol(m); setCanvases(m.canvases || []); reconcile(m.sessions || []); }
+    if (m.t === 'hello') {
+      checkProtocol(m); setCanvases(m.canvases || []); reconcile(m.sessions || []);
+      acts = m.log || []; renderActs();
+    }
+    else if (m.t === 'log' && m.e) pushAct(m.e);
     else if (m.t === 'session' && m.s) upsert(m.s);
     else if (m.t === 'gone' && m.id) remove(m.id);
     else if (m.t === 'canvas' && m.c) putCanvas(m.c);           // 생겼거나 이름이 바뀌었다
@@ -2198,6 +2264,11 @@ function boot() {
   loadRails();
   rzGrip(document.getElementById('rz-l'), 'l');
   rzGrip(document.getElementById('rz-r'), 'r');
+  // 창이 앞으로 돌아오면 **잠깐 새것으로 보여 준 뒤** 본 것으로 넘긴다. 돌아오자마자 지워 버리면
+  // 없는 동안 무슨 일이 있었는지 볼 새가 없다.
+  addEventListener('focus', () => setTimeout(() => { markSeen(); renderActs(); }, 4000));
+  // 시각은 흐른다 — 'now' 가 '3m' 이 되는 것을 보이게 한다. 목록의 ago 와 같은 주기다.
+  setInterval(renderActs, 30000);
   setNotify(notifyOn && 'Notification' in window && Notification.permission === 'granted');
   applyTheme(storedTheme());
   renderBadge(true);

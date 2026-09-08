@@ -108,6 +108,13 @@ OUT_MIN_S = 1.0
 #:   깊이 2 → 133개 1ms · 깊이 3 → 2,130개 41ms · **깊이 4 → 4,172개 204ms**
 #: 204ms 는 **이벤트 루프를 그만큼 막는다** — 단일 스레드라 그동안 모든 판이 멈춘다. 그래서
 #: `FIND_YIELD` 개마다 루프에 양보하며 훑는다. 만든 이름표는 `FIND_TTL_S` 동안 다시 쓴다.
+#: 있었던 일. **신호등은 "지금" 만 말한다** — 자리를 20분 비웠다 오면 무엇이 끝났고 무엇이 물어봤는지,
+#: 어떤 차례로 그랬는지가 아무 데도 안 남아 있었다. 마지막 상태만 있었다.
+#: **데몬이 갖는다**: 브라우저를 닫아 두는 동안이야말로 "없는 동안" 이고, 그때 살아 있는 것은 데몬뿐이다.
+#: 적는 것은 **놓쳐서 아까운 것**뿐이다 — 나를 부르게 된 순간, 끝난 순간, 생기고 사라진 것.
+#: idle→working 같은 것은 안 적는다: 잦고, 놓쳐도 아깝지 않고, 적으면 나머지가 묻힌다.
+LOG_MAX = 200
+
 FIND_DEPTH = 4
 FIND_YIELD = 400        # 이만큼 훑을 때마다 루프에 양보한다
 FIND_TTL_S = 60.0
@@ -477,6 +484,7 @@ class Session:
         #: 꺼진다.** 셸 제목은 돌지 않으므로 신호등은 영영 idle 이다(사용자 보고 2026-09-08:
         #: title=`linux user@…` 인데 status=idle. macOS 의 맨 zsh 는 제목을 안 세워서 안 보였다).
         self.title_spun = False
+        self.logged = "unknown"      # 마지막으로 있었던 일에 적은 상태 (registry.changed 가 본다)
         self.last_out = 0.0          # 마지막으로 바이트가 나온 시각(monotonic)
         self.out_start = 0.0         # 지금 이어지는 출력 묶음이 시작된 시각
         self.out_timer = None
@@ -1071,6 +1079,9 @@ class Canvas:
 class Registry:
     def __init__(self):
         self.sessions: dict[str, Session] = {}
+        #: 있었던 일 (LOG_MAX 개까지, 오래된 것부터). 세션이 사라져도 남는다 — 그래서 이름을
+        #: 참조가 아니라 **그때의 값으로** 박아 둔다.
+        self.log: collections.deque = collections.deque(maxlen=LOG_MAX)
         #: 탭 줄에 보이는 순서 그대로. 파이썬 dict 는 삽입 순서를 지키므로 이것이 곧 order 다 —
         #: order 를 따로 정렬해 두지 않으니 "0부터 빈틈없이" 가 깨질 자리가 없다.
         self.canvases: dict[str, Canvas] = {}
@@ -1091,6 +1102,7 @@ class Registry:
         self.sessions[sid] = s
         reaper.watch(s)
         s.start_reading()
+        self.note(s, "created", "opened")
         self.changed(s)
         log(f"session {sid} created  cwd={cwd} canvas={cid} pid={s.pid}")
         return s
@@ -1142,10 +1154,27 @@ class Registry:
             except Exception:
                 self.event_clients.discard(w)
 
+    #: 적을 만한 전이. 값은 브라우저가 그대로 보여 줄 말이다.
+    LOG_WORTH = {"waiting": "wants you", "done": "finished"}
+
+    def note(self, s: Session, kind: str, what: str) -> None:
+        e = {"t": time.time(), "id": s.id, "kind": kind, "what": what,
+             "name": s.name, "cwd": s.cwd, "canvas": s.canvas, "agent": s.agent}
+        self.log.append(e)
+        self.broadcast({"t": "log", "e": e})
+
     def changed(self, s: Session) -> None:
+        """**이전 상태는 세션이 기억한다.** 부르는 쪽에서 넘기게 하면 일곱 자리 중 하나만
+        빠뜨려도 그 사건이 조용히 안 적힌다 — 빠뜨릴 수 없는 자리에 둔다."""
+        st = s.eff_status()
+        if st != s.logged:
+            if st in self.LOG_WORTH:
+                self.note(s, st, self.LOG_WORTH[st])
+            s.logged = st
         self.broadcast({"t": "session", "s": s.to_json()})
 
     def gone(self, s: Session) -> None:
+        self.note(s, "gone", "closed")
         self.sessions.pop(s.id, None)
         self.broadcast({"t": "gone", "id": s.id})
 
@@ -1571,7 +1600,10 @@ async def ws_events(reader, writer, headers: dict) -> None:
     # 데몬을 만난다 — 그때 서로 모르고 이상하게 구는 대신, 페이지가 대놓고 말하게 한다.
     writer.write(Frame.text({"t": "hello", "v": PROTOCOL, "daemon": __version__,
                              "canvases": [c.to_json() for c in registry.canvas_list()],
-                             "sessions": [s.to_json() for s in registry.list()]}))
+                             "sessions": [s.to_json() for s in registry.list()],
+                             # **붙는 순간 함께 온다.** "없는 동안 무슨 일이 있었나" 를 알고 싶은 때가
+                             # 정확히 붙는 순간이라, 한 번 더 물어보게 하지 않는다.
+                             "log": list(registry.log)}))
     try:
         while True:
             msg = await read_message(reader, writer)

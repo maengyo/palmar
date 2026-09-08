@@ -50,6 +50,11 @@ the UI, on the other hand, really ends it — there is an **×** on the window a
 each unfolds a confirmation in place rather than a native dialog. A second open browser drops the
 window at the same moment.
 
+**What happened while you were away.** The lights say what is true now; the activity list on the
+right says what happened in between — which terminal finished, which asked for you, in what order.
+The daemon keeps it, so it survives the browser being closed, which is when you are most away.
+Anything since you last had the window in front is marked.
+
 **A minimap** sits bottom-right for the canvas you are on. Click or drag in it to move the viewport.
 
 **Nothing moves a window except you.** Closing the last terminal at the bottom shrinks the canvas on

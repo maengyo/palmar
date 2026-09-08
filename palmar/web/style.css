@@ -627,6 +627,25 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .cv.has-max .esc { display: flex; }
 
 /* ── directories (right) ────────────────────── */
+/* 있었던 일. 아래 트리가 자리를 다 먹지 않게 높이를 묶어 두고, 넘치면 그 안에서 스크롤한다. */
+.acts { flex: none; max-height: 168px; overflow-y: auto; padding: 0 8px 6px; }
+.act {
+  display: grid; grid-template-columns: 7px 1fr auto; align-items: baseline; gap: 8px;
+  padding: 4px 6px; border-radius: 5px; cursor: pointer; font-size: 11.5px; color: var(--ink-2);
+}
+.act:hover { background: var(--hover); }
+.act .dot { align-self: center; }
+.act .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act .wt { color: var(--ink-3); }
+.act .ago { color: var(--ink-3); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+/* 마지막으로 본 뒤에 생긴 것. 여기가 "없는 동안" 이다 — 새로 온 것과 이미 본 것을 가른다. */
+.act.fresh { color: var(--ink); }
+.act.fresh .dot { box-shadow: 0 0 0 3px var(--accent-2); }
+/* 그 세션이 이제 없으면 눌러도 갈 데가 없다 — 그렇게 보이게 둔다. */
+.act.dead { opacity: .55; cursor: default; }
+.act.dead:hover { background: transparent; }
+.acts .hint2 { padding: 6px 6px 2px; }
+
 .tree { padding: 2px 8px; font-size: 12px; line-height: 26px; }
 /* 검색 결과 행. 트리의 행과 같은 몸이고, 계층이 없으므로 캐럿 자리를 안 비운다. */
 .row.found { padding-left: 8px; }
