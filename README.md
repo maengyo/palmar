@@ -50,10 +50,12 @@ the UI, on the other hand, really ends it — there is an **×** on the window a
 each unfolds a confirmation in place rather than a native dialog. A second open browser drops the
 window at the same moment.
 
-**What happened while you were away.** The lights say what is true now; the activity list on the
-right says what happened in between — which terminal finished, which asked for you, in what order.
-The daemon keeps it, so it survives the browser being closed, which is when you are most away.
-Anything since you last had the window in front is marked.
+**What to do next.** The lights say which terminal wants you; the right rail says which one first.
+It lists what is waiting, **longest wait at the top**, because a terminal that has been asking for
+twenty minutes is not the same as one that just asked. Below that it names terminals that claim to
+be working but have printed nothing for a while — nothing else tells you that, and palmar can
+because it owns the pty. When nothing wants you it says so, and shows what happened while you were
+away instead.
 
 **A minimap** sits bottom-right for the canvas you are on. Click or drag in it to move the viewport.
 

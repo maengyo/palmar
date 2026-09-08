@@ -1951,28 +1951,99 @@ function markSeen() {
   try { localStorage.setItem(LS_SEEN_AT, String(seenAt)); } catch (e) {}
 }
 
+// **"이제 뭘 해야 하나" 에 답한다.** 처음에는 "없는 동안 무슨 일이 있었나" 를 적는 자리였는데,
+// 그건 지난 일이고 사람이 실제로 하는 물음이 아니었다 — 터미널 여덟 개 앞에서 묻는 것은
+// *무엇이 나를 기다리나, 그중 무엇이 먼저인가* 다. 신호등은 "무엇" 까지만 말한다.
+//
+// 세 무리로 나눈다:
+//   기다림 — 나를 부르는 것. **오래 기다린 것이 위**다. 20분 기다린 판과 방금 물어본 판은 다른 일이다.
+//   막힌 듯 — 일하는 중이라는데 STUCK_S 넘게 아무것도 안 찍은 것. 아무도 안 알려 주는 것이고,
+//            PTY 를 우리가 갖고 있어서 알 수 있다. **단정하지 않는다** — 오래 생각하는 중일 수도 있다.
+//   그 밖에 아무것도 없으면 — 그때 비로소 지난 일을 보여 준다. 조용할 때만 값을 하는 것이니까.
+const STUCK_S = 300;      // 5분. 이보다 짧으면 평범한 생각 시간까지 "막혔다" 가 된다
+
+//: 마지막 출력 **시각**. 데몬이 주는 `quiet` 은 그 프레임을 만들 때의 값이라, 조용해지는 동안은
+//: 방송이 안 오므로 멈춰 있다 — 받은 순간에 시각으로 바꿔 두면 그때부터는 시계가 흐른다.
+const lastOutAt = new Map();
+function quietFor(x) {
+  const t = lastOutAt.get(x.id);
+  return t === undefined ? null : Math.max(0, Date.now() / 1000 - t);
+}
+
 function renderActs() {
   if (!actsEl) return;
   actsEl.textContent = '';
-  const fresh = acts.filter((e) => e.t > seenAt).length;
-  if (actNewEl) actNewEl.textContent = fresh ? fresh + ' new' : '';
-  if (!acts.length) {
-    actsEl.appendChild(el('div', 'hint2', 'nothing yet — what finishes or asks for you shows up here'));
-    return;
+  const now = Date.now() / 1000;
+  const wants = [], stuck = [];
+  for (const x of sessions.values()) {
+    if (WANTS_YOU.has(x.status)) wants.push(x);
+    else if (x.status === 'working') { const q = quietFor(x); if (q !== null && q >= STUCK_S) stuck.push(x); }
   }
-  for (const e of acts.slice().reverse().slice(0, ACT_MAX)) {
-    const alive = sessions.has(e.id);
-    const row = el('div', 'act' + (e.t > seenAt ? ' fresh' : '') + (alive ? '' : ' dead'));
-    row.appendChild(el('span', 'dot ' + (ACT_CLASS[e.kind] || 'idle')));
+  wants.sort((a, b) => (a.since || now) - (b.since || now));      // 오래 기다린 것이 위
+  stuck.sort((a, b) => (quietFor(b) || 0) - (quietFor(a) || 0));
+  const fresh = acts.filter((e) => e.t > seenAt).length;
+  if (actNewEl) actNewEl.textContent = wants.length ? String(wants.length) : (fresh ? fresh + ' new' : '');
+
+  const row = (x, cls, right, title) => {
+    const r = el('div', 'act' + cls);
+    r.appendChild(el('span', 'dot ' + (STATUS_CLASS[x.status] || 'idle')));
     const mid = el('span', 'nm');
-    mid.appendChild(el('b', null, e.name || shortPath(e.cwd)));
+    mid.appendChild(el('b', null, labelOf(x)));
     mid.appendChild(document.createTextNode(' '));
-    mid.appendChild(el('span', 'wt', e.what));
-    row.appendChild(mid);
-    row.appendChild(el('span', 'ago', agoShort(e.t)));
-    row.title = (e.name || e.cwd) + ' · ' + e.what + (alive ? '' : ' · this terminal is gone');
-    if (alive) row.addEventListener('click', () => goToSession(e.id));
-    actsEl.appendChild(row);
+    mid.appendChild(el('span', 'wt', x.status === 'waiting' ? 'needs you' : 'finished'));
+    r.appendChild(mid);
+    r.appendChild(el('span', 'ago', right));
+    r.title = title;
+    r.addEventListener('click', () => goToSession(x.id));
+    actsEl.appendChild(r);
+  };
+
+  if (wants.length) {
+    for (const x of wants) {
+      const held = now - (x.since || now);
+      row(x, held > 600 ? ' aged' : '', agoShort(x.since || now),
+          labelOf(x) + ' · ' + x.cwd + ' — waiting ' + agoShort(x.since || now));
+    }
+  }
+  if (stuck.length) {
+    actsEl.appendChild(el('div', 'act-h', 'quiet while working'));
+    for (const x of stuck) {
+      const r = el('div', 'act stuck');
+      r.appendChild(el('span', 'dot work'));
+      const mid = el('span', 'nm');
+      mid.appendChild(el('b', null, labelOf(x)));
+      mid.appendChild(document.createTextNode(' '));
+      mid.appendChild(el('span', 'wt', 'nothing printed'));
+      r.appendChild(mid);
+      const q = quietFor(x) || 0;
+      r.appendChild(el('span', 'ago', agoShort(now - q)));
+      r.title = labelOf(x) + ' — says it is working but has printed nothing for '
+              + agoShort(now - q) + '. It may be thinking, or it may be stuck.';
+      r.addEventListener('click', () => goToSession(x.id));
+      actsEl.appendChild(r);
+    }
+  }
+  if (!wants.length && !stuck.length) {
+    // 조용하다. **그때만** 지난 일을 보여 준다 — 볼 여유가 있는 것은 그때뿐이다.
+    if (!acts.length) {
+      actsEl.appendChild(el('div', 'quiet', 'all quiet · nothing is waiting on you'));
+      return;
+    }
+    actsEl.appendChild(el('div', 'act-h', 'all quiet · what happened'));
+    for (const e of acts.slice().reverse().slice(0, ACT_MAX)) {
+      const alive = sessions.has(e.id);
+      const r = el('div', 'act' + (e.t > seenAt ? ' fresh' : '') + (alive ? '' : ' dead'));
+      r.appendChild(el('span', 'dot ' + (ACT_CLASS[e.kind] || 'idle')));
+      const mid = el('span', 'nm');
+      mid.appendChild(el('b', null, e.name || shortPath(e.cwd)));
+      mid.appendChild(document.createTextNode(' '));
+      mid.appendChild(el('span', 'wt', e.what));
+      r.appendChild(mid);
+      r.appendChild(el('span', 'ago', agoShort(e.t)));
+      r.title = (e.name || e.cwd) + ' · ' + e.what + (alive ? '' : ' · this terminal is gone');
+      if (alive) r.addEventListener('click', () => goToSession(e.id));
+      actsEl.appendChild(r);
+    }
   }
 }
 
@@ -2000,6 +2071,7 @@ function upsert(s) {
     changedAt.set(s.id, Date.now());
     wants = WANTS_YOU.has(s.status) && !WANTS_YOU.has(old.status);
   }
+  if (typeof s.quiet === 'number') lastOutAt.set(s.id, Date.now() / 1000 - s.quiet);
   sessions.set(s.id, s);
   // **넣은 다음에 부른다.** 알림은 sessions 에서 다시 읽어 이름과 경로를 만드는데, 먼저 부르면
   // 그때 거기 있는 것은 아직 옛 세션이라 "부르는 것이 없다" 로 걸러진다. 500ms 타이머로 미룰
@@ -2023,6 +2095,9 @@ function upsert(s) {
   }
   renderTabs();      // 점은 계산이다 — status 나 canvas 가 바뀌면 다시 센다
   renderList();
+  // 오른쪽 목록도 상태를 읽는다. **여기서 안 부르면 한 발 늦는다** — `log` 프레임이 `session` 보다
+  // 먼저 오므로(계약: note 가 broadcast 전이다) 그때 그린 것은 아직 옛 상태다(`gone` 과 같은 자리).
+  renderActs();
   renderMinimap();
   updateStatusBar();
   return t;
@@ -2032,6 +2107,7 @@ function remove(id) {
   const wasIn = t && t.s ? t.s.canvas : null;   // 정리는 그 캔버스에만 한다
   if (t) { if (maxed === t) setMax(t, false); t.dispose(); tiles.delete(id); }
   sessions.delete(id);
+  lastOutAt.delete(id);
   notifyQueue.delete(id);
   renderBadge();
   changedAt.delete(id);
@@ -2340,7 +2416,8 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   cvGroups: () => cvCollapsed, closing: () => [...closing],
                   // 화면에서는 지울 수 있을 때만 손잡이가 나오므로, 거절당하는 길(#18 의 409)은
                   // 콘솔에서만 태워 볼 수 있다. 데몬이 어차피 막으므로 여기 두는 것이 위험을 늘리지 않는다.
-                  removeCanvas, watchInput, newTerminal, newCanvas };
+                  removeCanvas, watchInput, newTerminal, newCanvas,
+                  lastOutAt, renderActs };
 
 // 콘솔에서 `palmar.watchInput()`. **진짜 IME 는 헤드리스로 못 잰다** — CDP 의 조합 흉내는 통과하는데
 // 실제 기계에서 안 된다는 보고가 있어, 그 기계에서 무엇이 오는지 직접 찍게 한다.
@@ -2473,7 +2550,7 @@ function boot() {
   // 없는 동안 무슨 일이 있었는지 볼 새가 없다.
   addEventListener('focus', () => setTimeout(() => { markSeen(); renderActs(); }, 4000));
   // 시각은 흐른다 — 'now' 가 '3m' 이 되는 것을 보이게 한다. 목록의 ago 와 같은 주기다.
-  setInterval(renderActs, 30000);
+  setInterval(renderActs, 15000);   // 기다린 시간이 흐르는 것이 보이게 한다
   setNotify(notifyOn && 'Notification' in window && Notification.permission === 'granted');
   applyTheme(storedTheme());
   renderBadge(true);

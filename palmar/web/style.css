@@ -651,6 +651,16 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .act .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .act .wt { color: var(--ink-3); }
 .act .ago { color: var(--ink-3); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+/* 오래 기다린 것일수록 글자가 진해진다 — 목록에서 눈이 먼저 가야 할 자리가 곧 가장 오래 기다린 것이다. */
+.act.aged .ago { color: var(--st-wait); }
+.act.stuck .ago { color: var(--ink-3); }
+/* 무리를 가르는 작은 머리. 새 색도, 새 굵기도 안 쓴다. */
+.act-h {
+  padding: 8px 6px 3px; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.act-h:first-child { padding-top: 2px; }
+.acts .quiet { padding: 8px 6px; color: var(--ink-3); }
 /* 마지막으로 본 뒤에 생긴 것. 여기가 "없는 동안" 이다 — 새로 온 것과 이미 본 것을 가른다. */
 .act.fresh { color: var(--ink); }
 .act.fresh .dot { box-shadow: 0 0 0 3px var(--accent-2); }
