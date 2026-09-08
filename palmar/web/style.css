@@ -151,13 +151,13 @@ body {
   border-bottom: 1px solid var(--line); background: var(--topbar);
   -webkit-app-region: drag;
 }
-.top .l { display: flex; align-items: center; gap: 14px; padding: 0 16px; }
+.top .l { display: flex; align-items: center; gap: 14px; padding: 0 16px 0 22px; }
 /* .lights: 목업의 macOS 창 버튼. 브라우저 탭에서는 기능이 없고, 그 빨강·노랑·초록 세 색은 신호등의
    것이라 여기 두면 안 된다(AGENTS.md "macOS 식 …버튼을 달지 마라"). DOM 에도 없다(index.html). 그래서
    죽은 규칙(#19)을 지웠다 — Tauri 로 감쌀 때 창 버튼이 필요하면 그때 신호등 아닌 색으로 다시 넣는다. */
 /* 워드마크. 높이만 주고 너비는 viewBox 가 정한다. 획은 currentColor 라 테마를 따라간다. */
-/* 위 줄이 44px 다. 15px 은 로고가 있는 줄 모를 만큼 작았다 — 여백을 남기는 선에서 키운다. */
-.brand { height: 21px; width: auto; display: block; color: var(--ink); flex: none; }
+/* 위 줄이 44px 다. 로고는 그 안에서 위아래 여백이 남는 만큼 크게 — 15px → 21px → 26px 로 왔다. */
+.brand { height: 26px; width: auto; display: block; color: var(--ink); flex: none; }
 .brand .qd { fill: currentColor; opacity: .34; }
 /* 마지막 속의 점. 나를 부르는 것이 있을 때만 켠다 — 캔버스 탭과 같은 규칙이고 같은 색이다(⑥).
    몇 개가 기다리든 하나만 켠다: 게이지가 아니다(docs/brand/README.md "점 규칙"). */
