@@ -2,8 +2,7 @@
 """probe-agent — 이 에이전트에서 palmar 의 신호등이 켜질지 **재 본다**.
 
     python3 dev/probe-agent.py <명령> [인자...]
-    예:  python3 dev/probe-agent.py aelix
-         python3 dev/probe-agent.py codex
+    예:  python3 dev/probe-agent.py <에이전트 명령>
 
 명령을 진짜 PTY 에 띄우고 **그대로 쓰게 해 준다** — 평소처럼 프롬프트를 넣고, 일을 시키고,
 끝나면 그 에이전트를 종료하면 된다. 그동안 palmar 가 볼 것과 **똑같은 바이트**를 기록해 두었다가
