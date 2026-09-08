@@ -493,6 +493,10 @@ class Tile {
       this.kdSeen = true;
       if (this.imePending) this.imeFlush();
       if (this.composing || ev.isComposing) return false;
+      // **여기가 아래 mod 검사보다 먼저여야 한다.** Ctrl+Enter 는 Shift 가 없어 아래 조건에 안 걸리고,
+      // 그러면 xterm 이 그 키를 처리하면서 전파를 끊어 전역 단축키까지 오지 않는다
+      // (실측: Ctrl+Shift+Enter 는 되고 Ctrl+Enter 만 안 됐다).
+      if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey) && !ev.altKey) return false;
       const mod = ev.metaKey || (ev.ctrlKey && ev.shiftKey);
       if (!mod || ev.altKey) return true;
       const k = (ev.key || '').toLowerCase();
@@ -1325,17 +1329,7 @@ function renameCanvas(c, host) {
   }, () => renderTabs());   // 고치는 동안 미뤄 둔 자리 옮기기를 여기서 푼다
 }
 
-addTabEl.addEventListener('click', async () => {
-  try {
-    const c = await api('POST', '/api/canvases', {});
-    putCanvas(c);                       // 방송도 뒤따라 오지만 id 로 멱등하다(protocol.md "낸 쪽도 방송을 되받는다")
-    switchCanvas(c.id);
-    const tab = tabsEl.querySelector('.tab.cur .nm');
-    if (tab) renameCanvas(canvasById(c.id), tab);   // 갓 만든 것은 바로 이름을 받게 한다
-  } catch (e) {
-    toast(['new canvas: ' + e.message]);
-  }
-});
+addTabEl.addEventListener('click', newCanvas);   // 방송도 뒤따라 오지만 id 로 멱등하다(protocol.md)
 
 // 끌어서 순서 바꾸기. 이웃의 가운데를 지나면 자리를 바꾸고, 놓을 때 한 번 보낸다.
 // 여기서 사각형을 읽는 것은 스크롤 핸들러가 아니다 — 미니맵의 금지(스크롤마다 레이아웃 읽기)와 다른 자리다.
@@ -1747,7 +1741,14 @@ function onSearch() {
 }
 searchEl.addEventListener('input', onSearch);
 addEventListener('keydown', (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); searchEl.focus(); searchEl.select(); }
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); searchEl.focus(); searchEl.select(); }
+  // **⌘T·⌘N 은 못 쓴다** — 브라우저가 가져가서 preventDefault 가 안 먹는다(새 탭·새 창).
+  // Enter 는 비어 있고, Shift 하나로 "하나 더"(터미널)와 "더 큰 것"(캔버스)이 갈린다.
+  if (mod && e.key === 'Enter' && !e.altKey) {
+    e.preventDefault();
+    if (e.shiftKey) newCanvas(); else newTerminal();
+  }
   if (e.key === 'Escape' && e.target === searchEl) { searchEl.value = ''; onSearch(); searchEl.blur(); }
 });
 
@@ -2257,6 +2258,54 @@ $('#mkdir').addEventListener('click', async () => {
     toast(['new folder: ' + e.message]);
   }
 });
+// 새 터미널. **자리는 손이 가 있는 곳에서 가져온다** — 지금 보고 있는 터미널의 폴더, 없으면
+// 오른쪽에서 고른 폴더, 그것도 없으면 홈(데몬의 기본값). 그래야 단축키 하나로 열 수 있다:
+// 레일에서 폴더를 고르는 것은 **처음 한 번**이고, 그다음부터는 "여기 하나 더" 가 훨씬 잦다.
+function nextCwd() {
+  // **손이 실제로 가 있는 판이 먼저다.** `focused` 는 사람이 화면을 눌렀을 때 정해지는데,
+  // 키보드로만 옮겨 다니면 그것이 뒤처질 수 있다 — 진짜 포커스가 어디 있는지 먼저 본다.
+  const el = document.activeElement;
+  if (el) {
+    for (const t of tiles.values()) {
+      if (t.el.contains(el) && t.s && t.s.cwd) return t.s.cwd;
+    }
+  }
+  const t = tiles.get(focused);
+  if (t && t.visible() && t.s && t.s.cwd) return t.s.cwd;
+  return selectedDir ? selectedDir.path : null;
+}
+
+async function newTerminal(cwd) {
+  const body = {};
+  const c = cwd || nextCwd();
+  if (c) body.cwd = c;                 // 없으면 데몬이 홈으로 연다(protocol.md)
+  if (current) body.canvas = current;
+  try {
+    const s = await api('POST', '/api/sessions', body);
+    const t = upsert(s);
+    t.el.classList.add('fresh');
+    setTimeout(() => t.el.classList.remove('fresh'), 2500);
+    t.el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    focusTile(s.id, { user: true });
+    refreshOff();
+  } catch (e) {
+    toast(['open terminal: ' + e.message]);
+  }
+}
+
+// 새 캔버스. ＋ 를 누르는 것과 **같은 길**이다 — 두 곳에서 다르게 굴면 안 된다.
+async function newCanvas() {
+  try {
+    const c = await api('POST', '/api/canvases', {});
+    putCanvas(c);
+    switchCanvas(c.id);
+    const tab = tabsEl.querySelector('.tab.cur .nm');
+    if (tab) renameCanvas(canvasById(c.id), tab);
+  } catch (e) {
+    toast(['new canvas: ' + e.message]);
+  }
+}
+
 async function launch() {
   if (!selectedDir || launchBtn.disabled) return;
   launchBtn.disabled = true;
@@ -2291,7 +2340,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   cvGroups: () => cvCollapsed, closing: () => [...closing],
                   // 화면에서는 지울 수 있을 때만 손잡이가 나오므로, 거절당하는 길(#18 의 409)은
                   // 콘솔에서만 태워 볼 수 있다. 데몬이 어차피 막으므로 여기 두는 것이 위험을 늘리지 않는다.
-                  removeCanvas, watchInput };
+                  removeCanvas, watchInput, newTerminal, newCanvas };
 
 // 콘솔에서 `palmar.watchInput()`. **진짜 IME 는 헤드리스로 못 잰다** — CDP 의 조합 흉내는 통과하는데
 // 실제 기계에서 안 된다는 보고가 있어, 그 기계에서 무엇이 오는지 직접 찍게 한다.
