@@ -10,6 +10,15 @@
  * **새 색을 만들지 않았다** — 탭의 점도 미니맵 사각형도 위 --st-* 를 그대로 쓴다(⑥ 은 여전히 미정).
  */
 
+/* 다크 테마에 **금지된 것** (사용자, 2026-09-08):
+ *   · 보라색 그라데이션
+ *   · 쨍한 테크 기업 스타일의 블루
+ *   · AI 웹사이트에 흔한 네온
+ * 그래서 다크는 라이트(따뜻한 종이)를 뒤집은 **따뜻한 목탄**이고, 강조는 색이 아니라 밝기다(뼈색).
+ * **채도를 가진 것은 신호등 셋뿐이다** — 초록·호박·빨강. 그 셋이 이 화면에서 유일하게 "봐라" 라고
+ * 말하는 것이고, 다른 무엇이 색을 가지면 그 말이 묻힌다.
+ */
+
 /* ── tokens: light is the base, dark overrides ── */
 :root {
   --rail-l: 256px;   /* 왼쪽 레일 폭. 사람이 끌면 JS 가 여기를 고쳐 쓴다 */
@@ -50,69 +59,69 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --ground:    #101216;
-    --canvas:    rgba(26,38,62,.72);
-    --dot:       #33405e;
-    --rail:      #15181e;
-    --tile:      #0a0c0f;
-    --tile-bar:  #171a21;
-    --line:      #262a33;
-    --line-2:    #3a404d;
-    --ink:       #edeff3;
-    --ink-2:     #b3b9c6;
-    --ink-3:     #7c8494;
-    --accent:    #4bc7bd;
-    --on-accent: #06100f;
-    --accent-2:  rgba(75,199,189,.18);
-    --hover:     rgba(255,255,255,.045);
-    --btn:       #1a1e26;
-    --kbd:       #1b1f27;
-    --kbd-ink:   #b3b9c6;
-    --float:     rgba(16,18,22,.94);
-    --topbar:    rgba(21,24,30,.75);
-    --search:    rgba(10,12,15,.6);
-    --term-ink:  #dde1e8;
-    --term-box:  #8f97a8;
-    --st-work:   #55c96a;
-    --st-wait:   #ecb03f;
-    --st-done:   #ef6058;
-    --st-idle:   #5a6273;
-    --atmo-1:    rgba(60,150,170,.18);
-    --atmo-2:    rgba(70,110,190,.12);
+    --ground:    #191714;
+    --canvas:    rgba(48,43,35,.82);
+    --dot:       #4a4338;
+    --rail:      #1e1c18;
+    --tile:      #121110;
+    --tile-bar:  #201d19;
+    --line:      #2e2a24;
+    --line-2:    #443f36;
+    --ink:       #ece7dd;
+    --ink-2:     #b6afa2;
+    --ink-3:     #8a8377;
+    --accent:    #d9d0bd;
+    --on-accent: #191714;
+    --accent-2:  rgba(217,208,189,.14);
+    --hover:     rgba(255,255,255,.05);
+    --btn:       #24211c;
+    --kbd:       #24211c;
+    --kbd-ink:   #b6afa2;
+    --float:     rgba(25,23,20,.94);
+    --topbar:    rgba(30,28,24,.78);
+    --search:    rgba(18,17,16,.6);
+    --term-ink:  #ded8cd;
+    --term-box:  #8f887b;
+    --st-work:   #6aa96f;
+    --st-wait:   #d9a441;
+    --st-done:   #d4655c;
+    --st-idle:   #6b6459;
+    --atmo-1:    rgba(150,120,70,.10);
+    --atmo-2:    rgba(110,100,80,.08);
     --shadow:   0 1px 0 rgba(255,255,255,.02) inset, 0 12px 32px -12px rgba(0,0,0,.8);
     --shadow-2: 0 16px 40px -12px rgba(0,0,0,.9);
   }
 }
 :root[data-theme="dark"] {
-  --ground:    #101216;
-  --canvas:    rgba(26,38,62,.72);
-  --dot:       #33405e;
-  --rail:      #15181e;
-  --tile:      #0a0c0f;
-  --tile-bar:  #171a21;
-  --line:      #262a33;
-  --line-2:    #3a404d;
-  --ink:       #edeff3;
-  --ink-2:     #b3b9c6;
-  --ink-3:     #7c8494;
-  --accent:    #4bc7bd;
-  --on-accent: #06100f;
-  --accent-2:  rgba(75,199,189,.18);
-  --hover:     rgba(255,255,255,.045);
-  --btn:       #1a1e26;
-  --kbd:       #1b1f27;
-  --kbd-ink:   #b3b9c6;
-  --float:     rgba(16,18,22,.94);
-  --topbar:    rgba(21,24,30,.75);
-  --search:    rgba(10,12,15,.6);
-  --term-ink:  #dde1e8;
-  --term-box:  #8f97a8;
-  --st-work:   #55c96a;
-  --st-wait:   #ecb03f;
-  --st-done:   #ef6058;
-  --st-idle:   #5a6273;
-  --atmo-1:    rgba(60,150,170,.18);
-  --atmo-2:    rgba(70,110,190,.12);
+  --ground:    #191714;
+  --canvas:    rgba(48,43,35,.82);
+  --dot:       #4a4338;
+  --rail:      #1e1c18;
+  --tile:      #121110;
+  --tile-bar:  #201d19;
+  --line:      #2e2a24;
+  --line-2:    #443f36;
+  --ink:       #ece7dd;
+  --ink-2:     #b6afa2;
+  --ink-3:     #8a8377;
+  --accent:    #d9d0bd;
+  --on-accent: #191714;
+  --accent-2:  rgba(217,208,189,.14);
+  --hover:     rgba(255,255,255,.05);
+  --btn:       #24211c;
+  --kbd:       #24211c;
+  --kbd-ink:   #b6afa2;
+  --float:     rgba(25,23,20,.94);
+  --topbar:    rgba(30,28,24,.78);
+  --search:    rgba(18,17,16,.6);
+  --term-ink:  #ded8cd;
+  --term-box:  #8f887b;
+  --st-work:   #6aa96f;
+  --st-wait:   #d9a441;
+  --st-done:   #d4655c;
+  --st-idle:   #6b6459;
+  --atmo-1:    rgba(150,120,70,.10);
+  --atmo-2:    rgba(110,100,80,.08);
   --shadow:   0 1px 0 rgba(255,255,255,.02) inset, 0 12px 32px -12px rgba(0,0,0,.8);
   --shadow-2: 0 16px 40px -12px rgba(0,0,0,.9);
 }
