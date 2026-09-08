@@ -38,6 +38,10 @@ if that window got pushed aside, even if it is off screen.
 └────────────────────────────────────────────────┘
 ```
 
+![palmer running — three canvases as tabs, terminals on the canvas, the waiting session at the top of the list](docs/img/palmer-light.png)
+
+*Three canvases as tabs, `infra` carrying a dot because something there wants an answer. The list on the left is not filtered by canvas — whatever is waiting sits at the top wherever it lives. Bottom right is the minimap for the canvas you are on.*
+
 ## Try it
 
 ```
