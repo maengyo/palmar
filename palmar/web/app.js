@@ -75,6 +75,36 @@ const FONT_MIN = 6, FONT_MAX = 32, FONT_STEP = 1;
 const IS_MAC = /Mac|iPhone|iPad/i.test(
   (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '');
 const KMOD = IS_MAC ? '⌘' : 'Ctrl';
+const CLIP_HINT = IS_MAC ? '⌘C / ⌘V' : 'Ctrl+Shift+C / Ctrl+Shift+V';
+const LS_CLIPHINT = 'palmar.cliphint';
+let clipHintShown = false;
+try { clipHintShown = localStorage.getItem(LS_CLIPHINT) === '1'; } catch (e) {}
+
+// ── 복사·붙여넣기 ─────────────────────────────────────────
+// xterm.js 에는 이게 **없다.** 고르는 것까지가 그것의 일이고, 클립보드에 넣는 것은 앱의 몫이다
+// (실측 2026-09-08: 고른 글자는 getSelection() 으로 잡히는데 어떤 조합에도 클립보드로 안 갔다).
+// **Ctrl+C 는 뺏지 않는다.** 터미널에서 그것은 인터럽트다 — 고른 것이 있다고 가로채면 도는 것을
+// 멈추려던 손이 대신 복사를 한다. 그래서 리눅스·윈도우의 관례대로 Shift 를 함께 요구하고,
+// 맥에서는 ⌘ 를 쓴다. 둘 다 받는다 — 어느 쪽 손버릇이든 되는 편이 낫다.
+async function clipWrite(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    toast(['could not copy — the browser refused clipboard access', String(e.message || e)]);
+    return false;
+  }
+}
+async function clipRead() {
+  try {
+    return await navigator.clipboard.readText();
+  } catch (e) {
+    // 크롬은 읽기에 권한을 따로 묻는다. 거절되면 브라우저의 기본 붙여넣기가 아직 남아 있다.
+    toast(['could not paste — the browser refused to read the clipboard',
+           'allow clipboard for ' + location.origin + ', or use the browser\'s own paste']);
+    return '';
+  }
+}
 // 목업 .term 의 line-height 1.55 는 font-size 기준이고 xterm 의 lineHeight 는 글꼴 고유 줄높이(≈1.3) 기준이라
 // 같은 눈높이를 내려면 1.15 쯤이다. 사람이 봐야 하는 값.
 const LINE_HEIGHT = 1.15;
@@ -429,6 +459,34 @@ class Tile {
     });
     this.fit = new FitAddon.FitAddon();
     this.term.loadAddon(this.fit);
+    // 글자를 처음 골랐을 때 **한 번만** 단축키를 알려 준다. 복사 단축키는 터미널마다 달라서
+    // (여기서는 Ctrl+C 가 인터럽트다) 눌러 보고 알 수가 없다 — 고르는 순간이 그걸 알려 줄 자리다.
+    this.term.onSelectionChange(() => {
+      if (clipHintShown || !this.term.hasSelection()) return;
+      clipHintShown = true;
+      try { localStorage.setItem(LS_CLIPHINT, '1'); } catch (e) {}
+      toast([CLIP_HINT + ' to copy and paste', 'Ctrl+C stays as interrupt, the way a terminal expects']);
+    });
+    // xterm 이 키를 처리하기 **전에** 본다. true 면 그대로 넘기고, false 면 우리가 가져간다.
+    this.term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== 'keydown') return true;
+      const mod = ev.metaKey || (ev.ctrlKey && ev.shiftKey);
+      if (!mod || ev.altKey) return true;
+      const k = (ev.key || '').toLowerCase();
+      if (k === 'c') {
+        const sel = this.term.getSelection();
+        if (!sel) return true;              // 고른 것이 없으면 터미널의 것이다
+        ev.preventDefault();
+        clipWrite(sel);
+        return false;
+      }
+      if (k === 'v') {
+        ev.preventDefault();
+        clipRead().then((t) => { if (t) this.term.paste(t); });
+        return false;
+      }
+      return true;
+    });
     this.term.open(this.termEl);
     this.gl = tryWebgl(this.term, () => { this.gl = null; updateStatusBar(); });
     // 안 보이는 동안(다른 캔버스) 재면 열 수가 0 으로 나온다 — 보이게 될 때 refit() 이 잰다

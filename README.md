@@ -52,6 +52,11 @@ window at the same moment.
 
 **A minimap** sits bottom-right for the canvas you are on. Click or drag in it to move the viewport.
 
+**Copy and paste.** Select with the mouse, then `Ctrl+Shift+C` (`⌘C` on a Mac); paste with
+`Ctrl+Shift+V` (`⌘V`), or the browser's own paste. **`Ctrl+C` is left alone** — in a terminal that
+is the interrupt, and taking it away because something happened to be selected would stop the wrong
+thing. The shortcut is shown once, the first time you select something.
+
 **Search** with `Ctrl K` (`⌘K` on a Mac) reaches every session and folder by name, path, or agent.
 
 **Text size, per terminal.** `Ctrl`/`⌘` + wheel over a terminal changes that one's text size. The
