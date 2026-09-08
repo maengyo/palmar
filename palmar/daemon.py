@@ -837,9 +837,14 @@ class Session:
         buf = self.carry + data
         base = self.produced - len(self.carry)     # buf[0] 의 절대 오프셋
         pos = 0
+        # **지나간 표시만 다시 찾는다.** 둘 다 매번 찾으면, 한쪽이 남은 구간에 없을 때 그 find 가
+        # 표시 하나마다 버퍼 끝까지 훑어 O(표시 수 × 크기) 가 된다. 짝이 안 맞는 `ESC[?1049h` 로
+        # 채운 256KB 한 덩이가 이벤트 루프를 **5.8초** 잡아먹었다(2026-09-09 실측). 한 판이 그걸
+        # 찍으면 그동안 다른 판의 바이트도, `/events` 방송도, 모든 요청도 함께 선다.
+        # `pos` 는 커지기만 하므로 -1 은 계속 -1 이다 — 못 찾은 것은 두 번 찾지 않는다.
+        i_on = buf.find(ALT_ON, pos)
+        i_off = buf.find(ALT_OFF, pos)
         while True:
-            i_on = buf.find(ALT_ON, pos)
-            i_off = buf.find(ALT_OFF, pos)
             hits = [i for i in (i_on, i_off) if i >= 0]
             if not hits:
                 break
@@ -850,7 +855,11 @@ class Session:
             if new_alt != self.alt:
                 self.alt = new_alt
                 changed = True
-            pos = i + len(ALT_ON)
+            pos = i + len(ALT_ON)                  # ALT_OFF 도 같은 8바이트다
+            if 0 <= i_on < pos:
+                i_on = buf.find(ALT_ON, pos)
+            if 0 <= i_off < pos:
+                i_off = buf.find(ALT_OFF, pos)
         tail = buf[pos:]
         hold = 0
         for n in range(min(len(ALT_ON) - 1, len(tail)), 0, -1):
