@@ -1570,6 +1570,7 @@ function renderBadge(force) {
 
 const notifyQueue = new Set();
 let notifyTimer = null;
+let notifyAt = 0;              // 마지막으로 실제로 울린 시각
 
 // **상태로 바뀌는 순간에만** 부른다. 상태가 이어지는 동안 다시 울리면 사람들은 알림을 통째로 끈다.
 function onWantsYou(id) {
@@ -1578,10 +1579,15 @@ function onWantsYou(id) {
   // 둘 다 잡는다 — visibilityState 는 창이 덮여도 'visible' 이라 여기서는 쓸 수 없다.
   if (document.hasFocus()) return;
   notifyQueue.add(id);
+  // **첫 번째는 바로 울린다.** 모아서 보내려고 타이머에 맡겼더니 정작 창이 내려가 있을 때 —
+  // 알림이 가장 필요한 그때 — 늦었다: 숨은 탭의 setTimeout 은 크롬이 1초, 오래 숨어 있으면 1분까지
+  // 미룬다. 뒤이어 오는 것들만 타이머로 묶는다(같은 tag 라 앞의 알림을 갈아 끼운다).
+  if (Date.now() - notifyAt > NOTIFY_COALESCE_MS) { flushNotify(); return; }
   if (notifyTimer === null) notifyTimer = setTimeout(flushNotify, NOTIFY_COALESCE_MS);
 }
 
 function flushNotify() {
+  if (notifyTimer !== null) { clearTimeout(notifyTimer); }
   notifyTimer = null;
   const ids = [...notifyQueue].filter((id) => {
     const s = sessions.get(id);
@@ -1597,8 +1603,23 @@ function flushNotify() {
       { body: one ? one.cwd : ids.map((i) => labelOf(sessions.get(i))).join(', '),
         tag: 'palmar-wants-you' });          // 같은 tag 라 쌓이지 않고 갈아 끼워진다
   } catch (e) { return; }
+  notifyAt = Date.now();
   // 눌렀는데 그 터미널로 안 가면 "가서 찾아봐" 라고 말하는 셈이라 원래 문제를 그대로 둔다.
   n.onclick = () => { window.focus(); goToSession(ids[0]); n.close(); };
+}
+
+// 켤 때 **한 번 울려 본다.** 알림은 브라우저 권한·OS 방해금지·집중 지원까지 여러 단계를 지나야
+// 도착하고, 그중 어디서 막혀도 화면에서는 똑같이 조용하다. 한 번 보내 보면 그 사슬 전체가 한
+// 번에 확인된다 — "켰는데 안 오네" 를 나중에 알아채는 것보다 지금 아는 편이 낫다.
+function notifyTest() {
+  try {
+    const n = new Notification('palmar notifications are on', {
+      body: 'This is the only one you did not ask for. From now on it speaks when a terminal wants you.',
+      tag: 'palmar-test' });
+    n.onclick = () => { window.focus(); n.close(); };
+  } catch (e) {
+    toast(['notifications were allowed, but the browser refused to show one', String(e.message || e)]);
+  }
 }
 
 const bellEl = document.getElementById('bell');
@@ -1619,10 +1640,13 @@ async function toggleNotify() {
   // 브라우저도 손짓을 요구한다. 권한은 **포트까지 포함한 origin** 별이라 --port 를 바꾸면 다시 묻는다.
   if (perm === 'default') { try { perm = await Notification.requestPermission(); } catch (e) { perm = 'denied'; } }
   if (perm !== 'granted') {
-    toast(['notifications are blocked for ' + location.origin, 'allow them in the browser, then try again']);
+    toast(['notifications are blocked for ' + location.origin,
+           perm === 'denied' ? 'the browser is refusing — allow them for this site in its settings'
+                             : 'allow them in the browser, then try again']);
     return;
   }
   setNotify(true);
+  notifyTest();
 }
 if (bellEl) {
   bellEl.addEventListener('click', toggleNotify);
@@ -1656,12 +1680,17 @@ function checkProtocol(m) {
 function upsert(s) {
   const old = sessions.get(s.id);
   if (!old) changedAt.set(s.id, (s.created || Date.now() / 1000) * 1000);
-  else if (old.status !== s.status) {
+  // 전이할 때만이다. WANTS_YOU 안에서 waiting ↔ done 으로 옮겨 다니는 것은 새 부름이 아니다.
+  let wants = false;
+  if (old && old.status !== s.status) {
     changedAt.set(s.id, Date.now());
-    // 전이할 때만이다. WANTS_YOU 안에서 waiting ↔ done 으로 옮겨 다니는 것은 새 부름이 아니다.
-    if (WANTS_YOU.has(s.status) && !WANTS_YOU.has(old.status)) onWantsYou(s.id);
+    wants = WANTS_YOU.has(s.status) && !WANTS_YOU.has(old.status);
   }
   sessions.set(s.id, s);
+  // **넣은 다음에 부른다.** 알림은 sessions 에서 다시 읽어 이름과 경로를 만드는데, 먼저 부르면
+  // 그때 거기 있는 것은 아직 옛 세션이라 "부르는 것이 없다" 로 걸러진다. 500ms 타이머로 미룰
+  // 때는 그 사이에 넣어져서 안 보였고, 즉시 울리게 바꾸자마자 드러났다.
+  if (wants) onWantsYou(s.id);
   renderBadge();
   let t = tiles.get(s.id);
   if (!t) {
