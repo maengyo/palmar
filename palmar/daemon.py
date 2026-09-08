@@ -1973,15 +1973,44 @@ def doctor(port: int) -> int:
     out("판마다")
     if not sessions:
         out("  (없다 — 브라우저에서 터미널을 하나 열고 다시 돌려라)")
-    for s in sessions:
-        out("  %s" % (s.get("name") or s.get("cwd")))
-        out("      status=%-8s agent=%-8s alt=%-5s title=%r"
-            % (s.get("status"), s.get("agent"), s.get("alt"), s.get("title")))
+        return 0
+
+    WATCH_S, STEP = 10.0, 0.5
+    out("  %d초 동안 지켜본다 — 한 장만 찍으면 '지금 이 값' 은 보여도" % WATCH_S)
+    out("  **움직이는지** 는 안 보인다. 그동안 판에서 에이전트에게 일을 시켜라.")
     out("")
+    trail = {s["id"]: [] for s in sessions}
+    end = time.monotonic() + WATCH_S
+    while time.monotonic() < end:
+        try:
+            for s in get("/api/sessions"):
+                if s["id"] in trail:
+                    trail[s["id"]].append((s.get("status") or "?")[0])
+        except Exception:
+            break
+        time.sleep(STEP)
+
+    for s in sessions:
+        seen = trail.get(s["id"]) or []
+        moved = len(set(seen)) > 1
+        title = s.get("title")
+        out("  %s" % (s.get("name") or s.get("cwd")))
+        out("      지금      status=%s" % s.get("status"))
+        out("      읽는 근거  %s" % (
+            "훅 — %s 가 직접 알려 준다 (가장 정확하다)" % s.get("agent") if s.get("agent")
+            else ("창 제목 — 이 판은 제목을 쓴다: %r" % title if title
+                  else "출력 활동 — 이 판은 창 제목을 안 쓴다")))
+        out("      %s" % ("agent 칸은 훅이 채운다. 훅이 없는 에이전트면 비어 있는 것이 맞고, "
+                          "상태와는 상관이 없다." if not s.get("agent") else "훅이 붙어 있다."))
+        out("      %.0f초 동안  %s   %s" % (WATCH_S, " ".join(seen) or "(못 읽음)",
+                                          "← 움직인다" if moved else "← **한 번도 안 바뀌었다**"))
+        if not moved:
+            out("        (i=idle w=working d=done  — 지켜보는 동안 그 판에서 정말 일이 돌았나?)")
+        out("")
     out("무엇을 보면 되나")
-    out("  · 판에서 에이전트를 돌리는 동안 status 가 working 이 되는가")
-    out("  · title 이 null 이 아니면 제목으로 읽는 중이고, null 이면 출력으로 읽는 중이다")
-    out("  · 위의 '도는 데몬' 줄에 **이 코드와 다르다** 가 있으면 그것부터다")
+    out("  · 위 줄이 **안 바뀌었다** 면: 일을 시키는 동안 쟀는지 먼저 보고, 그래도 안 바뀌면")
+    out("    이 출력을 그대로 보내라. 데몬이 무엇을 보는지가 거기 다 있다.")
+    out("  · '도는 데몬' 에 **이 코드와 다르다** 가 있으면 그것부터다 — 다시 띄워라.")
     return 0
 
 
