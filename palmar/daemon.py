@@ -102,6 +102,30 @@ OUT_QUIET_S = 5.0
 #: 일이 아니다. 직업 제어가 없는 셸에서는 아래 프롬프트 검사가 무력해지므로 이 값이 그 자리를 맡는다.
 OUT_MIN_S = 1.0
 
+#: 폴더 찾기 (`GET /api/dirs?find=`). 위 칸이 "sessions and folders" 를 찾는다고 말하는데,
+#: 브라우저는 **이미 펼친 행** 만 걸러 낼 수 있었다 — 펼쳐 본 적 없는 폴더는 안 잡혔다. 약속을 지킨다.
+#: 뿌리 아래를 한 번 훑어 이름표를 만들어 두고 그걸 찾는다. 실측(2026-09-08, 진짜 홈):
+#:   깊이 2 → 133개 1ms · 깊이 3 → 2,130개 41ms · **깊이 4 → 4,172개 204ms**
+#: 204ms 는 **이벤트 루프를 그만큼 막는다** — 단일 스레드라 그동안 모든 판이 멈춘다. 그래서
+#: `FIND_YIELD` 개마다 루프에 양보하며 훑는다. 만든 이름표는 `FIND_TTL_S` 동안 다시 쓴다.
+FIND_DEPTH = 4
+FIND_YIELD = 400        # 이만큼 훑을 때마다 루프에 양보한다
+FIND_TTL_S = 60.0
+FIND_MAX = 20000        # 이름표 상한 — 아주 넓은 홈에서 메모리가 자라지 않게
+FIND_HITS = 40          # 한 번에 돌려주는 개수
+#: 훑지 않는 폴더 이름. 사람이 터미널을 여는 자리가 아니고, 있으면 결과를 통째로 덮는다 —
+#: 실측(2026-09-08): macOS 홈에서 "work" 를 찾으니 `~/Library/…/Frameworks` 가 화면을 채웠다
+#: (`Frameworks` 안에 work 가 들어 있다). 도구가 만든 나무는 넓기만 하고 갈 일이 없다.
+FIND_SKIP = frozenset((
+    "Library", "Applications", "node_modules", "__pycache__", "site-packages",
+    "venv", ".venv", "dist", "build", "target", "Pods", "DerivedData",
+    "vendor", "bower_components", "Caches",
+))
+#: 번들. **폴더처럼 생겼지만 파일이다** — 여기에 터미널을 열 일은 없고, 안이 아주 넓다
+#: (실측: `~/Pictures/Photos Library.photoslibrary` 하나가 결과를 채웠다).
+FIND_SKIP_SUFFIX = (".app", ".photoslibrary", ".framework", ".bundle", ".xcodeproj",
+                    ".xcworkspace", ".lproj", ".appex", ".sparsebundle", ".fcpbundle")
+
 #: **화면에 아무것도 안 남기는 출력은 일이 아니다.** 어떤 TUI 는 가만히 있어도 커서 관리 시퀀스를
 #: 계속 낸다 — 어떤 TUI 는 한가할 때 초당 10번 똑같은 32바이트를 찍었다(실측 2026-09-08, 15초에 147회,
 #: 전부 `ESC[?25l ESC[?7l ESC[?7h ESC[0m ESC[?12l ESC[?25h` 하나였고 이스케이프를 걷어낸 내용은 0바이트).
@@ -1340,6 +1364,101 @@ def list_dirs(path: Path) -> list[dict]:
     return entries
 
 
+#: 폴더 이름표. (만든 시각 또는 None, [경로…]) — `find_dirs` 만 쓴다.
+#: **없음은 None 이지 0.0 이 아니다.** `time.monotonic()` 의 기준점은 플랫폼이 정한다 — 이 맥에서는
+#: 프로세스가 뜰 때 0 에서 출발해서, 0.0 을 "만든 적 없음" 으로 쓰면 데몬이 뜬 지 60초 동안
+#: `now - 0.0 > TTL` 이 거짓이라 이름표를 아예 안 만든다(실측 2026-09-08: 켜자마자 찾으면 0건).
+_FIND_INDEX: list = [None, []]
+_FIND_LOCK: list = [None]
+
+
+async def build_find_index() -> list:
+    """뿌리 아래 폴더를 한 번 훑는다. **`FIND_YIELD` 개마다 루프에 양보한다** — 안 그러면
+    훑는 동안(실측 204ms) 모든 판의 바이트가 멈춘다."""
+    out: list = []
+    n = 0
+    for root in roots():
+        stack = [(str(root), 0)]
+        while stack and len(out) < FIND_MAX:
+            d, depth = stack.pop()
+            if depth >= FIND_DEPTH:
+                continue
+            try:
+                with os.scandir(d) as it:
+                    for e in it:
+                        n += 1
+                        if n % FIND_YIELD == 0:
+                            await asyncio.sleep(0)
+                        if (e.name.startswith(".") or e.name in FIND_SKIP
+                                or e.name.endswith(FIND_SKIP_SUFFIX)):
+                            continue
+                        try:
+                            if not e.is_dir(follow_symlinks=False):
+                                continue
+                        except OSError:
+                            continue
+                        out.append(e.path)
+                        if len(out) >= FIND_MAX:
+                            break
+                        stack.append((e.path, depth + 1))
+            except OSError:
+                continue
+    return out
+
+
+async def find_dirs(qs: str) -> list:
+    """이름표에서 찾는다. **경로를 그대로 친 경우가 먼저다** — 아는 경로를 붙여넣는 것이
+    가장 흔한 쓰임이고, 그건 이름표에 없어도 (깊이 밖이어도) 답할 수 있다."""
+    hits: list = []
+    seen = set()
+
+    exact = resolve_under_roots(os.path.expanduser(qs)) if qs.startswith(("/", "~")) else None
+    if exact is not None and exact.is_dir():
+        hits.append(dir_entry(str(exact), str(exact)))
+        seen.add(str(exact))
+
+    now = time.monotonic()
+    if _FIND_INDEX[0] is None or now - _FIND_INDEX[0] > FIND_TTL_S:
+        if _FIND_LOCK[0] is None:            # 여럿이 동시에 물어도 한 번만 훑는다
+            _FIND_LOCK[0] = asyncio.get_running_loop().create_future()
+            try:
+                _FIND_INDEX[1] = await build_find_index()
+                _FIND_INDEX[0] = time.monotonic()
+            finally:
+                fut, _FIND_LOCK[0] = _FIND_LOCK[0], None
+                if not fut.done():
+                    fut.set_result(None)
+        else:
+            try:
+                await asyncio.wait_for(asyncio.shield(_FIND_LOCK[0]), 10)
+            except Exception:
+                pass
+
+    low = qs.lower()
+    # **가까운 것부터.** 이름이 그대로 맞는 것 → 이름이 그것으로 시작 → 이름에 든 것 → 경로에 든 것.
+    # 같은 등급이면 얕은 것이 먼저다 — `~/work/api` 가 `~/…/…/…/apiservice` 보다 찾던 것일 때가 많다.
+    scored = []
+    for pth in _FIND_INDEX[1]:
+        if pth in seen:
+            continue
+        name = pth.rsplit("/", 1)[-1].lower()
+        if name == low:
+            rank = 0
+        elif name.startswith(low):
+            rank = 1
+        elif low in name:
+            rank = 2
+        elif low in pth.lower():
+            rank = 3
+        else:
+            continue
+        scored.append((rank, pth.count("/"), len(pth), pth))
+    scored.sort()
+    for _, _, _, pth in scored[: FIND_HITS - len(hits)]:
+        hits.append(dir_entry(pth, pth))
+    return hits
+
+
 def resolve_under_roots(raw) -> Path | None:
     """절대 경로 문자열 → resolve() → 뿌리 아래의 디렉터리. 아니면 None."""
     if not isinstance(raw, str) or not raw or "\x00" in raw:
@@ -1750,6 +1869,10 @@ async def handle_request(reader, writer) -> None:
 
     if path == "/api/dirs":
         if method == "GET":
+            find = qget(q, "find", "").strip()
+            if find:
+                writer.write(http_json(200, {"find": find, "entries": await find_dirs(find)}))
+                return
             raw = qget(q, "path")
             if not raw:
                 # 뿌리 목록. path 는 null, name 은 절대 경로다 — 브라우저는 그걸 그대로 다음 path 로 쓴다.

@@ -1636,15 +1636,37 @@ function applyFilter() {
     while (n && n.classList.contains('ses')) { if (!n.classList.contains('hide')) any = true; n = n.nextElementSibling; }
     g.classList.toggle('hide', !!q && !any);
   }
-  for (const r of treeEl.querySelectorAll('.row')) {
-    r.classList.toggle('hide', !!q && !(r.dataset.path || '').toLowerCase().includes(q));
-  }
+  // 트리 쪽은 아래 findDirs 가 맡는다 — **펼친 행만 거르는 것은 검색이 아니었다.**
+}
+
+// 위 칸은 "sessions and folders" 를 찾는다고 말한다. 전에는 **이미 펼친 행만** 걸러 냈으므로
+// 새로 연 화면에서는 폴더를 사실상 못 찾았다 — 화면이 지키지 않는 약속이었다.
+// 이제 데몬에 묻는다(`GET /api/dirs?find=`). 경로를 그대로 붙여넣는 것도 같은 길로 답한다.
+let findSeq = 0, findTimer = null;
+function findDirs() {
+  const q = searchEl.value.trim();
+  clearTimeout(findTimer);
+  if (!q) { findResults = null; renderTree(); return; }
+  // 사람은 치는 중이다. 멎을 때까지 기다렸다 한 번만 묻는다.
+  findTimer = setTimeout(async () => {
+    const mine = ++findSeq;
+    try {
+      const r = await api('GET', '/api/dirs?find=' + encodeURIComponent(q));
+      if (mine !== findSeq) return;            // 그 사이 더 쳤다 — 늦게 온 답은 버린다
+      findResults = { q, entries: r.entries || [] };
+    } catch (e) {
+      if (mine !== findSeq) return;
+      findResults = { q, entries: [], error: e.message };
+    }
+    renderTree();
+  }, 180);
 }
 let hadQuery = false;
 function onSearch() {
   const q = !!searchEl.value.trim();
   if (q !== hadQuery) { hadQuery = q; renderList(); }   // 접힘 무시가 켜지거나 꺼진다 — 목록을 다시 짠다
   else applyFilter();
+  findDirs();
 }
 searchEl.addEventListener('input', onSearch);
 addEventListener('keydown', (e) => {
@@ -2017,8 +2039,39 @@ function selectDir(n) {
   launchBtn.disabled = false;
   renderTree();
 }
+let findResults = null;      // { q, entries } — 검색 중일 때만. null 이면 평소의 트리다.
+
 function renderTree() {
   treeEl.textContent = '';
+  const hint0 = document.getElementById('tree-hint');
+  if (hint0 && !findResults) hint0.textContent = 'folders only · read when expanded';
+  if (findResults) {
+    // **찾은 것을 평평하게 보여 준다.** 트리 속으로 펼쳐 들어가면 어디를 보고 있는지 잃는다.
+    const hint = document.getElementById('tree-hint');
+    if (hint) hint.textContent = 'matching folders · click one to open a terminal there';
+    if (!findResults.entries.length) {
+      treeEl.appendChild(el('div', 'hint2', findResults.error
+        ? 'search failed: ' + findResults.error
+        : 'no folder matches ' + JSON.stringify(findResults.q)));
+      return;
+    }
+    for (const e of findResults.entries) {
+      // selectDir 이 기대하는 모양 그대로 만든다 (branch — git 가 아니다)
+      const n = { path: e.name, name: e.name, depth: 0, hasChildren: !!e.has_children, branch: e.git_branch };
+      const r = el('div', 'row found' + (selectedDir && selectedDir.path === e.name ? ' sel' : ''));
+      r.dataset.path = e.name;
+      r.tabIndex = 0;
+      r.appendChild(el('span', 'nm', shortPath(e.name)));
+      if (e.git_branch) r.appendChild(el('span', 'br', e.git_branch));
+      r.title = e.name;
+      // 찾은 것을 고르면 그것이 곧 cwd 다 — 트리를 파고들 필요가 없다.
+      const pick = () => selectDir(n);   // 트리에서 고르는 것과 **같은 길**이다
+      r.addEventListener('click', pick);
+      r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); pick(); launch(); } });
+      treeEl.appendChild(r);
+    }
+    return;
+  }
   const walk = (n, i) => {
     const r = el('div', 'row' + (n.depth === 0 ? ' root' : '') + (n === selectedDir ? ' sel' : '') +
                         (n.depth === 0 && n.path !== home ? ' dim' : '') + (n.loading ? ' loading' : ''));
