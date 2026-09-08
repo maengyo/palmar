@@ -208,8 +208,14 @@ macOS 의 IME 는 브라우저에 따라 **진짜 키 코드**를 보낸다 — 
 | 진짜 키 코드 | `d안s녕g하t십s니까` |
 
 `attachCustomKeyEventHandler` 는 `_compositionHelper.keydown` 보다 **먼저** 돌고, 거기서 `false` 를
-내면 `_keyDown` 이 그 자리에서 끝난다. 그래서 `ev.isComposing || ev.keyCode === 229` 인 keydown 은
-그대로 돌려보낸다 — 조합이 끝나면 `compositionend` 가 제 몫을 하므로 잃는 것이 없다.
+내면 `_keyDown` 이 그 자리에서 끝난다. 그래서 조합이 소유한 keydown 은 그대로 돌려보낸다 —
+조합이 끝나면 `compositionend` 가 제 몫을 하므로 잃는 것이 없다.
+
+**조합 중인지는 우리가 직접 센다.** `ev.isComposing` 만 보지 않는다 — 브라우저마다 채워 주는 정도가
+다르고, 실제로 **사파리에서만** 한글이 깨졌다(크롬은 멀쩡했다). textarea 의 `compositionstart`·
+`compositionend` 는 확실하므로 그것으로 표시를 세우고 내린다. `compositionend` 에서 **곧바로** 내린다:
+늦게 내리면 조합을 끝낸 다음 키까지 삼킨다. `blur` 에서도 내린다 — 시작만 오고 끝이 안 오는 일이
+생기면 그 판이 키를 통째로 삼키므로, 갇히느니 푼다.
 
 ## 판의 글자 인코딩
 

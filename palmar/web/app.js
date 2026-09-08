@@ -477,7 +477,10 @@ class Tile {
       // 실측: 같은 입력을 keyCode 229 로 흘리면 '안녕하십니까', 실제 키 코드로 흘리면 무너졌다.
       // 여기서 false 를 내면 xterm 의 _keyDown 이 그 자리에서 끝나 조합이 살아남는다. 조합이 끝나면
       // compositionend 가 제 몫을 하므로 잃는 것이 없다.
-      if (ev.isComposing || ev.keyCode === 229) return false;
+      // `ev.isComposing` 만 믿지 않는다 — **사파리는 그 칸을 안 채울 때가 있다**(한글이 안 되는
+      // 것이 사파리에서만이었다, 2026-09-09). 조합 시작·끝은 textarea 가 확실히 알려 주므로
+      // 그것으로 우리가 직접 센다(아래 term.open 뒤).
+      if (this.composing || ev.isComposing || ev.keyCode === 229) return false;
       const mod = ev.metaKey || (ev.ctrlKey && ev.shiftKey);
       if (!mod || ev.altKey) return true;
       const k = (ev.key || '').toLowerCase();
@@ -496,6 +499,18 @@ class Tile {
       return true;
     });
     this.term.open(this.termEl);
+    // **조합 중인지 직접 센다.** 위 키 핸들러가 이걸 본다 — `ev.isComposing` 은 브라우저마다
+    // 채워 주는 정도가 다르고, 사파리에서 한글이 깨진 것이 그 차이였다.
+    // compositionend 에서 **곧바로** 내린다: 늦게 내리면 조합을 끝낸 다음 키(Enter 같은 것)까지 삼킨다.
+    this.composing = false;
+    const ta = this.termEl.querySelector('textarea');
+    if (ta) {
+      ta.addEventListener('compositionstart', () => { this.composing = true; });
+      ta.addEventListener('compositionend', () => { this.composing = false; });
+      // 안전핀. compositionstart 만 오고 end 가 영영 안 오면 그 판이 키를 통째로 삼킨다 —
+      // 그 상태로 갇히느니 포커스가 떠날 때 푼다.
+      ta.addEventListener('blur', () => { this.composing = false; });
+    }
     this.gl = tryWebgl(this.term, () => { this.gl = null; updateStatusBar(); });
     // 안 보이는 동안(다른 캔버스) 재면 열 수가 0 으로 나온다 — 보이게 될 때 refit() 이 잰다
     this.fitted = false;
