@@ -54,8 +54,11 @@ window at the same moment.
 
 **Search** with `Ctrl K` (`⌘K` on a Mac) reaches every session and folder by name, path, or agent.
 
-**`Ctrl −` gives you more canvas.** It is the browser's own zoom, so the cell shrinks and every
-terminal gets more rows and columns at once.
+**Text size, per terminal.** `Ctrl`/`⌘` + wheel over a terminal changes that one's text size. The
+window keeps its size, so the rows and columns change with it — smaller text puts more of a log in
+the same box, larger text makes one pane easy to read across the room. The size readout in its
+title bar turns into the reset. `Ctrl −` still zooms everything at once, since that is the
+browser's own.
 
 ## Quick start
 

@@ -402,6 +402,10 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .tb .name { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tb .name span { color: var(--ink-3); font-weight: 400; }
 .tb .sz { margin-left: auto; font-size: 10.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; flex: none; }
+/* #25 이 판의 글자 크기가 기본이 아닐 때. 되돌리는 자리라는 것만 알리면 되므로 밑줄 하나다 —
+   제목 줄에 단추를 하나 더 놓지 않으려고 이미 있는 크기 표시에 얹었다. */
+.tb .sz.own { cursor: pointer; color: var(--ink-2); text-decoration: underline dotted; text-underline-offset: 2px; }
+.tb .sz.own:hover { color: var(--ink); }
 .tb .st { font-size: 10.5px; padding: 1px 6px; border-radius: 3px; flex: none; }
 .tb .st.wait { color: var(--st-wait); background: color-mix(in srgb, var(--st-wait) 14%, transparent); }
 .tb .st.work { color: var(--st-work); background: color-mix(in srgb, var(--st-work) 14%, transparent); }

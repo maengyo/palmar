@@ -66,6 +66,15 @@ const MM_PAD = 4;                                       // 미니맵 상자 안�
 // 6.996px 로 7 에 못 미쳤다(실측). 그래서 조금 여유를 두어 11.75px: 7.05px → dpr 1 에서 7, dpr 2 에서 14 → 7.
 // 눈으로 11.5 와 구분되지 않는다. 다른 dpr(1.5 등)에서는 여전히 내림이 있다 — cate 가 겪은 그 자리다.
 const FONT_PX = 11.75;
+// 판마다 글자 크기 (#25). 창은 그대로 두고 글자만 바꾸므로 **행·열이 늘고 준다** — 같은 자리에
+// 더 많이 보거나, 크게 보거나. 브라우저의 Ctrl− 가 모든 판에 하는 일을 판 하나에만 하는 것이다.
+const FONT_MIN = 6, FONT_MAX = 32, FONT_STEP = 1;
+
+// 이 기계의 글쇠 이름. 안내에 쓰는 글자이고, 처리 쪽은 늘 metaKey 와 ctrlKey 를 **둘 다** 받는다 —
+// 안내만 한쪽으로 박아 두면 다른 쪽 사람에게 없는 글쇠를 가리키게 된다(전에 ⌘ 가 그랬다).
+const IS_MAC = /Mac|iPhone|iPad/i.test(
+  (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '');
+const KMOD = IS_MAC ? '⌘' : 'Ctrl';
 // 목업 .term 의 line-height 1.55 는 font-size 기준이고 xterm 의 lineHeight 는 글꼴 고유 줄높이(≈1.3) 기준이라
 // 같은 눈높이를 내려면 1.15 쯤이다. 사람이 봐야 하는 값.
 const LINE_HEIGHT = 1.15;
@@ -373,6 +382,15 @@ class Tile {
     this.clEl = el('button', 'cl'); this.clEl.type = 'button';
     this.clEl.title = 'close terminal'; this.clEl.setAttribute('aria-label', 'close terminal');
     tb.append(this.dotEl, this.nameEl, this.pillEl, this.szEl, this.rnEl, this.xpEl, this.clEl);
+    // #25 판마다 글자 크기. Ctrl/⌘+휠은 브라우저 확대이기도 하므로 반드시 막는다 — 안 막으면
+    // 창 하나를 키우려다 페이지 전체가 커진다. 그냥 휠은 그대로 두어 xterm 의 스크롤백이 산다.
+    e.addEventListener('wheel', (ev) => {
+      if (!ev.ctrlKey && !ev.metaKey) return;
+      ev.preventDefault(); ev.stopPropagation();
+      this.setFont((this.term.options.fontSize || FONT_PX) + (ev.deltaY < 0 ? FONT_STEP : -FONT_STEP));
+    }, { passive: false });
+    // 크기 표시가 곧 되돌리기 단추다 — 제목 줄에 단추를 하나 더 붙이지 않으려고 이미 있는 것에 얹는다.
+    this.szEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.setFont(FONT_PX); });
     this.termEl = el('div', 'term');
     this.gripEl = el('div', 'grip');
     e.append(tb, this.termEl, this.gripEl);
@@ -387,13 +405,19 @@ class Tile {
     const z = saved && saved.z ? saved.z : ++zTop;
     zTop = Math.max(zTop, z);
     Object.assign(e.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px', zIndex: String(z) });
+    // **저장된 글자 크기를 여기서 지우지 않는다.** 이 줄은 자리를 다시 적는 것이지 이 판의 성질을
+    // 통째로 새로 쓰는 것이 아니다 — 통째로 덮어써서 f 가 날아갔고, 그래서 새로 열면 늘 기본
+    // 크기로 떴다(실측: localStorage 에는 f 가 남아 있는데 화면은 기본값이었다).
     layout[s.id] = { x, y, w, h, z };
+    if (saved && saved.f) layout[s.id].f = saved.f;
     saveLayout();
     cvScroll.appendChild(e);
 
     // xterm — 터미널 에뮬레이션은 브라우저가 한다 (AGENTS.md 원칙 1)
     this.term = new Terminal({
-      fontSize: FONT_PX,
+      // layout[s.id] 이 아니라 **saved** 에서 읽는다 — 위에서 layout 항목을 다시 쓰므로,
+      // 그 사이에 무엇이 지워져도 이 값은 흔들리지 않는다.
+      fontSize: (saved && saved.f) || FONT_PX,
       fontFamily: cssVar('--mono'),
       lineHeight: LINE_HEIGHT,
       theme: termTheme(),
@@ -519,7 +543,25 @@ class Tile {
     this.showSize();
   }
 
-  showSize() { this.szEl.textContent = this.term.cols + '×' + this.term.rows; }
+  showSize() {
+    this.szEl.textContent = this.term.cols + '×' + this.term.rows;
+    const f = this.term.options.fontSize;
+    const own = f && Math.abs(f - FONT_PX) > 0.01;
+    this.szEl.classList.toggle('own', !!own);
+    this.szEl.title = own
+      ? 'text ' + f + 'px — click to reset  ·  ' + KMOD + '+wheel to change'
+      : this.term.cols + '×' + this.term.rows + ' — ' + KMOD + '+wheel over the terminal changes the text size';
+  }
+
+  // 창은 안 건드린다. 글자만 바꾸고 다시 재면 행·열이 따라온다 — 그리고 그 resize 가 에이전트에
+  // 전해지므로(refit → sendResize) TUI 는 새 크기로 다시 그린다.
+  setFont(px) {
+    const f = Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(px * 4) / 4));
+    if (Math.abs(f - (this.term.options.fontSize || FONT_PX)) < 0.01) return;
+    this.term.options.fontSize = f;
+    this.refit();          // fit → sendResize → showSize 를 한 번에 한다
+    this.persist();
+  }
 
   update(s) {
     this.s = s;
@@ -553,6 +595,8 @@ class Tile {
   persist() {
     const r = this.rect();
     layout[this.id] = { x: r.x, y: r.y, w: r.w, h: r.h, z: parseInt(this.el.style.zIndex, 10) || 0 };
+    const f = this.term.options.fontSize;
+    if (f && Math.abs(f - FONT_PX) > 0.01) layout[this.id].f = f;   // 기본값은 안 적는다
     saveLayout();
   }
 
@@ -561,7 +605,9 @@ class Tile {
     let mode = null, sx = 0, sy = 0, ox = 0, oy = 0, ow = 0, oh = 0;
     const down = (m) => (ev) => {
       // 제목줄 위의 단추·입력칸·확인 줄은 끌기가 아니다 (#31: .cl 과 .cfm 이 여기 붙었다)
-      if (ev.button !== 0 || ev.target.closest('.xp, .rn, .cl, .ed, .cfm') || this.el.classList.contains('max')) return;
+      // .sz.own 만 뺀다 — 평소의 크기 표시는 제목줄의 일부라 끌려야 하고, 글자 크기를 바꾼
+      // 판에서만 그것이 되돌리기 단추가 된다(#25). 안 빼면 pointerdown 이 끌기로 잡혀 click 이 안 난다.
+      if (ev.button !== 0 || ev.target.closest('.xp, .rn, .cl, .ed, .cfm, .sz.own') || this.el.classList.contains('max')) return;
       mode = m; sx = ev.clientX; sy = ev.clientY;
       ({ x: ox, y: oy, w: ow, h: oh } = this.rect());
       this.el.classList.add('drag');
@@ -1843,8 +1889,7 @@ function boot() {
   // 단축키 안내는 이 기계의 글쇠를 말해야 한다. 처리 쪽은 진작 metaKey 와 ctrlKey 를 둘 다 받고
   // 있었는데(아래 keydown) 안내만 ⌘ 로 박혀 있어서, 리눅스·WSL 에서는 없는 글쇠를 가리켰다.
   // HTML 의 기본값은 Ctrl 이다 — 맥이 아닌 곳이 더 넓고, 못 알아보면 안 바꾸는 편이 안전하다.
-  const uaP = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
-  if (/Mac|iPhone|iPad/i.test(uaP)) {
+  if (IS_MAC) {
     const k = document.getElementById('kmod');
     if (k) k.firstElementChild.textContent = '⌘';
   }
