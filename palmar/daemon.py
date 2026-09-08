@@ -1866,11 +1866,141 @@ async def main(port: int) -> None:
         pass
 
 
+def doctor(port: int) -> int:
+    """`palmar --doctor` — **이 코드**와 **지금 도는 데몬**과 **판마다의 상태**를 한 화면에 낸다.
+
+    신호등이 안 켜진다는 보고를 받고 짐작으로 왕복하지 않으려고 둔다. 첫 줄에서 가리는 것이
+    가장 흔한 원인이다: 받아 놓은 코드와 도는 데몬이 **다른 판**인 경우(다시 안 띄운 것).
+    새 계약을 만들지 않는다 — `protocol.md` 에 이미 있는 것만 읽는다."""
+    import platform, subprocess, urllib.error, urllib.request
+
+    def out(*a):
+        print(*a)
+
+    out("palmar --doctor")
+    out("─" * 64)
+    out("이 코드")
+    out("  버전      %s   프로토콜 %d" % (__version__, PROTOCOL))
+    out("  파일      %s" % Path(__file__).resolve())
+    repo = Path(__file__).resolve().parent.parent
+    if (repo / ".git").exists():
+        def git(*a):
+            try:
+                return subprocess.run(["git", "-C", str(repo)] + list(a),
+                                      capture_output=True, text=True, timeout=5).stdout.strip()
+            except Exception:
+                return "?"
+        out("  커밋      %s  (%s)" % (git("rev-parse", "--short", "HEAD"), git("log", "-1", "--format=%s")[:48]))
+        out("  원격      %s" % (git("remote", "get-url", "origin") or "(없음)"))
+        st = git("status", "--porcelain")
+        if st:
+            out("  ! 작업 트리에 안 커밋한 변경이 %d개 있다" % len(st.splitlines()))
+    out("")
+    out("이 기계")
+    out("  python    %s  (%s)" % (platform.python_version(), sys.executable))
+    out("  platform  %s" % platform.platform())
+    out("  $SHELL    %s%s" % (os.environ.get("SHELL") or "(없음)",
+                              "   ← 없으면 /bin/sh 로 떨어진다" if not os.environ.get("SHELL") else ""))
+    out("  홈        %s" % PALMAR_DIR)
+    out("")
+
+    if not TOKEN_FILE.exists():
+        out("도는 데몬   **없다** — 토큰 파일이 없다(%s)" % TOKEN_FILE)
+        out("")
+        out("→ 먼저 `python3 -m palmar` 로 띄우고 다시 이 명령을 돌려라.")
+        return 1
+    token = TOKEN_FILE.read_text().strip()
+    base = "http://127.0.0.1:%d" % port
+
+    def get(path):
+        r = urllib.request.Request(base + path + ("&" if "?" in path else "?") + "token=" + token,
+                                   headers={"Origin": base})
+        with urllib.request.urlopen(r, timeout=5) as f:
+            return json.loads(f.read() or b"null")
+
+    try:
+        sessions = get("/api/sessions")
+    except Exception as e:
+        out("도는 데몬   127.0.0.1:%d 에 못 붙었다 — %s" % (port, e))
+        out("")
+        out("→ 다른 포트로 띄웠으면 `--doctor --port <그 포트>` 로 다시.")
+        return 1
+
+    ver = _daemon_hello_version(port, token)
+    out("도는 데몬")
+    if ver is None:
+        out("  버전      **말하지 않는다** — 프로토콜 판 이전의 낡은 데몬이다")
+        out("  ! 지금 받아 둔 코드로 다시 띄워야 한다(그 데몬은 옛 코드다)")
+    else:
+        same = ver.get("daemon") == __version__ and ver.get("v") == PROTOCOL
+        out("  버전      %s   프로토콜 %s   %s"
+            % (ver.get("daemon"), ver.get("v"), "(이 코드와 같다)" if same else "**이 코드와 다르다**"))
+        if not same:
+            out("  ! 도는 데몬이 이 코드가 아니다 — 껐다 다시 띄워라. 고친 것이 안 들어가 있다.")
+    out("  세션      %d개" % len(sessions))
+    out("")
+    out("판마다")
+    if not sessions:
+        out("  (없다 — 브라우저에서 터미널을 하나 열고 다시 돌려라)")
+    for s in sessions:
+        out("  %s" % (s.get("name") or s.get("cwd")))
+        out("      status=%-8s agent=%-8s alt=%-5s title=%r"
+            % (s.get("status"), s.get("agent"), s.get("alt"), s.get("title")))
+    out("")
+    out("무엇을 보면 되나")
+    out("  · 판에서 에이전트를 돌리는 동안 status 가 working 이 되는가")
+    out("  · title 이 null 이 아니면 제목으로 읽는 중이고, null 이면 출력으로 읽는 중이다")
+    out("  · 위의 '도는 데몬' 줄에 **이 코드와 다르다** 가 있으면 그것부터다")
+    return 0
+
+
+def _daemon_hello_version(port: int, token: str):
+    """/events 에 붙어 hello 한 장만 읽는다. 새 계약을 안 만들려고 있는 길로 묻는다."""
+    import base64 as _b64, socket as _sock, struct as _st
+    try:
+        c = _sock.create_connection(("127.0.0.1", port), timeout=5)
+        c.settimeout(5)
+        key = _b64.b64encode(os.urandom(16)).decode()
+        c.sendall(("GET /events?token=%s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
+                   "Origin: http://127.0.0.1:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                   "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n"
+                   % (token, port, port, key)).encode())
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            buf += c.recv(4096)
+        buf = buf.split(b"\r\n\r\n", 1)[1]
+        def need(n):
+            nonlocal buf
+            while len(buf) < n:
+                buf += c.recv(65536)
+            o, buf = buf[:n], buf[n:]
+            return o
+        for _ in range(8):
+            h = need(2)
+            ln = h[1] & 0x7F
+            if ln == 126: ln = _st.unpack("!H", need(2))[0]
+            elif ln == 127: ln = _st.unpack("!Q", need(8))[0]
+            pay = need(ln)
+            if (h[0] & 0x0F) == 1:
+                m = json.loads(pay)
+                if m.get("t") == "hello":
+                    c.close()
+                    return m if "v" in m else None
+        c.close()
+    except Exception:
+        pass
+    return None
+
+
 def cli() -> None:
     """`palmar` 명령과 `python3 -m palmar` 가 둘 다 여기로 온다."""
     ap = argparse.ArgumentParser(prog="palmar", description="palmar 데몬. 127.0.0.1 에만 묶인다.")
     ap.add_argument("--port", type=int, default=8801)
     ap.add_argument("--version", action="version", version="palmar " + __version__)
+    ap.add_argument("--doctor", action="store_true",
+                    help="이 코드·도는 데몬·판마다의 상태를 찍고 나간다")
     args = ap.parse_args()
+    if args.doctor:
+        raise SystemExit(doctor(args.port))
     asyncio.run(main(args.port))
 
