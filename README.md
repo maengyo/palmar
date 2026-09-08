@@ -36,8 +36,8 @@ there is no version of it that kills what is inside.
 
 **The left list is never filtered by canvas.** Everything you have running is in it, wherever it
 lives. It groups by canvas and folds, but folding can never hide the thing you are needed for: a
-canvas with something waiting floats to the top, a folded group still draws its waiting rows, and
-its header says how many of the sessions it hid are asking for you. A row from another canvas
+folded group still draws its waiting rows, and its header says how many of the sessions it hid are
+asking for you. The order never changes — it is the tab order — so nothing moves under your hand. A row from another canvas
 carries a small badge — click it and palmar switches to that canvas and brings you to the window.
 
 **One terminal can fill the canvas.** The expand box blows a window up to the whole canvas, and its

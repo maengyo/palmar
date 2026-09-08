@@ -1344,11 +1344,11 @@ function renderByCanvas() {
     buckets.get(k).push(s);
   }
   const keys = [...buckets.keys()].filter((k) => buckets.get(k).length);
-  // 1) 나를 부르는 캔버스가 위로. **막힌 것(waiting)이 끝난 것(done)보다 위다.**
-  //    done 도 올리는 것은 제목으로 읽는 에이전트가 waiting 을 못 내기 때문이다(#38) — waiting 만
-  //    보면 codex 를 쓰는 사람에게는 이 줄이 영영 안 움직인다.
-  const rank = (k) => { const c = wantClass(buckets.get(k)); return c === 'wait' ? 0 : c === 'done' ? 1 : 2; };
-  keys.sort((a, b) => rank(a) - rank(b));   // 안정 정렬이라 같은 편끼리는 데몬이 준 차례 그대로다
+  // **차례를 바꾸지 않는다.** 탭 줄과 같은 차례, 데몬이 준 차례 그대로다.
+  // 전에는 나를 부르는 캔버스를 맨 위로 올렸다(⑪ 의 "기다리는 것은 못 놓친다"). 그 보장은 이제
+  // 다른 넷이 지고 있다 — 탭의 점, 머리글의 점, 접힌 묶음에도 남는 기다리는 줄, 그리고 창이
+  // 덮여 있을 때의 알림. 반면 값은 계속 나갔다: **손이 가 있는 목록이 눈앞에서 뛴다.**
+  // 자리가 고정된 목록이 훑기 쉽고, 사용자가 그렇게 요구했다(2026-09-08).
   for (const k of keys) {
     const arr = buckets.get(k);
     arr.sort((a, b) => statusRank(a) - statusRank(b) || a.created - b.created);   // 묶음 안은 상태 차례
