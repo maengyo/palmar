@@ -87,6 +87,14 @@ ALT_OFF = b"\x1b[?1049l"
 OSC_TITLE = re.compile(rb"\x1b\][012];([^\x07\x1b]{0,255})(?:\x07|\x1b\\)")
 TITLE_WINDOW_S = 3.0
 TITLE_BUSY_N = 2
+#: **횟수만으로는 모자란다 — 얼마나 걸쳐 있는지도 본다.** 제목을 명령마다 갈아 끼우는 셸
+#: (oh-my-zsh·p10k 의 preexec/precmd, WSL 의 맨 bash)은 명령 하나에 제목을 두세 번 바꾸는데
+#: 그것이 **9ms 안에** 다 끝난다. 그걸 스피너로 읽으면 판을 열어 두기만 해도 계속 done —
+#: 화면에서는 "사람을 부른다" — 이고, 게다가 `title_spun` 이 걸려 되돌림 층까지 영영 꺼진다.
+#: 2026-09-09 실측: 그런 셸의 빈 판이 12초 내내 done 이었다.
+#: 스피너는 정의상 **이어서** 돈다(codex ~12회/초, Claude Code ~1회/초 — 둘 다 창을 가득 채운다).
+#: 명령 하나에 붙는 제목 갈이는 순간이다. 이 값이 그 둘을 가른다. 출력 층의 OUT_MIN_S 와 같은 생각이다.
+TITLE_MIN_S = 0.5
 OSC_CARRY_MAX = 512          # 종결자 없는 ESC] 가 계속 와도 carry 가 자라지 않게 하는 상한
 
 #: 제목을 아예 안 쓰는 에이전트를 위한 되돌림 (#22). **그런 에이전트가 실제로 있다** — 실측
@@ -716,7 +724,9 @@ class Session:
     def _title_busy(self) -> bool:
         now = time.monotonic()
         self.title_hits = [t for t in self.title_hits if now - t <= TITLE_WINDOW_S]
-        return len(self.title_hits) >= TITLE_BUSY_N
+        if len(self.title_hits) < TITLE_BUSY_N:
+            return False
+        return self.title_hits[-1] - self.title_hits[0] >= TITLE_MIN_S
 
     def _title_tick(self) -> None:
         """돌고 있으면 working, **돌다가** 멎으면 done. 돌지도 않았는데 done 이 되지는 않는다 —
