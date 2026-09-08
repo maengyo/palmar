@@ -101,6 +101,14 @@ OUT_QUIET_S = 5.0
 #: 일이 아니다. 직업 제어가 없는 셸에서는 아래 프롬프트 검사가 무력해지므로 이 값이 그 자리를 맡는다.
 OUT_MIN_S = 1.0
 
+#: **화면에 아무것도 안 남기는 출력은 일이 아니다.** 어떤 TUI 는 가만히 있어도 커서 관리 시퀀스를
+#: 계속 낸다 — aelix 는 한가할 때 초당 10번 똑같은 32바이트를 찍는다(실측 2026-09-08, 15초에 147회,
+#: 전부 `ESC[?25l ESC[?7l ESC[?7h ESC[0m ESC[?12l ESC[?25h` 하나였고 이스케이프를 걷어낸 내용은 0바이트).
+#: 그걸 활동으로 세면 **영원히 working** 이고 done 이 안 온다.
+#: **화면을 읽는 것이 아니다** — 무엇이라고 썼는지는 안 본다. 무엇이라도 썼는지만 본다.
+ESC_SEQ = re.compile(rb"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()][A-Za-z0-9]|[@-Z\\-_])")
+CONTENT_FAST = 512      # 이보다 크면 따질 것 없이 내용이 있다 — 홍수 때 한 줄 한 줄 훑지 않으려고
+
 # ── 경로 ──────────────────────────────────────────────────────────────────────────
 HOME = Path.home().resolve()
 PALMAR_DIR = Path.home() / ".palmar"        # shim 의 "$HOME/.palmar" 와 같은 글자여야 한다
@@ -567,7 +575,7 @@ class Session:
     def _emit(self, data: bytes) -> None:
         """링버퍼에 넣고(alt 구간은 빼고) 붙어 있는 모두에게 한 프레임으로 보낸다."""
         self._scan_title(data)          # 제목은 **바이트를 건드리지 않고** 지켜보기만 한다 (#38)
-        self._out_scan()                # 제목을 안 쓰는 에이전트는 출력으로 읽는다 (#22)
+        self._out_scan(data)            # 제목을 안 쓰는 에이전트는 출력으로 읽는다 (#22)
         alt_changed = self._absorb(data)
         frame = Frame.build(data)
         for a in list(self.attached):
@@ -637,9 +645,19 @@ class Session:
             self._title_tick()
 
     # ── 출력으로 상태 읽기 — 제목을 안 쓰는 에이전트용 되돌림 (#22) ──────────
-    def _out_scan(self) -> None:
+    @staticmethod
+    def _has_content(data: bytes) -> bool:
+        """이 조각이 화면에 무언가를 남기나. 커서만 움직이는 것은 아니다."""
+        if len(data) > CONTENT_FAST:
+            return True
+        rest = ESC_SEQ.sub(b"", data)
+        return any(b >= 0x20 or b in (0x07, 0x09, 0x0a, 0x0d) for b in rest)
+
+    def _out_scan(self, data: bytes) -> None:
         """바이트가 나올 때마다 부른다. 제목을 쓰는 세션에서는 아무 일도 안 한다 —
         제목이 더 정확하고, 둘이 같은 값을 놓고 다투면 신호등이 떤다."""
+        if not self._has_content(data):
+            return                       # 커서 관리 틱 — 안 온 것으로 친다
         now = time.monotonic()
         if now - self.last_out > OUT_QUIET_S:
             self.out_start = now         # 조용하다가 다시 찍기 시작했다 — 새 묶음
