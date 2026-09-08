@@ -895,8 +895,13 @@ function tidyCanvas(canvasId) {
   saveLayout();
   // 보던 자리를 같이 당긴다. 내용이 화면보다 짧아지면 브라우저가 0 으로 깎는데, 그때는 어차피
   // 전부가 한 화면에 들어온 것이라 볼 것을 놓치지 않는다.
-  cvScroll.scrollLeft = Math.max(0, l0 - sx);
-  cvScroll.scrollTop = Math.max(0, t0 - sy);
+  // **보고 있는 캔버스일 때만.** 스크롤 상자는 모든 캔버스가 같이 쓴다(안 보이는 판은 display:none
+  // 일 뿐이다). 자동 정리가 켜져 있으면 뒤에 있는 캔버스에서 판 하나가 사라진 것만으로 지금 보던
+  // 화면이 옆으로 미끄러진다 — 아무것도 안 건드렸는데 글자가 움직인다.
+  if (canvasId === current) {
+    cvScroll.scrollLeft = Math.max(0, l0 - sx);
+    cvScroll.scrollTop = Math.max(0, t0 - sy);
+  }
   renderMinimap();
   refreshOff();
   paintTidy();
@@ -2437,6 +2442,9 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // 화면에서는 지울 수 있을 때만 손잡이가 나오므로, 거절당하는 길(#18 의 409)은
                   // 콘솔에서만 태워 볼 수 있다. 데몬이 어차피 막으므로 여기 두는 것이 위험을 늘리지 않는다.
                   removeCanvas, watchInput, newTerminal, newCanvas,
+                  // 자동 정리는 판이 사라질 때만 도는 길이라 밖에서 그 순간을 만들기가 어렵다.
+                  // 단추가 부르는 것과 **같은 함수**를 그대로 내놓는다.
+                  tidyCanvas,
                   lastOutAt, renderActs };
 
 // 콘솔에서 `palmar.watchInput()`. **진짜 IME 는 헤드리스로 못 잰다** — CDP 의 조합 흉내는 통과하는데
