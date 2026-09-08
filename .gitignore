@@ -8,3 +8,6 @@ __pycache__/
 
 # 로고 시안 — 다른 세션이 만들고 있다. `git add -A` 에 쓸려 들어가지 않게 여기 적어 둔다.
 /docs/img/brand/
+
+# probe-agent 가 남기는 보고 (dev/probe-agent.py)
+palmar-probe-*.txt

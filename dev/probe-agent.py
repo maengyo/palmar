@@ -144,7 +144,12 @@ def main() -> int:
 
 
 def report(argv, dur, total, titles, marks, asked) -> None:
-    say = lambda s="": print(s, file=sys.stderr)
+    # **파일로도 남긴다.** 전체화면 TUI 가 나가면서 화면을 되돌리면 여기 찍은 것이 묻힌다 —
+    # 그러면 다 재 놓고도 무엇을 봐야 할지 모르게 된다(실제로 그랬다).
+    lines = []
+    def say(x=""):
+        lines.append(x)
+        print(x, file=sys.stderr)
     say()
     say("─" * 72)
     say("probe-agent — %s  (%.1fs, %s bytes)" % (" ".join(argv), dur, f"{total:,}"))
@@ -209,6 +214,18 @@ def report(argv, dur, total, titles, marks, asked) -> None:
             say("    It barely prints anything. The fallback may not have enough to go on;")
             say("    this one may need its own integration.")
     say("─" * 72)
+
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(argv[0]) or "agent")
+    out = os.path.abspath("palmar-probe-%s.txt" % name)
+    try:
+        with open(out, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        print("", file=sys.stderr)
+        print("  이 보고는 파일로도 남았다 — 통째로 보내면 된다:", file=sys.stderr)
+        print("     %s" % out, file=sys.stderr)
+        print("     cat %s" % out, file=sys.stderr)
+    except OSError as e:
+        print("\n  (파일로 못 남겼다: %s — 위 블록을 그대로 복사하면 된다)" % e, file=sys.stderr)
 
 
 if __name__ == "__main__":
