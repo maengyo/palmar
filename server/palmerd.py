@@ -1696,8 +1696,27 @@ async def handle(reader, writer) -> None:
 
 # ── 뜨기 ──────────────────────────────────────────────────────────────────────
 def shutdown() -> None:
+    """**우리가 연결을 닫는다. 닫히기를 기다리지 않는다.**
+
+    파이썬 3.12.1 부터 `Server.wait_closed()` 는 열린 연결과 핸들러가 전부 끝나야 돌아온다.
+    브라우저는 `/events` 를 계속 붙잡고 있으니, 그냥 기다리면 **Ctrl-C 로 안 꺼지고 탭을 닫아야만
+    꺼진다.** 3.13 에서 재현했고 3.9 에서는 안 났다 — macOS 에서만 짜면 못 보는 종류다
+    (사용자가 WSL 에서 먼저 봤다)."""
+    writers = [a.writer for s in registry.sessions.values() for a in s.attached]
     for s in list(registry.sessions.values()):
-        s.die("daemon stopping")
+        s.die("daemon stopping")          # pane 쪽에는 die 가 close 프레임을 이미 보낸다
+    for w in list(registry.event_clients):
+        try:
+            w.write(Frame.close())
+        except Exception:
+            pass
+        writers.append(w)
+    registry.event_clients.clear()
+    for w in writers:
+        try:
+            w.close()
+        except Exception:
+            pass
 
 
 async def main(port: int) -> None:
@@ -1717,9 +1736,14 @@ async def main(port: int) -> None:
     log(f"palmerd pid {os.getpid()}  shell={os.environ.get('SHELL') or '/bin/sh'}  web={WEB}"
         f"{'' if (WEB / 'index.html').is_file() else ' (index.html 없음 — 자리표를 낸다)'}")
     print(f"http://127.0.0.1:{port}", flush=True)   # 마지막 줄 — 사용자는 이것만 보고 시작한다
-    async with server:
-        await stop
+    await stop
+    server.close()
     shutdown()
+    # 닫은 것이 정리될 짧은 틈만 준다. 다 안 끝나도 나간다 — 남은 태스크는 asyncio.run 이 취소한다.
+    try:
+        await asyncio.wait_for(server.wait_closed(), 2.0)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
