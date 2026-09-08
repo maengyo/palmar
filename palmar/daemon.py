@@ -97,6 +97,9 @@ OSC_CARRY_MAX = 512          # 종결자 없는 ESC] 가 계속 와도 carry 가
 #: **한계는 적어 둔다:** 아무것도 안 찍으면서 오래 생각하는 에이전트는 끝난 것과 구분되지 않는다.
 #: 그건 이 근거로는 원리상 알 수 없다 — 훅이나 제목이 있는 에이전트에서 그 둘이 이기는 이유다.
 OUT_QUIET_S = 5.0
+#: 출력이 **이만큼은 이어져야** 일하는 중으로 친다. 한 번 찍고 마는 것(셸 프롬프트, 끝난 `ls`)은
+#: 일이 아니다. 직업 제어가 없는 셸에서는 아래 프롬프트 검사가 무력해지므로 이 값이 그 자리를 맡는다.
+OUT_MIN_S = 1.0
 
 # ── 경로 ──────────────────────────────────────────────────────────────────────────
 HOME = Path.home().resolve()
@@ -437,7 +440,13 @@ class Session:
         self.derived = "idle"        # 훅이 없을 때 제목·출력으로 읽은 상태
         self.title_seen = False      # 이 세션이 제목을 한 번이라도 세웠나 (#22)
         self.last_out = 0.0          # 마지막으로 바이트가 나온 시각(monotonic)
+        self.out_start = 0.0         # 지금 이어지는 출력 묶음이 시작된 시각
         self.out_timer = None
+        #: 앞 프로세스 그룹이 셸과 **달랐던 적이 있나**. 직업 제어가 없는 셸(`/bin/sh` 비대화형)에서는
+        #: 자식이 셸과 같은 그룹에 있어 `tcgetpgrp` 이 영영 셸을 가리킨다 — 그것을 "아무것도 안 돈다"
+        #: 로 읽으면 **에이전트가 내내 찍고 있어도 idle** 이다(실측 2026-09-08: SHELL=/bin/sh 로 14초 내내).
+        #: 그래서 이 신호는 **한 번이라도 달라진 것을 본 뒤에만** 믿는다.
+        self.fg_varied = False
 
         self.ring = Ring(RING)
         self.produced = 0            # 지금까지 클라이언트에 나간 총 바이트 (절대 오프셋)
@@ -631,7 +640,10 @@ class Session:
     def _out_scan(self) -> None:
         """바이트가 나올 때마다 부른다. 제목을 쓰는 세션에서는 아무 일도 안 한다 —
         제목이 더 정확하고, 둘이 같은 값을 놓고 다투면 신호등이 떤다."""
-        self.last_out = time.monotonic()
+        now = time.monotonic()
+        if now - self.last_out > OUT_QUIET_S:
+            self.out_start = now         # 조용하다가 다시 찍기 시작했다 — 새 묶음
+        self.last_out = now
         if self.title_seen:
             return
         self._out_tick()
@@ -655,19 +667,29 @@ class Session:
 
     def _at_prompt(self) -> bool:
         """앞에서 도는 프로세스 그룹이 셸 자신인가 = 아무것도 안 돈다.
-        `pty.fork` 가 자식을 세션 리더로 만들므로 셸의 pgid 는 곧 그 pid 다."""
+        `pty.fork` 가 자식을 세션 리더로 만들므로 셸의 pgid 는 곧 그 pid 다.
+
+        **한 번이라도 달라진 것을 본 뒤에만 믿는다.** 직업 제어가 없는 셸에서는 이 값이 영영
+        셸을 가리키는데, 그것은 "아무것도 안 돈다" 가 아니라 **알 수 없다** 는 뜻이다."""
         try:
-            return os.tcgetpgrp(self.master) == self.pid
+            fg = os.tcgetpgrp(self.master)
         except OSError:
             return False                    # 못 물어보면 모르는 것이지 프롬프트인 것이 아니다
+        if fg != self.pid:
+            self.fg_varied = True
+            return False
+        return self.fg_varied
 
     def _out_tick(self) -> None:
-        """프롬프트면 idle. 뭔가 돌고 최근에 찍었으면 working. **찍다가** 멎었으면 done —
+        """프롬프트면 idle. 뭔가 돌고 **이어서** 찍고 있으면 working. 찍다가 멎었으면 done —
         찍은 적도 없는데 done 이 되지는 않는다(제목 쪽과 같은 규율)."""
+        now = time.monotonic()
         if self._at_prompt():
             want = "idle"
-        elif time.monotonic() - self.last_out < OUT_QUIET_S:
+        elif now - self.last_out < OUT_QUIET_S and self.last_out - self.out_start >= OUT_MIN_S:
             want = "working"
+        elif now - self.last_out < OUT_QUIET_S:
+            want = self.derived             # 한 번 찍고 만 것 — 아직 일이라고 부르지 않는다
         else:
             want = "done" if self.derived == "working" else self.derived
         if want != self.derived:
