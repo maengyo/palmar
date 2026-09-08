@@ -644,7 +644,10 @@ class Tile {
           // 재생 전 위치(offset − replayed)에 실제로 받은 바이트를 더해 다음 from 을 만든다.
           // 재생 도중에 끊겨도 받은 만큼만 세어진다.
           this.hello = m;
-          this.base = (m.offset | 0) - (m.replayed | 0);
+          // `| 0` 이면 32비트로 잘린다. `produced` 는 그 판이 지금까지 내보낸 **모든** 바이트라
+          // 긴 빌드 로그나 `tail -f` 한 판이면 2GB 를 넘고, 그때 오프셋이 음수로 돌아 붙었다 뗄
+          // 때마다 링 전체를 다시 받는다. `+` 는 2^53 까지 정확하다.
+          this.base = (+m.offset || 0) - (+m.replayed || 0);
           this.received = 0;
           this.lastOffset = this.base;
           this.s.alt = !!m.alt;
