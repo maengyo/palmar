@@ -21,7 +21,27 @@
   <div class="top">
     <div class="l">
       <!-- 목업의 .lights(macOS 창 버튼)는 넣지 않았다 — style.css 의 주석 참고. -->
-      <span class="brand">palmar</span>
+      <!-- 워드마크는 **경로로 그린 글자**다(docs/brand/). 폰트로 두면 JetBrains Mono 가 없는 기계에서
+           시스템 모노로 떨어져 얼굴이 달라진다. 여기 **그대로 심는 이유**: <img> 로 부르면 SVG 가
+           격리돼 currentColor 도 --st-wait 도 안 먹어 테마를 못 따라간다.
+           속 셋 중 마지막 점(.wd)이 "하나가 너를 기다린다" 다 — 아무도 안 기다리면 나머지처럼 흐려진다. -->
+      <svg class="brand" viewBox="2.0 12.0 333.5 128.0" role="img" aria-label="palmar">
+      <g fill="none" stroke="currentColor" stroke-width="11.0" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M 13.50 57.50 V 128.50"/>
+      <path d="M 13.50 76.00 a 18.50 18.50 0 1 0 37.00 0 a 18.50 18.50 0 1 0 -37.00 0"/>
+      <path d="M 73.50 76.00 a 18.50 18.50 0 1 0 37.00 0 a 18.50 18.50 0 1 0 -37.00 0"/>
+      <path d="M 110.50 57.50 V 94.50"/>
+      <path d="M 137.50 23.50 V 84.00 A 10.50 10.50 0 0 0 148.00 94.50"/>
+      <path d="M 173.00 57.50 V 94.50"/>
+      <path d="M 173.00 66.75 A 9.25 9.25 0 0 1 191.50 66.75 V 94.50"/>
+      <path d="M 191.50 66.75 A 9.25 9.25 0 0 1 210.00 66.75 V 94.50"/>
+      <path d="M 235.00 76.00 a 18.50 18.50 0 1 0 37.00 0 a 18.50 18.50 0 1 0 -37.00 0"/>
+      <path d="M 272.00 57.50 V 94.50"/>
+      <path d="M 299.00 57.50 V 94.50"/>
+      <path d="M 299.00 68.00 A 10.50 10.50 0 0 1 309.50 57.50 H 324.00"/>
+      </g>
+      <g><circle class="qd" cx="33.00" cy="76.00" r="6"/><circle class="qd" cx="91.00" cy="76.00" r="6"/><circle class="wd" cx="252.50" cy="76.00" r="6"/></g>
+      </svg>
     </div>
     <div class="c">
       <label class="search">

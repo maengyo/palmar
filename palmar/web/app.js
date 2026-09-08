@@ -1528,14 +1528,30 @@ function renderBadge(force) {
   if (!force && key === badgeKey) return;      // 세션 프레임마다 캔버스를 다시 그리지 않는다
   badgeKey = key;
   document.title = n ? '(' + n + ') palmar' : 'palmar';
+  document.body.classList.toggle('wants', n > 0);     // 워드마크의 마지막 점을 켠다
   if (!favEl) return;
   const css = getComputedStyle(document.documentElement);
-  const c = document.createElement('canvas'); c.width = c.height = 32;
+  // 파비콘도 브랜드의 `p` 다(docs/brand/p.svg) — 속의 점이 앰버면 누가 기다린다는 뜻이고,
+  // 그건 워드마크·탭의 점과 **같은 규칙, 같은 색**이다. 몇 개인지는 말하지 않는다: 16px 에서
+  // 숫자는 못 읽고, 게이지가 아니라 부름이다.
+  // SVG 파비콘을 안 쓰는 이유: 브라우저마다 지원이 갈리고, 격리돼서 CSS 변수도 못 읽는다.
+  // 그래서 같은 경로를 Path2D 에 넣어 캔버스로 굽는다 — PNG 는 어디서나 뜬다.
+  const c = document.createElement('canvas'); c.width = c.height = 64;
   const g = c.getContext('2d');
   if (!g) return;
-  g.beginPath(); g.arc(16, 16, n ? 13 : 7, 0, Math.PI * 2);
-  // 16px 에서 숫자는 못 읽는다 — 점의 크기와 색으로만 말한다.
-  g.fillStyle = (css.getPropertyValue(n ? '--st-wait' : '--st-idle') || '').trim() || '#888';
+  const ink = (css.getPropertyValue('--ink') || '').trim() || '#222';
+  // p.svg 의 viewBox 는 "2 46 60 94". 높이로 맞추고 가로는 가운데로.
+  const k = 64 * 0.88 / 94;
+  g.translate((64 - 60 * k) / 2 - 2 * k, (64 - 94 * k) / 2 - 46 * k);
+  g.scale(k, k);
+  g.strokeStyle = ink; g.lineWidth = 11; g.lineCap = 'round'; g.lineJoin = 'round';
+  try {
+    g.stroke(new Path2D('M 13.50 57.50 V 128.50'));
+    g.stroke(new Path2D('M 13.50 76.00 a 18.50 18.50 0 1 0 37.00 0 a 18.50 18.50 0 1 0 -37.00 0'));
+  } catch (e) { return; }                            // Path2D 가 없으면 파비콘을 건드리지 않는다
+  g.beginPath(); g.arc(33, 76, 6, 0, Math.PI * 2);
+  if (n) { g.fillStyle = (css.getPropertyValue('--st-wait') || '').trim() || '#d99a2b'; g.globalAlpha = 1; }
+  else   { g.fillStyle = ink; g.globalAlpha = 0.34; }
   g.fill();
   try { favEl.href = c.toDataURL('image/png'); } catch (e) {}
 }
