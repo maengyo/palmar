@@ -2339,9 +2339,9 @@ def doctor(port: int) -> int:
 
     out("palmar --doctor")
     out("─" * 64)
-    out("이 코드")
-    out("  버전      %s   프로토콜 %d" % (__version__, PROTOCOL))
-    out("  파일      %s" % Path(__file__).resolve())
+    out("this code")
+    out("  version   %s   protocol %d" % (__version__, PROTOCOL))
+    out("  file      %s" % Path(__file__).resolve())
     repo = Path(__file__).resolve().parent.parent
     if (repo / ".git").exists():
         def git(*a):
@@ -2350,23 +2350,23 @@ def doctor(port: int) -> int:
                                       capture_output=True, text=True, timeout=5).stdout.strip()
             except Exception:
                 return "?"
-        out("  커밋      %s  (%s)" % (git("rev-parse", "--short", "HEAD"), git("log", "-1", "--format=%s")[:48]))
-        out("  원격      %s" % (git("remote", "get-url", "origin") or "(없음)"))
+        out("  commit    %s  (%s)" % (git("rev-parse", "--short", "HEAD"), git("log", "-1", "--format=%s")[:48]))
+        out("  remote    %s" % (git("remote", "get-url", "origin") or "(none)"))
         st = git("status", "--porcelain")
         if st:
-            out("  ! 작업 트리에 안 커밋한 변경이 %d개 있다" % len(st.splitlines()))
+            out("  ! %d uncommitted change(s) in the working tree" % len(st.splitlines()))
     out("")
-    out("이 기계")
+    out("this machine")
     out("  python    %s  (%s)" % (platform.python_version(), sys.executable))
     out("  platform  %s" % platform.platform())
-    out("  $SHELL    %s%s" % (os.environ.get("SHELL") or "(없음)",
-                              "   ← 없으면 /bin/sh 로 떨어진다" if not os.environ.get("SHELL") else ""))
+    out("  $SHELL    %s%s" % (os.environ.get("SHELL") or "(none)",
+                              "   <- with none set it falls back to /bin/sh" if not os.environ.get("SHELL") else ""))
     # The pane's character encoding. If it is not UTF-8, Korean, Japanese and Chinese input breaks — on screen it looks like "it will not type".
     loc = " ".join("%s=%s" % (k, os.environ[k]) for k in ("LC_ALL", "LC_CTYPE", "LANG") if os.environ.get(k))
     utf8 = has_utf8(os.environ)
-    out("  locale    %s%s" % (loc or "(없음)", "" if utf8 else "   ← UTF-8 이 아니다"))
-    out("  판에 줄 것 %s" % ("그대로" if utf8 else "LC_CTYPE=" + (UTF8_CTYPE[0] or pick_utf8_locale())))
-    out("  홈        %s" % PALMAR_DIR)
+    out("  locale    %s%s" % (loc or "(none)", "" if utf8 else "   <- not UTF-8"))
+    out("  panes get %s" % ("this, unchanged" if utf8 else "LC_CTYPE=" + (UTF8_CTYPE[0] or pick_utf8_locale())))
+    out("  home      %s" % PALMAR_DIR)
     out("")
 
     # **Is a daemon running** — screened by the lock. The token file outlives a dead daemon, so it is no evidence.
@@ -2391,11 +2391,11 @@ def doctor(port: int) -> int:
             pass
 
     if running is False or not TOKEN_FILE.exists():
-        out("도는 데몬   **없다**")
+        out("running daemon   **none**")
         if TOKEN_FILE.exists():
-            out("  (%s 는 남아 있지만 지난 번 데몬의 것이다 — 살아 있다는 뜻이 아니다)" % TOKEN_FILE.name)
+            out("  (%s is still there, but it belongs to a previous daemon — it is not evidence one is alive)" % TOKEN_FILE.name)
         out("")
-        out("→ `python3 -m palmar` 로 띄우고 다시 이 명령을 돌려라.")
+        out("-> start it with `python3 -m palmar`, then run this again.")
         return 1
 
     token = TOKEN_FILE.read_text().strip()
@@ -2403,23 +2403,23 @@ def doctor(port: int) -> int:
     # handed the page (#14). Say only whether it exists and what its mode is, and where to get the address back.
     if KEY_FILE.exists():
         # **Both are checked.** run/url is a second copy holding the whole key, so its mode matters just as much.
-        for label, f in (("열쇠", KEY_FILE), ("주소", URL_FILE)):
+        for label, f in (("key ", KEY_FILE), ("url ", URL_FILE)):
             if not f.exists():
-                out("  %s      (%s 없다)" % (label, f.name))
+                out("  %s      (%s is missing)" % (label, f.name))
                 continue
             mode = oct(f.stat().st_mode & 0o777)
             out("  %s      %s (%s)%s" % (label, f, mode,
-                                         "" if mode == "0o600" else "   ← 0600 이어야 한다"))
+                                         "" if mode == "0o600" else "   <- should be 0600"))
         if URL_FILE.exists():
-            out("            주소를 잃었으면 `cat %s`" % URL_FILE)
+            out("            lost the address? `cat %s`" % URL_FILE)
     else:
-        out("  ! 열쇠 파일이 없다(%s) — 이 데몬은 열쇠가 붙기 전 코드다." % KEY_FILE)
+        out("  ! no key file (%s) — this daemon predates the page key." % KEY_FILE)
     if note:
-        out("도는 데몬   %s" % note)
+        out("running daemon   %s" % note)
         m = re.search(r":(\d+)", note)
         if m and int(m.group(1)) != port:
-            out("  ! 그 데몬은 **포트 %s** 다. 지금 물어본 것은 %d 였다." % (m.group(1), port))
-            out("    → `python3 -m palmar --doctor --port %s` 로 다시." % m.group(1))
+            out("  ! that daemon is on **port %s**. This asked about %d." % (m.group(1), port))
+            out("    -> try again with `python3 -m palmar --doctor --port %s`." % m.group(1))
             out("")
             port = int(m.group(1))
     base = "http://127.0.0.1:%d" % port
@@ -2433,31 +2433,31 @@ def doctor(port: int) -> int:
     try:
         sessions = get("/api/sessions")
     except Exception as e:
-        out("  ! 락은 잡혀 있는데 127.0.0.1:%d 에 못 붙었다 — %s" % (port, e))
-        out("    데몬이 뜨는 중이거나, 막 죽었거나, 다른 주소에 묶였다.")
+        out("  ! the lock is held but 127.0.0.1:%d would not answer — %s" % (port, e))
+        out("    It is still starting, it just died, or it bound somewhere else.")
         return 1
 
     ver = _daemon_hello_version(port, token)
     out("")
     if ver is None:
-        out("  버전      **말하지 않는다** — 프로토콜 판 이전의 낡은 데몬이다")
-        out("  ! 지금 받아 둔 코드로 다시 띄워야 한다(그 데몬은 옛 코드다)")
+        out("  version   **it does not say** — a daemon older than the protocol version")
+        out("  ! restart it on the code you have checked out (that daemon is running older code)")
     else:
         same = ver.get("daemon") == __version__ and ver.get("v") == PROTOCOL
-        out("  버전      %s   프로토콜 %s   %s"
-            % (ver.get("daemon"), ver.get("v"), "(이 코드와 같다)" if same else "**이 코드와 다르다**"))
+        out("  version   %s   protocol %s   %s"
+            % (ver.get("daemon"), ver.get("v"), "(same as this code)" if same else "**different from this code**"))
         if not same:
-            out("  ! 도는 데몬이 이 코드가 아니다 — 껐다 다시 띄워라. 고친 것이 안 들어가 있다.")
-    out("  세션      %d개" % len(sessions))
+            out("  ! the running daemon is not this code — stop it and start it again. Your fixes are not in it.")
+    out("  sessions  %d" % len(sessions))
     out("")
-    out("판마다")
+    out("pane by pane")
     if not sessions:
-        out("  (없다 — 브라우저에서 터미널을 하나 열고 다시 돌려라)")
+        out("  (none — open a terminal in the browser and run this again)")
         return 0
 
     WATCH_S, STEP = 10.0, 0.5
-    out("  %d초 동안 지켜본다 — 한 장만 찍으면 '지금 이 값' 은 보여도" % WATCH_S)
-    out("  **움직이는지** 는 안 보인다. 그동안 판에서 에이전트에게 일을 시켜라.")
+    out("  Watching for %d seconds — one snapshot shows the value now but not" % WATCH_S)
+    out("  **whether it moves**. Give an agent something to do in a pane meanwhile.")
     out("")
     trail = {s["id"]: [] for s in sessions}
     end = time.monotonic() + WATCH_S
@@ -2475,22 +2475,24 @@ def doctor(port: int) -> int:
         moved = len(set(seen)) > 1
         title = s.get("title")
         out("  %s" % (s.get("name") or s.get("cwd")))
-        out("      지금      status=%s" % s.get("status"))
-        out("      읽는 근거  %s" % (
-            "훅 — %s 가 직접 알려 준다 (가장 정확하다)" % s.get("agent") if s.get("agent")
-            else ("창 제목 — 이 판은 제목을 쓴다: %r" % title if title
-                  else "출력 활동 — 이 판은 창 제목을 안 쓴다")))
-        out("      %s" % ("agent 칸은 훅이 채운다. 훅이 없는 에이전트면 비어 있는 것이 맞고, "
-                          "상태와는 상관이 없다." if not s.get("agent") else "훅이 붙어 있다."))
-        out("      %.0f초 동안  %s   %s" % (WATCH_S, " ".join(seen) or "(못 읽음)",
-                                          "← 움직인다" if moved else "← **한 번도 안 바뀌었다**"))
+        out("      now       status=%s" % s.get("status"))
+        out("      read from %s" % (
+            "hooks — %s reports it directly (the most exact)" % s.get("agent") if s.get("agent")
+            else ("the window title — this pane sets one: %r" % title if title
+                  else "output activity — this pane sets no window title")))
+        out("      %s" % ("the agent field is filled by hooks. With an agent that has none it is "
+                          "correctly empty, and it says nothing about the status."
+                          if not s.get("agent") else "hooks are attached."))
+        out("      over %.0fs  %s   %s" % (WATCH_S, " ".join(seen) or "(could not read)",
+                                        "<- it moves" if moved else "<- **never changed once**"))
         if not moved:
-            out("        (i=idle w=working d=done  — 지켜보는 동안 그 판에서 정말 일이 돌았나?)")
+            out("        (i=idle w=working d=done — was anything really running in that pane while watching?)")
         out("")
-    out("무엇을 보면 되나")
-    out("  · 위 줄이 **안 바뀌었다** 면: 일을 시키는 동안 쟀는지 먼저 보고, 그래도 안 바뀌면")
-    out("    이 출력을 그대로 보내라. 데몬이 무엇을 보는지가 거기 다 있다.")
-    out("  · '도는 데몬' 에 **이 코드와 다르다** 가 있으면 그것부터다 — 다시 띄워라.")
+    out("what to look at")
+    out("  - if a line above **never changed**: first check something was running while it")
+    out("    watched. If it still does not move, send this output as it is — everything the")
+    out("    daemon can see is in it.")
+    out("  - if 'running daemon' says **different from this code**, start there — restart it.")
     return 0
 
 

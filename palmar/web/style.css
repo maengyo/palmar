@@ -2,7 +2,7 @@
  *
  * The source of truth is the design mockup (conversation artifact "palmar", decisions.md "디자인"
  * section). Tokens, layout and components were carried over from there as-is. The only additions are the
- * "xterm hosting" and "behaviour" sections below.
+ * "xterm hosting" and "behavior" sections below.
  *
  * Temporary (⑥ undecided): --st-work / --st-wait / --st-done / --st-idle are the status colors. JS turns
  * the status string into a class (wait/work/done/idle) and nothing else; the colors live nowhere but this
@@ -163,7 +163,7 @@ body {
 /* The top bar is 44px. The logo is as big as the leftover space above and below allows — 15px → 21px → 26px. */
 .brand { height: 26px; width: auto; display: block; color: var(--ink); flex: none; }
 .brand .qd { fill: currentColor; opacity: .34; }
-/* The dot in the last counter. It lights only when something is calling for you — the same rule and the
+/* The dot inside the last one. It lights only when something is calling for you — the same rule and the
    same color as the canvas tabs (⑥). However many are waiting, only one lights: it is not a gauge
    (docs/brand/README.md "점 규칙"). */
 .brand .wd { fill: currentColor; opacity: .34; }
@@ -352,7 +352,7 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 }
 .grp.cvg.cur .nm { color: var(--ink); }
 .grp.cvg .dot { margin-left: 2px; }
-/* The count a folded group hides. Pressing it unfolds too — one more way to the hidden than the header. */
+/* The count a folded group hides. Pressing it unfolds too — one more way to what is hidden, besides the header. */
 .grest {
   margin: 0 6px 2px; padding: 3px 14px 5px 32px; font-size: 10.5px; color: var(--ink-3);
   cursor: pointer; border-radius: 6px;
@@ -623,7 +623,7 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .toast .d { color: var(--ink-3); }
 .toast .undo { color: var(--accent); cursor: pointer; }
 /* ── minimap (⑩ ⑪, spike J) ─────────────────────
-   **There is one, for the canvas being viewed.** The rectangles' positions come from JS's coordinate store, and
+   **There is only one, and it is the canvas being viewed.** The rectangles' positions come from JS's coordinate store, and
    the only thing that moves on scroll is .mm-vp's transform — the DOM layout is never read (AGENTS.md).
    The colors are the same --st-* as the status dots. There is no new color for the minimap. */
 .mm {
