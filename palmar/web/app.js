@@ -1,81 +1,84 @@
-// palmar 브라우저 — 캔버스 UI. 데몬과의 계약은 docs/protocol.md 하나다. 이 파일은 거기 적힌 것만 믿는다.
+// palmar browser — the canvas UI. docs/protocol.md is the one contract with the daemon; trust only what it says.
 //
-// ① 웹 스택은 아직 사람이 정하지 않았다. 이 파일이 vanilla JS 인 것은 결정이 아니라 결정 전의 기본값이다
-//    (decisions.md ①: "기본값은 안 쓰는 것이고, 쓰자고 하려면 이유를 대야 한다"). 빌드 단계도 없다.
-//    프레임워크를 고르게 되면 이 파일이 바뀐다 — 그래서 상태(sessions·tiles)와 DOM 을 최대한 얇게 이었다.
+// ① Nobody has picked the web stack yet. Vanilla JS here is not a decision, it is the default before one
+//    (decisions.md ①: "기본값은 안 쓰는 것이고, 쓰자고 하려면 이유를 대야 한다"). No build step either.
+//    Picking a framework rewrites this file — so state (sessions·tiles) and the DOM are tied as thinly as we can.
 //
-// 임시로 둔 것 (사람 몫의 결정을 미리 정하지 않은 자리 — 지금 도는 데 필요한 최소만):
-//   ③ 좌표·크기·z 순서는 localStorage 'palmar-tiles' 에 session id 로 둔다. protocol.md "위치·크기" 절이
-//      말하는 임시 그대로다. 데몬은 pane 의 cols·rows 만 안다.
-//   ⑥ status 문자열을 CSS 클래스(wait/work/done/idle)로만 바꾼다. 색은 style.css 의 --st-* 에만 있다.
-//      idle 과 unknown 은 같은 회색 자리에 둔다 — 매핑이 정해지면 STATUS_CLASS 한 곳만 바뀐다.
-//   ⑩ 새 창 자리: 빈 격자 자리를 훑어 첫 빈 곳, 없으면 맨 아래. 밀어내기(#23)는 아직 없고 겹침 설정도 없다.
-//      기본 크기 DEFAULT_W/H 도 ⑩ 에 딸린 미정이다.
-//   ⑪⑫ 캔버스 목록·순서·이름과 세션의 canvas·name 은 **데몬이 갖는다**(protocol.md "캔버스"). 이 파일은
-//      사본을 들고 hello 로 갈아 낀다. 브라우저에만 있는 것은 셋뿐이다 — 지금 보고 있는 탭, 목록 그룹의
-//      접힘(localStorage 'palmar-groups' · 'palmar-canvas-groups'), 미니맵. 데몬은 그 셋을 모른다(protocol.md "없는 것").
-//      PROVISIONAL 둘: 이름 없는 캔버스의 이름표를 무엇으로 만드는지(⑪ 미정 → canvasLabel 하나에 있다),
-//      새 세션이 어느 캔버스에 뜨는지(⑪ "지금 캔버스인가 그 폴더의 캔버스인가" 미정 → launch 하나에 있다).
+// Left provisional (places where a decision that belongs to a person is not pre-empted — only what it takes to run):
+//   ③ position·size·z order live in localStorage 'palmar-tiles', keyed by session id. Exactly the provisional
+//      that protocol.md's "위치·크기" section describes. The daemon knows only the pane's cols·rows.
+//   ⑥ the status string only becomes a CSS class (wait/work/done/idle). Colors live only in style.css's --st-*.
+//      idle and unknown share the same grey slot — once the mapping is decided, only STATUS_CLASS changes.
+//   ⑩ where a new window goes: scan the grid for the first free slot, else the bottom. No push-aside (#23) yet
+//      and no overlap setting. The default size DEFAULT_W/H is an undecided that hangs off ⑩ too.
+//   ⑪⑫ the canvas list·order·names and a session's canvas·name **belong to the daemon** (protocol.md "캔버스").
+//      This file holds a copy and swaps it out on hello. Three things are the browser's alone — the tab in view,
+//      the fold of list groups (localStorage 'palmar-groups' · 'palmar-canvas-groups'), the minimap. The daemon
+//      knows none of the three (protocol.md "없는 것"). Two PROVISIONALs: what a nameless canvas's
+//      label is made from (⑪ undecided → canvasLabel alone), and which canvas a new session opens on
+//      (⑪ "this canvas or that folder's canvas" undecided → launch alone).
 //
-// 흐름 제어·재접속은 스파이크 D(docs/spikes/2026-09-07/pipeline/palmar/web/app.js)의 꼴을 그대로 가져왔다:
-// 바이너리 프레임 → term.write(bytes, cb) → cb 안에서 {"t":"ack","n":len}.
+// Flow control and reconnect take the shape of spike D (docs/spikes/2026-09-07/pipeline/palmar/web/app.js) as-is:
+// binary frame → term.write(bytes, cb) → {"t":"ack","n":len} inside cb.
 
 (() => {
 'use strict';
 
 const TOKEN = window.PALMAR_TOKEN || '';
-// **이 스크립트는 열쇠를 안 든다.** 열쇠는 `index.html` 을 받아 올 때 주소에 실려 데몬이 확인하고,
-// 거기서 역할이 끝난다(#14) — 자바스크립트가 쓸 데가 없다. 예전에는 재접속 검사가 `GET /?k=` 로
-// 새 토큰을 확인하느라 들고 있었는데, 그것을 없앴으므로 여기서도 없앤다. 안 드는 비밀이 제일 안전하다.
-// 주소에는 그대로 남는다 — 새로고침이 내는 HTML 요청이 자바스크립트보다 먼저 나가기 때문이다.
+// **This script does not hold the key.** The key rides in the address when `index.html` is fetched, the daemon
+// checks it, and its job ends there (#14) — JavaScript has no use for it. The reconnect check used to hold it
+// to confirm a new token with `GET /?k=`; that is gone, so it is gone here too. The safest secret is one you
+// do not hold. It stays in the address — a refresh's HTML request goes out before any JavaScript does.
 const enc = new TextEncoder();
 const root = document.documentElement;
 const $ = (sel, from) => (from || document).querySelector(sel);
 
-// ── 상수 ────────────────────────────────────────────────
-// ⑥ 임시: status → 클래스. 색은 CSS 에만 있다.
+// ── constants ───────────────────────────────────────────
+// ⑥ provisional: status → class. The colors live only in CSS.
 const STATUS_CLASS = { waiting: 'wait', working: 'work', done: 'done', idle: 'idle', unknown: 'idle' };
-// 목록의 묶음 순서: 기다리는 것이 맨 위 (decisions.md "화면"). idle 묶음에 unknown 을 함께 둔다.
+// Group order in the list: whatever is waiting goes on top (decisions.md "화면"). unknown rides in the idle group.
 const GROUPS = [
   ['waiting', 'wait', 'waiting on you'],
   ['working', 'work', 'working'],
   ['done',    'done', 'done'],
   ['idle',    'idle', 'idle'],
 ];
-const PILL = new Set(['waiting', 'working', 'done']);   // 알약을 보이는 상태 (목업: idle 은 알약 없음)
-// #31 ③: 캔버스로 묶은 뒤에도 **묶음 안의 차례는 GROUPS 그대로다**(기다림 → 일하는 중 → 끝남 → 대기).
-// unknown 은 idle 과 같은 자리(⑥ 임시, STATUS_CLASS 와 같은 규칙).
+const PILL = new Set(['waiting', 'working', 'done']);   // states that show a pill (mockup: idle has no pill)
+// #31 ③: even after grouping by canvas, **the order inside a group is still GROUPS** (waiting → working → done → idle).
+// unknown sits where idle sits (⑥ provisional, same rule as STATUS_CLASS).
 const STATUS_RANK = { waiting: 0, working: 1, done: 2, idle: 3, unknown: 3 };
 function statusRank(s) { const r = STATUS_RANK[s.status]; return r === undefined ? 3 : r; }
-// #24: 목록 둘째 줄은 사람 말이어야 한다(목업). 훅 이벤트명을 짧은 문구로 바꾼다 — 표시만이고 상태 판정엔 안 쓴다.
-// 모르는 이벤트명은 그대로 보인다(fallback).
+// #24: the second line of a list row has to read as human (mockup). Turn hook event names into short phrases —
+// display only, never used to decide status.
+// An event name we do not know shows through as-is (fallback).
 const EVENT_PHRASE = {
   SessionStart: 'started', UserPromptSubmit: 'working…', PermissionRequest: 'needs your approval',
   Notification: 'notified', Stop: 'finished', SessionEnd: 'session ended',
 };
-const GRID = 22, GAP = 12;                              // 점 격자와 같은 22px 간격으로 빈 자리를 훑는다
-const DEFAULT_W = 520, DEFAULT_H = 360;                 // ⑩ 임시 기본 크기
+const GRID = 22, GAP = 12;                              // scan for free slots on the same 22px pitch as the dot grid
+const DEFAULT_W = 520, DEFAULT_H = 360;                 // ⑩ provisional default size
 const MIN_W = 220, MIN_H = 110;
-const LS_TILES = 'palmar-tiles';                        // ③ 임시
+const LS_TILES = 'palmar-tiles';                        // ③ provisional
 const LS_THEME = 'palmar-theme';
-const LS_GROUPS = 'palmar-groups';                      // 목록 그룹 접힘 — 브라우저에만 있는 것(⑪)
-const LS_CVGROUPS = 'palmar-canvas-groups';             // 캔버스 묶음 접힘 — 캔버스 id 로 건다(#31 ③)
-// 캔버스가 사라진 세션이 떨어지는 자리. 계약상 없어야 하지만(protocol.md: hello 한 프레임 안에서 모든
-// session.canvas 가 그 canvases 안에 있다) 목록이 세션을 잃는 것보다는 낫다.
+const LS_GROUPS = 'palmar-groups';                      // list group fold — the browser's alone (⑪)
+const LS_CVGROUPS = 'palmar-canvas-groups';             // canvas group fold — keyed by canvas id (#31 ③)
+// Where a session whose canvas is gone falls. The contract says this cannot happen (protocol.md: within one
+// hello frame every session.canvas is in that canvases list), but it beats the list losing a session.
 const OTHER_KEY = '__other';
-const MM_PAD = 4;                                       // 미니맵 상자 안쪽 여백
-// 목업 .term 은 11.5px 이다. WebGL 렌더러는 셀 폭을 장치 픽셀로 **내림**한다(addon-webgl: device.char.width =
-// Math.floor(charWidth × dpr)) — 11.5px × 0.6em = 6.9px 가 dpr 1 에서 6px 셀이 되어 글자가 13% 잘리고 520px 에
-// 80열이 들어갔다(실측, 헤드리스 크롬 152). JetBrains Mono 전진폭은 0.6em 이지만 크롬이 잰 값은 11.667px 에서
-// 6.996px 로 7 에 못 미쳤다(실측). 그래서 조금 여유를 두어 11.75px: 7.05px → dpr 1 에서 7, dpr 2 에서 14 → 7.
-// 눈으로 11.5 와 구분되지 않는다. 다른 dpr(1.5 등)에서는 여전히 내림이 있다 — cate 가 겪은 그 자리다.
+const MM_PAD = 4;                                       // inner padding of the minimap box
+// The mockup's .term is 11.5px. The WebGL renderer **floors** the cell width to device pixels (addon-webgl:
+// device.char.width = Math.floor(charWidth × dpr)) — 11.5px × 0.6em = 6.9px became a 6px cell at dpr 1, so glyphs
+// were clipped by 13% and 80 columns fit into 520px (measured, headless Chrome 152). JetBrains Mono's advance
+// width is 0.6em, but Chrome measured 6.996px at 11.667px — short of 7 (measured). So leave a little room at
+// 11.75px: 7.05px → 7 at dpr 1, 14 → 7 at dpr 2. Indistinguishable from 11.5 by eye. Other dpr values (1.5 and
+// such) still get floored — that is the spot cate hit.
 const FONT_PX = 11.75;
-// 판마다 글자 크기 (#25). 창은 그대로 두고 글자만 바꾸므로 **행·열이 늘고 준다** — 같은 자리에
-// 더 많이 보거나, 크게 보거나. 브라우저의 Ctrl− 가 모든 판에 하는 일을 판 하나에만 하는 것이다.
+// Text size per pane (#25). The window stays put and only the text changes, so **rows and columns grow and
+// shrink** — see more in the same spot, or see it bigger. What the browser's Ctrl− does to every pane, done to one.
 const FONT_MIN = 6, FONT_MAX = 32, FONT_STEP = 1;
 
-// 이 기계의 글쇠 이름. 안내에 쓰는 글자이고, 처리 쪽은 늘 metaKey 와 ctrlKey 를 **둘 다** 받는다 —
-// 안내만 한쪽으로 박아 두면 다른 쪽 사람에게 없는 글쇠를 가리키게 된다(전에 ⌘ 가 그랬다).
+// This machine's key names. Guidance text only; the handling side always takes **both** metaKey and ctrlKey —
+// nail the guidance to one side and it points at a key the other person does not have (⌘ used to do that).
 const IS_MAC = /Mac|iPhone|iPad/i.test(
   (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '');
 const KMOD = IS_MAC ? '⌘' : 'Ctrl';
@@ -84,12 +87,12 @@ const LS_CLIPHINT = 'palmar.cliphint';
 let clipHintShown = false;
 try { clipHintShown = localStorage.getItem(LS_CLIPHINT) === '1'; } catch (e) {}
 
-// ── 복사·붙여넣기 ─────────────────────────────────────────
-// xterm.js 에는 이게 **없다.** 고르는 것까지가 그것의 일이고, 클립보드에 넣는 것은 앱의 몫이다
-// (실측 2026-09-08: 고른 글자는 getSelection() 으로 잡히는데 어떤 조합에도 클립보드로 안 갔다).
-// **Ctrl+C 는 뺏지 않는다.** 터미널에서 그것은 인터럽트다 — 고른 것이 있다고 가로채면 도는 것을
-// 멈추려던 손이 대신 복사를 한다. 그래서 리눅스·윈도우의 관례대로 Shift 를 함께 요구하고,
-// 맥에서는 ⌘ 를 쓴다. 둘 다 받는다 — 어느 쪽 손버릇이든 되는 편이 낫다.
+// ── copy and paste ────────────────────────────────────────
+// xterm.js **does not have this.** Selecting is where its job ends; putting it on the clipboard is the app's
+// (measured 2026-09-08: the selected text is reachable via getSelection(), but no combination put it on the clipboard).
+// **Ctrl+C is not taken away.** In a terminal that is interrupt — intercept it because something is selected
+// and the hand reaching to stop a run copies instead. So ask for Shift as well, the Linux/Windows convention,
+// and use ⌘ on a Mac. Both are accepted — whichever habit the hand has, it should work.
 async function clipWrite(text) {
   try {
     await navigator.clipboard.writeText(text);
@@ -103,49 +106,49 @@ async function clipRead() {
   try {
     return await navigator.clipboard.readText();
   } catch (e) {
-    // 크롬은 읽기에 권한을 따로 묻는다. 거절되면 브라우저의 기본 붙여넣기가 아직 남아 있다.
+    // Chrome asks separately for read permission. If it is refused, the browser's own paste is still there.
     toast(['could not paste — the browser refused to read the clipboard',
            'allow clipboard for ' + location.origin + ', or use the browser\'s own paste']);
     return '';
   }
 }
-// 목업 .term 의 line-height 1.55 는 font-size 기준이고 xterm 의 lineHeight 는 글꼴 고유 줄높이(≈1.3) 기준이라
-// 같은 눈높이를 내려면 1.15 쯤이다. 사람이 봐야 하는 값.
+// The mockup's .term line-height 1.55 is relative to font-size, while xterm's lineHeight is relative to the
+// font's own line height (≈1.3), so about 1.15 lands on the same look. A value a person has to eyeball.
 const LINE_HEIGHT = 1.15;
 
-// ── DOM 손잡이 ──────────────────────────────────────────
+// ── DOM handles ─────────────────────────────────────────
 const cv = $('#cv'), cvScroll = $('#cv-scroll'), listEl = $('#list'), treeEl = $('#tree');
 const tabsEl = $('#tabs'), mmEl = $('#mm'), mmWorldEl = $('#mm-w'), mmVpEl = $('#mm-vp');
 const toastEl = $('#toast'), searchEl = $('#search');
 const launchBtn = $('#launch'), launchPath = $('#launch-path');
 
-// ── 상태 ────────────────────────────────────────────────
-// 진실은 데몬이다(AGENTS.md "구조"). sessions 는 /events 가 보내 준 사본이고 붙을 때마다 hello 로 갈아 낀다.
+// ── state ───────────────────────────────────────────────
+// The truth is the daemon (AGENTS.md "구조"). sessions is a copy /events sent, swapped out on every hello.
 const sessions = new Map();   // id → Session
 const tiles = new Map();      // id → Tile
-const items = new Map();      // id → 목록 항목 DOM
-const changedAt = new Map();  // id → status 가 바뀐 것을 브라우저가 본 시각(ms). 프로토콜에 없어 여기서 잰다
-let focused = null;           // 앞에 있는 tile 의 id
-let maxed = null;             // 펼쳐 보는 tile
+const items = new Map();      // id → list row DOM
+const changedAt = new Map();  // id → when the browser saw status change (ms). Not in the protocol, so measured here
+let focused = null;           // id of the tile in front
+let maxed = null;             // the tile shown expanded
 let zTop = 10;
 let eventsWs = null, eventsRetry = 0;
-let layout = loadLayout();    // ③ 임시: { id: {x,y,w,h,z} }
+let layout = loadLayout();    // ③ provisional: { id: {x,y,w,h,z} }
 let saveTimer = null;
-// ⑪ 캔버스. 목록도 순서도 이름도 데몬의 것이고 여기 있는 것은 사본이다. **current 만 브라우저 것이다** —
-// 창 둘이 서로 다른 캔버스를 볼 수 있어야 해서 데몬에 "현재 캔버스" 가 없다(protocol.md).
+// ⑪ canvases. The list, the order and the names are the daemon's; what is here is a copy. **Only current is the
+// browser's** — two windows have to be able to look at different canvases, so the daemon has no "current canvas" (protocol.md).
 const canvases = new Map();   // id → Canvas
-let canvasOrder = [];         // id[] — 데몬이 준 order 순
-let current = null;           // 지금 보고 있는 캔버스 id
-let groupsCollapsed = loadGroups();   // 목록 그룹 접힘 — 브라우저에만 있다
-let cvCollapsed = loadCvGroups();     // 캔버스 묶음 접힘 — 같은 자리, 캔버스 id 로 건다(#31 ③)
-let tabDragged = false;       // 끌어 놓은 직후의 click 은 전환이 아니다
-let tabsPending = false;      // 이름을 고치는 동안 미뤄 둔 탭 줄 다시 그리기
-// #31 ①④ 닫기. DELETE 를 낸 뒤 **여기서 지우지 않는다** — /events 의 gone 이 지운다(둘째 브라우저와 같이
-// 움직이려면 지우는 길이 하나여야 한다). 그동안 무엇이 도는 중인지만 들고 있는다.
-const closing = new Set();    // DELETE 를 냈고 아직 gone 이 안 온 세션 id
-let rowConfirm = null;        // 확인 줄이 열려 있는 목록 행의 세션 id (목록은 통째로 다시 지어진다)
+let canvasOrder = [];         // id[] — in the order the daemon gave
+let current = null;           // id of the canvas being looked at
+let groupsCollapsed = loadGroups();   // list group fold — the browser's alone
+let cvCollapsed = loadCvGroups();     // canvas group fold — same place, keyed by canvas id (#31 ③)
+let tabDragged = false;       // the click right after a drop is not a switch
+let tabsPending = false;      // a tab-strip repaint deferred while a name is being edited
+// #31 ①④ close. After sending DELETE, **do not delete here** — gone from /events deletes (there has to be one
+// path that deletes for this to move in step with a second browser). Meanwhile only hold what is in flight.
+const closing = new Set();    // session ids we sent DELETE for and have not seen gone for yet
+let rowConfirm = null;        // session id of the list row whose confirm strip is open (the list is rebuilt wholesale)
 
-// ── 작은 도구 ──────────────────────────────────────────
+// ── small tools ────────────────────────────────────────
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -161,29 +164,30 @@ function saveLayout() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => { try { localStorage.setItem(LS_TILES, JSON.stringify(layout)); } catch (e) {} }, 150);
 }
-// 목록 그룹 접힘 — 그 브라우저의 취향이지 세션의 성질이 아니다(protocol.md "없는 것"). 테마와 같은 자리다.
+// List group fold — that browser's taste, not a property of the session (protocol.md "없는 것"). Same place as the theme.
 function loadGroups() {
   try { const v = JSON.parse(localStorage.getItem(LS_GROUPS) || '{}'); return v && typeof v === 'object' ? v : {}; }
   catch (e) { return {}; }
 }
 function saveGroups() { try { localStorage.setItem(LS_GROUPS, JSON.stringify(groupsCollapsed)); } catch (e) {} }
-// 캔버스 묶음의 접힘은 **캔버스 id** 로 건다. 상태 키('waiting'…)와 한 통에 두면 어느 쪽을 솎아야 할지
-// 알 수 없어 통을 따로 뒀다. id 는 데몬이 살아 있는 동안만 뜻이 있으므로(protocol.md "아무것도 디스크에
-// 안 쓴다") 저장할 때 지금 없는 캔버스의 키를 솎는다 — 데몬이 다시 뜰 때마다 쌓이지 않게.
+// The canvas group fold is keyed by **canvas id**. Put it in the same bucket as the status keys ('waiting'…)
+// and there is no telling which side to prune, so it gets its own bucket. An id means something only while the
+// daemon lives (protocol.md "아무것도 디스크에 안 쓴다"), so on save prune keys for canvases that are gone —
+// otherwise they pile up every time the daemon comes back.
 function loadCvGroups() {
   try { const v = JSON.parse(localStorage.getItem(LS_CVGROUPS) || '{}'); return v && typeof v === 'object' ? v : {}; }
   catch (e) { return {}; }
 }
 function saveCvGroups() {
   for (const k in cvCollapsed) {
-    if (!cvCollapsed[k]) delete cvCollapsed[k];                        // 펴 둔 것은 기본값이라 안 적는다
+    if (!cvCollapsed[k]) delete cvCollapsed[k];                        // unfolded is the default, so it is not written
     else if (k !== OTHER_KEY && !canvases.has(k)) delete cvCollapsed[k];
   }
   try { localStorage.setItem(LS_CVGROUPS, JSON.stringify(cvCollapsed)); } catch (e) {}
 }
 
-// ⑫ 제자리에서 이름 고치기 — 탭과 타일 제목이 같이 쓴다. 이름은 textContent 로만 넣는다
-// (protocol.md "이름은 셸에 안 닿는다": innerHTML 금지). 취소하면 있던 자식들을 그대로 되돌린다.
+// ⑫ Rename in place — the tab and the tile title share this. A name goes in through textContent only
+// (protocol.md "이름은 셸에 안 닿는다": no innerHTML). Cancel puts the original children back.
 function inlineEdit(host, initial, commit, after) {
   if (host.querySelector('input')) return;
   const prev = [...host.childNodes];
@@ -191,7 +195,7 @@ function inlineEdit(host, initial, commit, after) {
   inp.className = 'ed';
   inp.type = 'text';
   inp.value = initial || '';
-  inp.maxLength = 64;              // protocol.md "이름 규칙" 1–64. 서버도 다시 본다 — 여기 것은 편의다
+  inp.maxLength = 64;              // protocol.md "이름 규칙" 1–64. The server checks again — this one is a convenience
   inp.spellcheck = false;
   host.textContent = '';
   host.appendChild(inp);
@@ -205,24 +209,24 @@ function inlineEdit(host, initial, commit, after) {
     host.textContent = '';
     for (const n of prev) host.appendChild(n);
     if (save) commit(v);
-    if (after) after();      // 고치는 동안 미뤄 둔 다시 그리기를 여기서 푼다
+    if (after) after();      // release the repaint deferred while editing
   };
   inp.addEventListener('keydown', (ev) => {
-    ev.stopPropagation();          // ⌘K·Esc 는 이 칸의 것이다 — 전역 단축키에 안 넘긴다
+    ev.stopPropagation();          // ⌘K·Esc belong to this field — do not hand them to the global shortcuts
     if (ev.key === 'Enter') { ev.preventDefault(); end(true); }
     else if (ev.key === 'Escape') { ev.preventDefault(); end(false); }
   });
   inp.addEventListener('blur', () => end(true));
-  // 이 칸 위의 누름은 탭 끌기·타일 끌기가 아니다
+  // A press over this field is not a tab drag or a tile drag
   for (const t of ['pointerdown', 'click', 'dblclick']) inp.addEventListener(t, (ev) => ev.stopPropagation());
 }
 
-// #31 ①④ 제자리에서 묻기 — **터미널은 누군가 돌리고 있는 일이다. 부수기 전에 한 번 묻는다.**
-// `window.confirm` 을 쓰지 않는 이유 둘: (1) 그것은 페이지 전체를 멈춰 /events 프레임 처리까지 멈춘다,
-// (2) 생김새를 우리가 못 정한다 — 신호등을 이모지로 안 그리는 것과 같은 이유다(AGENTS.md).
-// 확인 줄은 host 안에 놓이고, 있는 동안 host 는 `.cfm-on` 을 단다 — CSS 가 host 의 다른 자식을 내린다.
-// 자식을 떼었다 붙이지 않는 이유: 그 사이에 방송이 와서 host 를 고쳐도(Tile.update·noteOutput) 안 부서진다.
-let activeConfirm = null;   // 확인 줄은 한 번에 하나다 — 새로 열면 먼저 것을 거둔다(떠도는 리스너를 안 남긴다)
+// #31 ①④ Ask in place — **a terminal is work somebody is running. Ask once before destroying it.**
+// Two reasons not to use `window.confirm`: (1) it freezes the whole page, /events frame handling included,
+// (2) we do not get to decide how it looks — the same reason the status lights are not drawn as emoji (AGENTS.md).
+// The confirm strip goes inside host, and while it is there host carries `.cfm-on` — CSS hides host's other children.
+// Why not detach and reattach the children: a broadcast arriving meanwhile and touching host (Tile.update·noteOutput) breaks nothing.
+let activeConfirm = null;   // one confirm strip at a time — opening a new one takes back the old (no listeners left adrift)
 function askClose(host, question, onYes, onEnd) {
   if (host.querySelector('.cfm')) return null;
   if (activeConfirm) activeConfirm.cancel();
@@ -243,27 +247,27 @@ function askClose(host, question, onYes, onEnd) {
     if (onEnd) onEnd(ok);
     if (ok) onYes();
   };
-  // 밖을 누르면 그만둔다. **focusout 으로 그만두면 안 된다** — 크롬(맥)은 단추를 마우스로 눌러도 포커스를
-  // 안 주므로 "Close" 를 누르는 pointerdown 이 focusout 을 먼저 내고, 그 취소가 click 보다 앞서 들어온다.
+  // A press outside cancels. **Do not cancel on focusout** — Chrome (Mac) does not focus a button clicked with
+  // the mouse, so the pointerdown pressing "Close" fires focusout first and that cancel lands ahead of the click.
   function outside(ev) { if (!row.contains(ev.target)) end(false); }
   document.addEventListener('pointerdown', outside, true);
   yes.addEventListener('click', (ev) => { ev.stopPropagation(); end(true); });
   no.addEventListener('click', (ev) => { ev.stopPropagation(); end(false); });
   for (const t of ['pointerdown', 'click', 'dblclick']) row.addEventListener(t, (ev) => ev.stopPropagation());
   row.addEventListener('keydown', (ev) => {
-    ev.stopPropagation();                      // Esc 는 이 줄의 것이다 — 펼침 되돌리기에 안 넘긴다
+    ev.stopPropagation();                      // Esc belongs to this strip — do not hand it to un-expand
     if (ev.key === 'Escape') { ev.preventDefault(); end(false); }
   });
   host.appendChild(row);
   host.classList.add('cfm-on');
-  yes.focus();                                 // 키보드만으로 닫을 수 있어야 한다. Esc 가 그만두기다
+  yes.focus();                                 // closing has to work from the keyboard alone. Esc is cancel
   activeConfirm = { row, cancel: () => end(false) };
   return activeConfirm;
 }
 
-// #31 ① DELETE /api/sessions/<id>. **여기서 지우지 않는다** — /events 의 gone 이 지운다.
-// 낙관적으로 지우고 gone 도 받으면 지우는 길이 둘이 되고, 그때 둘째 브라우저와 어긋난다(protocol.md
-// "낸 쪽도 방송을 되받는다"). 실패하면 표시만 되돌리고 토스트로 말한다.
+// #31 ① DELETE /api/sessions/<id>. **Do not delete here** — gone from /events deletes.
+// Delete optimistically and also take gone and there are two paths that delete, and that is where a second
+// browser drifts (protocol.md "낸 쪽도 방송을 되받는다"). On failure only undo the marking and say so in a toast.
 async function closeSession(id) {
   if (closing.has(id)) return;
   closing.add(id);
@@ -273,13 +277,14 @@ async function closeSession(id) {
   } catch (e) {
     closing.delete(id);
     paintClosing(id);
-    // **404 는 성공이다** — 둘째 브라우저(또는 셸 종료)가 먼저 닫았고, 사용자가 시킨 결과는 이미 나 있다.
-    // 2026-09-08 실측(f2.py, 브라우저 둘이 같은 세션의 확인을 열고 거의 동시에 Close): A 가 204,
-    // B 가 404 를 받고 B 에만 'close terminal: Not Found' 토스트가 떴다 — 닫혔는데 실패를 통보받는다.
-    // 데몬은 계약대로다(protocol.md `DELETE`: 없으면 404). 지우는 것은 `gone` 하나뿐이므로 여기서
-    // 아무것도 안 한다 — 재접속도 되살리지 않는다(404 가 gone 보다 먼저 와도 없는 pane 에 다시 붙지 않게).
+    // **404 is success** — a second browser (or the shell exiting) closed it first, and what the user asked for
+    // has already happened. Measured 2026-09-08 (f2.py, two browsers open the confirm on the same session and
+    // press Close almost together): A got 204, B got 404, and only B raised a 'close terminal: Not Found' toast —
+    // told it failed when it closed. The daemon is following the contract (protocol.md `DELETE`: 404 if absent).
+    // `gone` is the only thing that deletes, so do nothing here — do not revive the reconnect either (so a 404
+    // arriving before gone does not re-attach to a pane that is not there).
     if (e.status === 404) return;
-    // 안 죽었다 — 그동안 미뤄 둔 pane 재접속을 여기서 되살린다(위 onclose 참고)
+    // It did not die — revive the pane reconnect that was held off (see onclose above)
     const t = tiles.get(id);
     if (t && !t.closed && !t.ws) t.connect();
     toast(['close terminal: ' + e.message]);
@@ -295,7 +300,7 @@ function paintClosing(id) {
 
 let toastTimer = null;
 function toast(parts) {
-  // parts: [{b:'굵게'}, '보통', {d:'흐리게'}] 또는 문자열
+  // parts: [{b:'bold'}, 'plain', {d:'dim'}], or a string
   toastEl.textContent = '';
   for (const p of [].concat(parts)) {
     if (typeof p === 'string') toastEl.appendChild(document.createTextNode(p));
@@ -316,19 +321,19 @@ function agoText(id) {
   return Math.floor(d / 86400) + 'd';
 }
 
-// ── 테마 (system / light / dark, localStorage 'palmar-theme') ──
+// ── theme (system / light / dark, localStorage 'palmar-theme') ──
 const themeBtn = $('#theme');
 const darkMq = matchMedia('(prefers-color-scheme: dark)');
 function storedTheme() {
   try { const v = localStorage.getItem(LS_THEME); return v === 'light' || v === 'dark' ? v : null; }
   catch (e) { return null; }
 }
-function applyTheme(mode) {   // mode: 'light' | 'dark' | null(system)
+function applyTheme(mode) {   // mode: 'light' | 'dark' | null (system)
   if (mode) root.dataset.theme = mode; else delete root.dataset.theme;
   themeBtn.dataset.mode = mode || 'system';
   themeBtn.title = 'theme: ' + (mode || 'system') + ' — click to change';
   try { if (mode) localStorage.setItem(LS_THEME, mode); else localStorage.removeItem(LS_THEME); } catch (e) {}
-  if (typeof renderBadge === 'function') renderBadge(true);   // 파비콘 색은 --st-* 를 읽는다
+  if (typeof renderBadge === 'function') renderBadge(true);   // the favicon color reads --st-*
   rethemeTerminals();
 }
 function cycleTheme() {
@@ -339,7 +344,7 @@ themeBtn.addEventListener('click', cycleTheme);
 themeBtn.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cycleTheme(); } });
 if (darkMq.addEventListener) darkMq.addEventListener('change', () => { if (!root.dataset.theme) rethemeTerminals(); });
 
-// xterm 은 색을 값으로 받는다. 값은 CSS 변수에서 읽어 넘긴다 — 색이 두 곳에 있지 않게.
+// xterm takes colors as values. Read the values out of the CSS variables and hand them over — so a color never lives in two places.
 function termTheme() {
   return {
     background: cssVar('--tile'),
@@ -355,8 +360,10 @@ function rethemeTerminals() {
   for (const t of tiles.values()) t.term.options.theme = th;
 }
 
-// ── 경로 표시 ──────────────────────────────────────────
-let home = null;   // 뿌리 목록의 첫 항목을 홈으로 본다 — protocol.md 는 "사용자 홈 + …" 순서로 적었고 홈 표시가 따로 없다
+// ── path display ───────────────────────────────────────
+// Treat the first entry of the roots list as home — protocol.md writes the order as "사용자 홈 + …" and marks
+// home no other way.
+let home = null;
 function shortPath(p) {
   if (!p) return '';
   if (home && (p === home || p.startsWith(home + '/'))) return '~' + p.slice(home.length);
@@ -366,15 +373,15 @@ function shortPath(p) {
 // ── HTTP ────────────────────────────────────────────────
 async function api(method, path, body) {
   const url = new URL(path, location.origin);
-  url.searchParams.set('token', TOKEN);   // **읽기도 포함해서 전부** (protocol.md "인증")
+  url.searchParams.set('token', TOKEN);   // **on everything, reads included** (protocol.md "인증")
   const init = { method };
   if (body !== undefined) { init.headers = { 'content-type': 'application/json' }; init.body = JSON.stringify(body); }
   const r = await fetch(url, init);
   const text = await r.text();
   let data = null;
   if (text) { try { data = JSON.parse(text); } catch (e) { data = null; } }
-  // 실패에 **상태를 실어 준다** — 부르는 쪽이 "남이 먼저 했다"(404·409)와 진짜 실패를 가려야 한다.
-  // 몸의 한 줄은 그대로 message 다(protocol.md: 4xx 의 몸은 `{"error": "사람이 읽는 한 줄"}`).
+  // **Carry the status on the failure** — the caller has to tell "somebody got there first" (404·409) from a real failure.
+  // The one line in the body becomes message as-is (protocol.md: a 4xx body is `{"error": "one line a person reads"}`).
   if (!r.ok) {
     const err = new Error((data && data.error) || (r.status + ' ' + r.statusText));
     err.status = r.status;
@@ -383,14 +390,14 @@ async function api(method, path, body) {
   return data;
 }
 
-// ── 타일 ────────────────────────────────────────────────
+// ── tiles ───────────────────────────────────────────────
 class Tile {
   constructor(s) {
     this.id = s.id;
     this.s = s;
     this.closed = false;
     this.ws = null;
-    this.lastOffset = 0;     // 다음 접속의 from=. hello.offset − hello.replayed + 그 뒤 받은 바이트
+    this.lastOffset = 0;     // from= for the next connect. hello.offset − hello.replayed + bytes received since
     this.base = 0;
     this.received = 0;
     this.sentCols = 0; this.sentRows = 0;
@@ -400,7 +407,7 @@ class Tile {
 
     const e = this.el = el('div', 'tile');
     e.dataset.id = s.id;
-    // 다른 캔버스의 것이면 화면에만 없다 — 세션도 웹소켓도 그대로 산다(원칙 2)
+    // If it belongs to another canvas it is only absent from the screen — session and websocket stay alive (principle 2)
     if (current !== null && s.canvas !== current) e.classList.add('other');
     const tb = el('div', 'tb');
     this.dotEl = el('span', 'dot');
@@ -409,29 +416,30 @@ class Tile {
     this.szEl = el('span', 'sz');
     this.rnEl = el('span', 'rn'); this.rnEl.title = 'rename (or double-click the name)';
     this.xpEl = el('span', 'xp'); this.xpEl.title = 'expand';
-    // #31 ① 닫기. **상자는 .rn·.xp 와 같은 몸이다**(같은 CSS 규칙 한 줄에 들어 있다 — 크기·테·hover 가
-    // 갈릴 자리가 없다) 그리고 같은 자리에 이어 붙는다. 안의 그림만 다르다 — 획 둘(×).
-    // 글리프(✕)를 안 쓴 이유는 .rn 과 같다: 폰트마다 다르게 그려진다(AGENTS.md).
-    // <button> 인 것만 다르다 — 부수는 것은 키보드로도 닿아야 한다(#31 ④). 생김새는 span 과 같다.
+    // #31 ① close. **The box is the same body as .rn·.xp** (they sit in one CSS rule together — there is no
+    // room for size·border·hover to drift apart) and it joins the same row. Only the drawing inside differs — two strokes (×).
+    // The reason no glyph (✕) is the same as for .rn: every font draws it differently (AGENTS.md).
+    // The only difference is that it is a <button> — destroying has to be reachable from the keyboard too
+    // (#31 ④). It looks like the spans.
     this.clEl = el('button', 'cl'); this.clEl.type = 'button';
     this.clEl.title = 'close terminal'; this.clEl.setAttribute('aria-label', 'close terminal');
     tb.append(this.dotEl, this.nameEl, this.pillEl, this.szEl, this.rnEl, this.xpEl, this.clEl);
-    // #25 판마다 글자 크기. Ctrl/⌘+휠은 브라우저 확대이기도 하므로 반드시 막는다 — 안 막으면
-    // 창 하나를 키우려다 페이지 전체가 커진다. 그냥 휠은 그대로 두어 xterm 의 스크롤백이 산다.
-    // **캡처 단계로 받는다.** 버블로 받으면 xterm 의 스크롤백 처리기가 자식에서 먼저 먹어,
-    // 스크롤이 맨 위나 맨 아래에 닿았을 때만 여기까지 온다(사용자 보고 2026-09-08).
+    // #25 text size per pane. Ctrl/⌘+wheel is also browser zoom, so it must be blocked — leave it and reaching
+    // to enlarge one window enlarges the whole page. A plain wheel is left alone so xterm's scrollback lives.
+    // **Take it on the capture phase.** On bubble, xterm's scrollback handler eats it at the child first, and it
+    // only reaches here when the scroll is already at the very top or the very bottom (user report 2026-09-08).
     e.addEventListener('wheel', (ev) => {
       if (!ev.ctrlKey && !ev.metaKey) return;
       ev.preventDefault(); ev.stopPropagation();
       this.setFont((this.term.options.fontSize || FONT_PX) + (ev.deltaY < 0 ? FONT_STEP : -FONT_STEP));
     }, { passive: false, capture: true });
-    // 크기 표시가 곧 되돌리기 단추다 — 제목 줄에 단추를 하나 더 붙이지 않으려고 이미 있는 것에 얹는다.
+    // The size readout is the reset button — put it on something already there rather than add another button to the title bar.
     this.szEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.setFont(FONT_PX); });
     this.termEl = el('div', 'term');
     this.gripEl = el('div', 'grip');
     e.append(tb, this.termEl, this.gripEl);
 
-    // 자리: 저장된 것이 있으면 그것, 없으면 빈 자리 (⑩ 임시)
+    // Position: whatever was saved, else a free slot (⑩ provisional)
     const saved = layout[s.id];
     const w = saved && saved.w >= MIN_W ? saved.w : DEFAULT_W;
     const h = saved && saved.h >= MIN_H ? saved.h : DEFAULT_H;
@@ -441,18 +449,18 @@ class Tile {
     const z = saved && saved.z ? saved.z : ++zTop;
     zTop = Math.max(zTop, z);
     Object.assign(e.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px', zIndex: String(z) });
-    // **저장된 글자 크기를 여기서 지우지 않는다.** 이 줄은 자리를 다시 적는 것이지 이 판의 성질을
-    // 통째로 새로 쓰는 것이 아니다 — 통째로 덮어써서 f 가 날아갔고, 그래서 새로 열면 늘 기본
-    // 크기로 떴다(실측: localStorage 에는 f 가 남아 있는데 화면은 기본값이었다).
+    // **Do not wipe the saved text size here.** This line rewrites the position, not every property of the pane —
+    // overwriting wholesale threw f away, so a fresh open always came up at the default size (measured:
+    // localStorage still held f while the screen showed the default).
     layout[s.id] = { x, y, w, h, z };
     if (saved && saved.f) layout[s.id].f = saved.f;
     saveLayout();
     cvScroll.appendChild(e);
 
-    // xterm — 터미널 에뮬레이션은 브라우저가 한다 (AGENTS.md 원칙 1)
+    // xterm — the browser does the terminal emulation (AGENTS.md principle 1)
     this.term = new Terminal({
-      // layout[s.id] 이 아니라 **saved** 에서 읽는다 — 위에서 layout 항목을 다시 쓰므로,
-      // 그 사이에 무엇이 지워져도 이 값은 흔들리지 않는다.
+      // Read from **saved**, not layout[s.id] — the layout entry is rewritten above, so whatever gets
+      // dropped in between, this value does not move.
       fontSize: (saved && saved.f) || FONT_PX,
       fontFamily: cssVar('--mono'),
       lineHeight: LINE_HEIGHT,
@@ -463,50 +471,50 @@ class Tile {
     });
     this.fit = new FitAddon.FitAddon();
     this.term.loadAddon(this.fit);
-    // 글자를 처음 골랐을 때 **한 번만** 단축키를 알려 준다. 복사 단축키는 터미널마다 달라서
-    // (여기서는 Ctrl+C 가 인터럽트다) 눌러 보고 알 수가 없다 — 고르는 순간이 그걸 알려 줄 자리다.
+    // Say what the shortcut is **once**, the first time text is selected. The copy shortcut differs per terminal
+    // (here Ctrl+C is interrupt), so there is no finding it by pressing — selecting is the moment to say it.
     this.term.onSelectionChange(() => {
       if (clipHintShown || !this.term.hasSelection()) return;
       clipHintShown = true;
       try { localStorage.setItem(LS_CLIPHINT, '1'); } catch (e) {}
       toast([CLIP_HINT + ' to copy and paste', 'Ctrl+C stays as interrupt, the way a terminal expects']);
     });
-    // xterm 이 키를 처리하기 **전에** 본다. true 면 그대로 넘기고, false 면 우리가 가져간다.
+    // Look at the key **before** xterm handles it. true hands it through, false takes it for us.
     this.term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== 'keydown') return true;
-      // **IME 가 조합 중인 키는 xterm 이 손대면 안 된다.** xterm 은 조합 중 keydown 의 keyCode 가
-      // 229 가 아니면 조합을 통째로 버린다(`_compositionHelper.keydown` → `_finalizeComposition(false)`).
-      // 그런데 macOS 의 한글 IME 는 브라우저에 따라 **진짜 키 코드**를 보낸다 — 그러면 글자마다
-      // 조합이 깨져 "안녕하십니까" 가 자모로 흩어진다(사용자 보고 2026-09-09).
-      // 실측: 같은 입력을 keyCode 229 로 흘리면 '안녕하십니까', 실제 키 코드로 흘리면 무너졌다.
-      // 여기서 false 를 내면 xterm 의 _keyDown 이 그 자리에서 끝나 조합이 살아남는다. 조합이 끝나면
-      // compositionend 가 제 몫을 하므로 잃는 것이 없다.
-      // `ev.isComposing` 만 믿지 않는다 — **사파리는 그 칸을 안 채울 때가 있다**(한글이 안 되는
-      // 것이 사파리에서만이었다, 2026-09-09). 조합 시작·끝은 textarea 가 확실히 알려 주므로
-      // 그것으로 우리가 직접 센다(아래 term.open 뒤).
-      // 조합 중인 키는 xterm 이 손대면 안 된다 — 조합 중 keydown 의 keyCode 가 229 가 아니면
-      // xterm 이 조합을 통째로 버린다(`_compositionHelper.keydown` → `_finalizeComposition(false)`).
+      // **xterm must not touch a key while the IME is composing.** If a keydown during composition has a keyCode
+      // other than 229, xterm throws the whole composition away (`_compositionHelper.keydown` → `_finalizeComposition(false)`).
+      // But the Korean IME on macOS sends the **real key code** in some browsers — and then composition breaks on
+      // every character and "안녕하십니까" scatters into jamo (user report 2026-09-09).
+      // Measured: the same input fed through as keyCode 229 gave '안녕하십니까'; fed with real key codes it fell apart.
+      // Returning false here ends xterm's _keyDown right there and the composition survives. When composition
+      // finishes, compositionend does its part, so nothing is lost.
+      // Do not trust `ev.isComposing` alone — **Safari sometimes leaves that field unset** (Korean failing only in
+      // Safari was exactly this, 2026-09-09). The textarea reports composition start and end reliably, so we
+      // count it ourselves from that (below, after term.open).
+      // xterm must not touch a key while composing — if a keydown during composition has a keyCode other than
+      // 229, xterm throws the whole composition away (`_compositionHelper.keydown` → `_finalizeComposition(false)`).
       if (ev.keyCode === 229) return false;
-      // **홀로 눌린 조정 키는 아무것도 끝내지 않는다.** ㄲ·ㅃ 같은 된소리는 Shift 를 거치는데,
-      // 그것을 "IME 가 손을 뗐다" 로 읽으면 조합 중인 글자가 그 자리에서 튀어나간다
-      // (실측 로그에 `keydown key="Shift"` 가 ㄲ 직전에 있다).
+      // **A modifier pressed on its own finishes nothing.** Tense consonants like ㄲ·ㅃ go through Shift, and
+      // reading that as "the IME let go" shoots the character still being composed out on the spot
+      // (the measured log has `keydown key="Shift"` right before ㄲ).
       if (ev.key === 'Shift' || ev.key === 'Control' || ev.key === 'Alt' ||
           ev.key === 'Meta' || ev.key === 'CapsLock') return true;
-      // 229 가 아닌 진짜 키가 왔다 = IME 가 손을 뗐다. **아직 안 보낸 글자를 먼저 보낸다** —
-      // 안 그러면 Enter 가 글자보다 먼저 가서 마지막 글자를 잃는다.
+      // A real key that is not 229 arrived = the IME let go. **Send the character not yet sent first** —
+      // otherwise Enter goes ahead of it and the last character is lost.
       this.kdSeen = true;
       if (this.imePending) this.imeFlush();
       if (this.composing || ev.isComposing) return false;
-      // **여기가 아래 mod 검사보다 먼저여야 한다.** Ctrl+Enter 는 Shift 가 없어 아래 조건에 안 걸리고,
-      // 그러면 xterm 이 그 키를 처리하면서 전파를 끊어 전역 단축키까지 오지 않는다
-      // (실측: Ctrl+Shift+Enter 는 되고 Ctrl+Enter 만 안 됐다).
+      // **This has to come before the mod check below.** Ctrl+Enter has no Shift, so it fails that condition,
+      // and then xterm handles the key and cuts propagation so it never reaches the global shortcuts
+      // (measured: Ctrl+Shift+Enter worked and only Ctrl+Enter did not).
       if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey) && !ev.altKey) return false;
       const mod = ev.metaKey || (ev.ctrlKey && ev.shiftKey);
       if (!mod || ev.altKey) return true;
       const k = (ev.key || '').toLowerCase();
       if (k === 'c') {
         const sel = this.term.getSelection();
-        if (!sel) return true;              // 고른 것이 없으면 터미널의 것이다
+        if (!sel) return true;              // nothing selected — it belongs to the terminal
         ev.preventDefault();
         clipWrite(sel);
         return false;
@@ -519,75 +527,75 @@ class Tile {
       return true;
     });
     this.term.open(this.termEl);
-    // **조합 중인지 직접 센다.** 위 키 핸들러가 이걸 본다 — `ev.isComposing` 은 브라우저마다
-    // 채워 주는 정도가 다르고, 사파리에서 한글이 깨진 것이 그 차이였다.
-    // compositionend 에서 **곧바로** 내린다: 늦게 내리면 조합을 끝낸 다음 키(Enter 같은 것)까지 삼킨다.
+    // **Count composition ourselves.** The key handler above reads this — browsers fill `ev.isComposing` to
+    // different degrees, and that difference is what broke Korean in Safari.
+    // Clear it **immediately** on compositionend: clear it late and the key after the composition (Enter, say) gets swallowed too.
     this.composing = false;
-    this.sawComposition = false;   // 이 브라우저가 조합 이벤트를 쓰나
-    this.imePending = '';          // 아직 확정 안 된 글자 (조합 이벤트가 없는 브라우저용)
+    this.sawComposition = false;   // does this browser use composition events
+    this.imePending = '';          // the character not committed yet (for browsers with no composition events)
     this.kdSeen = false;
     const ta = this.termEl.querySelector('textarea');
     if (ta) {
       ta.addEventListener('compositionstart', () => { this.composing = true; this.sawComposition = true; });
       ta.addEventListener('compositionend', () => { this.composing = false; });
-      // **표시는 그 키와 함께 사라져야 한다.** `kdSeen` 은 아래 input 리스너 안에서만 지워지는데,
-      // xterm 이 직접 처리하는 키(Enter·Backspace·Tab·화살표)는 `preventDefault` 로 끝나서
-      // input 이 아예 안 온다. 그러면 표시가 켜진 채 남고, **다음에 친 한글의 첫 자모**가
-      // "평범한 키였다" 로 잘못 읽혀 낱자 그대로 셸에 나간다 — Enter 한 번 뒤의 "나" 가 "ㄴ나".
-      // 평범한 키는 keydown → input → keyup 이라 표시는 input 이 볼 때까지 살아 있다.
+      // **The flag has to die with its key.** `kdSeen` is cleared only inside the input listener below, but the
+      // keys xterm handles itself (Enter·Backspace·Tab·arrows) end in `preventDefault` and no input arrives at
+      // all. Then the flag stays on and **the first jamo of the next Korean typed** is misread as "that was a
+      // plain key" and goes to the shell as a bare letter — "나" after one Enter comes out "ㄴ나".
+      // A plain key goes keydown → input → keyup, so the flag lives until input sees it.
       ta.addEventListener('keyup', () => { this.kdSeen = false; });
-      // 안전핀. compositionstart 만 오고 end 가 영영 안 오면 그 판이 키를 통째로 삼킨다 —
-      // 그 상태로 갇히느니 포커스가 떠날 때 푼다.
-      // 키를 누른 채 포커스가 떠나면 keyup 이 여기로 안 온다 — 나갈 때도 내린다.
+      // Safety pin. If compositionstart arrives and end never does, that pane swallows keys wholesale —
+      // rather than be stuck there, release on focus leaving.
+      // If focus leaves with a key held down, keyup never gets here — clear on the way out too.
       ta.addEventListener('blur', () => { this.composing = false; this.kdSeen = false; this.imeFlush(); });
     }
-    // ── 조합 이벤트를 안 내는 브라우저 (사파리) ─────────────────────────
-    // 실측(2026-09-09, Safari 18.6, 한글): `compositionstart`·`compositionend` 가 **한 번도 안 온다.**
-    // 대신 `input` 으로만 말한다 — `insertText` 는 새 글자를 시작하고, `insertReplacementText` 는
-    // 조합 중인 마지막 글자를 갈아 끼운다. xterm 은 `insertText` 만 보내므로 **조합 중인 자모만 나가고
-    // 완성된 글자는 영영 안 나간다**: "안녕하십니까" 가 "ㅇㄴㅇㄴㅎㄴ까" 가 된 것이 이것이다.
+    // ── browsers that emit no composition events (Safari) ───────────────
+    // Measured (2026-09-09, Safari 18.6, Korean): `compositionstart`·`compositionend` **never arrive at all.**
+    // It speaks only through `input` — `insertText` starts a new character and `insertReplacementText` swaps out
+    // the last character still being composed. xterm sends only `insertText`, so **only the jamo being composed
+    // goes out and the finished character never does**: that is how "안녕하십니까" became "ㅇㄴㅇㄴㅎㄴ까".
     //
-    // **부모에서 캡처로 받는다.** xterm 의 input 리스너는 textarea 위에 있고 우리보다 먼저 붙어 있어서,
-    // 같은 자리에 붙으면 언제나 저쪽이 먼저 돈다. 부모의 캡처 단계는 그보다 앞이라 여기서 멈출 수 있다.
+    // **Take it on the parent, in capture.** xterm's input listener sits on the textarea and was attached before
+    // ours, so on the same node theirs always runs first. The parent's capture phase comes before that, so we can stop it here.
     this.termEl.addEventListener('input', (ev) => {
-      if (this.sawComposition) return;        // 조합 이벤트를 쓰는 브라우저 — xterm 에 맡긴다
+      if (this.sawComposition) return;        // a browser that uses composition events — leave it to xterm
       const it = ev.inputType;
       if (it !== 'insertText' && it !== 'insertReplacementText') return;
-      // **평범한 키와 IME 키를 차례로 가른다.** 평범한 키는 keydown → (xterm이 보냄) → input 이고,
-      // IME 키는 input → keydown 이다(실측: 스페이스는 keydown 이 먼저, 한글은 input 이 먼저).
-      // keyCode 229 인 keydown 은 표시를 안 세우므로, 여기서 표시가 없으면 IME 다.
+      // **Tell a plain key from an IME key by their order.** A plain key goes keydown → (xterm sends) → input,
+      // an IME key goes input → keydown (measured: space fires keydown first, Korean fires input first).
+      // A keydown with keyCode 229 does not raise the flag, so no flag here means IME.
       const plain = this.kdSeen;
       this.kdSeen = false;
-      if (plain) return;                      // xterm 이 이미 keydown 에서 보냈다
-      ev.stopPropagation();                   // xterm 의 _inputEvent 를 막는다 — 우리가 보낸다
+      if (plain) return;                      // xterm already sent it on keydown
+      ev.stopPropagation();                   // block xterm's _inputEvent — we send it
       const d = ev.data || '';
       if (it === 'insertReplacementText') {
-        this.imePending = d;                  // 조합 중인 글자가 바뀌었다 — 아직 안 보낸다
+        this.imePending = d;                  // the character being composed changed — do not send yet
       } else {
-        if (this.imePending) this.sendText(this.imePending);   // 앞 글자가 확정됐다
+        if (this.imePending) this.sendText(this.imePending);   // the previous character is committed
         this.imePending = d;
       }
     }, true);
     this.gl = tryWebgl(this.term, () => { this.gl = null; updateStatusBar(); });
-    // 안 보이는 동안(다른 캔버스) 재면 열 수가 0 으로 나온다 — 보이게 될 때 refit() 이 잰다
+    // Measuring while hidden (another canvas) gives 0 columns — refit() measures when it becomes visible
     this.fitted = false;
     if (this.visible()) { this.fit.fit(); this.fitted = true; }
 
-    // 아직 확정 안 된 글자를 내보낸다. IME 가 손을 떼는 자리마다 부른다.
+    // Push out the character not committed yet. Called wherever the IME lets go.
     this.imeFlush = () => {
       if (!this.imePending) return;
       const d = this.imePending;
       this.imePending = '';
       this.sendText(d);
       const t2 = this.termEl.querySelector('textarea');
-      if (t2 && t2.value) t2.value = '';   // 사파리는 이 값을 안 비운다 — 끝없이 자란다
+      if (t2 && t2.value) t2.value = '';   // Safari never clears this value — it grows without end
     };
     this.sendText = (d) => {
       if (this.ws && this.ws.readyState === 1) this.ws.send(enc.encode(d));
     };
     this.term.onData((d) => {
       if (this.ws && this.ws.readyState === 1) this.ws.send(enc.encode(d));
-      if (this.s.status === 'done') sendSeen(this.id);   // 치고 있으면 본 것이다
+      if (this.s.status === 'done') sendSeen(this.id);   // typing in it means you have seen it
     });
     this.term.onBinary((d) => {
       const b = new Uint8Array(d.length);
@@ -608,21 +616,21 @@ class Tile {
 
   rect() { return { x: this.el.offsetLeft, y: this.el.offsetTop, w: this.el.offsetWidth, h: this.el.offsetHeight }; }
 
-  // ⑪ 이 캔버스의 것인가. current 가 null 이면 **캔버스를 모르는 데몬**이라 전부 보인다 (아래 renderTabs).
+  // ⑪ Does it belong to this canvas? If current is null the **daemon does not know canvases**, so everything shows (renderTabs below).
   visible() { return current === null || this.s.canvas === current; }
 
-  // ⑫ 이름 바꾸기. 빈 이름은 null 로 보낸다(= 이름 지우기) — 이름표가 경로로 돌아간다.
+  // ⑫ Rename. An empty name is sent as null (= clear the name) — the label goes back to the path.
   rename() {
     inlineEdit(this.nameEl, this.s.name || '', async (v) => {
       try { upsert(await api('PATCH', '/api/sessions/' + encodeURIComponent(this.id), { name: v || null })); }
       catch (e) { toast(['rename: ' + e.message]); }
-    }, () => { if (!this.closed) this.update(this.s); });   // 고치는 동안 온 방송을 지금 반영한다
+    }, () => { if (!this.closed) this.update(this.s); });   // apply now whatever broadcast arrived while editing
   }
 
-  // #31 ① 제목줄 안에서 묻는다. 확인이 열려 있는 동안 제목줄의 다른 것은 CSS 가 내린다(.tb.cfm-on).
+  // #31 ① Ask inside the title bar. While the confirm is open, CSS hides the rest of the title bar (.tb.cfm-on).
   askClose() { askClose(this.el.firstChild, 'Close this terminal?', () => closeSession(this.id)); }
 
-  // ── pane 채널 /pty/<id> ──
+  // ── pane channel /pty/<id> ──
   connect() {
     if (this.closed) return;
     const q = new URLSearchParams({
@@ -636,7 +644,7 @@ class Tile {
 
     ws.onopen = () => {
       this.retry = 0;
-      // 접속 URL 에 실은 뒤 크기가 바뀌었으면 알린다
+      // If the size changed after it went out on the connect URL, say so
       if (this.term.cols !== this.sentCols || this.term.rows !== this.sentRows) this.sendResize();
     };
     ws.onmessage = (ev) => {
@@ -644,13 +652,13 @@ class Tile {
         let m = null;
         try { m = JSON.parse(ev.data); } catch (e) { return; }
         if (m && m.t === 'hello') {
-          // offset 은 재생 **뒤** 의 절대 오프셋(protocol.md). 재생분은 곧 바이너리로 오므로,
-          // 재생 전 위치(offset − replayed)에 실제로 받은 바이트를 더해 다음 from 을 만든다.
-          // 재생 도중에 끊겨도 받은 만큼만 세어진다.
+          // offset is the absolute offset **after** the replay (protocol.md). The replay itself arrives as binary
+          // right after, so the next from is built from the pre-replay position (offset − replayed) plus the bytes
+          // actually received. Cut off mid-replay and only what arrived is counted.
           this.hello = m;
-          // `| 0` 이면 32비트로 잘린다. `produced` 는 그 판이 지금까지 내보낸 **모든** 바이트라
-          // 긴 빌드 로그나 `tail -f` 한 판이면 2GB 를 넘고, 그때 오프셋이 음수로 돌아 붙었다 뗄
-          // 때마다 링 전체를 다시 받는다. `+` 는 2^53 까지 정확하다.
+          // `| 0` truncates to 32 bits. `produced` is **every** byte that pane has ever put out, so a long build
+          // log or a pane running `tail -f` goes past 2GB, the offset wraps negative, and every attach and detach
+          // pulls the whole ring down again. `+` is exact to 2^53.
           this.base = (+m.offset || 0) - (+m.replayed || 0);
           this.received = 0;
           this.lastOffset = this.base;
@@ -662,7 +670,7 @@ class Tile {
       this.received += bytes.length;
       if (this.hello) this.lastOffset = this.base + this.received;
       this.term.write(bytes, () => {
-        // 흐름 제어: 파싱이 끝난 뒤에만 ACK 한다 (스파이크 D)
+        // Flow control: ACK only after parsing is done (spike D)
         if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'ack', n: bytes.length }));
       });
       this.noteOutput();
@@ -671,14 +679,14 @@ class Tile {
       if (this.ws !== ws) return;
       this.ws = null;
       if (this.closed || !sessions.has(this.id)) return;
-      // #31 ①: 우리가 닫아 달라고 한 pane 이다. 데몬은 pane 소켓을 먼저 닫고 gone 을 그 뒤에 보낼 수 있는데,
-      // 그 사이에 다시 두드리면 /pty/<id> 가 404 로 답해 콘솔에 오류가 남는다(실측: dev-stub --delay-gone 1.2).
-      // gone 이 오면 dispose 가 이 타일을 거둔다 — **여기서 세션을 지우는 것이 아니다.**
+      // #31 ①: this is a pane we asked to be closed. The daemon may close the pane socket first and send gone
+      // after, and knocking again in between gets a 404 from /pty/<id> and an error in the console (measured:
+      // dev-stub --delay-gone 1.2). When gone arrives, dispose takes this tile away — **the session is not deleted here.**
       if (closing.has(this.id)) return;
       this.retry = Math.min(10000, this.retry ? this.retry * 2 : 500);
       setTimeout(() => this.connect(), this.retry);
     };
-    ws.onerror = () => {};   // onclose 가 뒤따른다
+    ws.onerror = () => {};   // onclose follows
   }
 
   sendResize() {
@@ -689,12 +697,12 @@ class Tile {
   }
 
   refit() {
-    if (!this.visible()) return;            // 다른 캔버스 — 잴 수 없다(display:none)
+    if (!this.visible()) return;            // another canvas — cannot measure (display:none)
     const d = this.fit.proposeDimensions();
-    if (!d || !d.cols || !d.rows) return;   // 아직 크기가 없다
+    if (!d || !d.cols || !d.rows) return;   // no size yet
     this.fit.fit();
     this.fitted = true;
-    this.sendResize();   // "이것만이 행·열을 바꾼다" — 창 크기가 바뀌었을 때만 보낸다
+    this.sendResize();   // "this is the only thing that changes rows·columns" — sent only when the window size changed
     this.showSize();
   }
 
@@ -708,32 +716,32 @@ class Tile {
       : this.term.cols + '×' + this.term.rows + ' — ' + KMOD + '+wheel over the terminal changes the text size';
   }
 
-  // 창은 안 건드린다. 글자만 바꾸고 다시 재면 행·열이 따라온다 — 그리고 그 resize 가 에이전트에
-  // 전해지므로(refit → sendResize) TUI 는 새 크기로 다시 그린다.
+  // The window is left alone. Change only the text and re-measure and rows·columns follow — and that resize
+  // reaches the agent (refit → sendResize), so a TUI redraws at the new size.
   setFont(px) {
     const f = Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(px * 4) / 4));
     if (Math.abs(f - (this.term.options.fontSize || FONT_PX)) < 0.01) return;
     this.term.options.fontSize = f;
-    this.refit();          // fit → sendResize → showSize 를 한 번에 한다
+    this.refit();          // does fit → sendResize → showSize in one go
     this.persist();
   }
 
   update(s) {
     this.s = s;
-    // **행·열은 데몬이 진짜다.** 두 번째 브라우저가 같은 판에 붙으면 그쪽 크기로 PTY 가 바뀌는데
-    // (daemon.attach), 먼저 붙어 있던 쪽은 그 방송을 버리고 옛 크기로 계속 그렸다 — 셸은 80칸에서
-    // 줄을 접고 화면은 120칸으로 그리니 그 뒤 모든 줄이 어긋난다. `sentCols` 를 먼저 맞춰 두는 것이
-    // 요점이다: 되받아치지 않으니 왔다 갔다 하지 않고, 이 브라우저에서 창을 실제로 만지면 그때
-    // 다시 자기 크기를 주장한다.
+    // **The daemon's rows·columns are the real ones.** When a second browser attaches to the same pane the PTY
+    // changes to that one's size (daemon.attach), and the browser that attached first used to throw that broadcast
+    // away and keep drawing at the old size — the shell wraps at 80 columns while the screen draws 120, and every
+    // line after that is off. Setting `sentCols` first is the point: nothing is echoed back, so it does not
+    // oscillate, and the moment this browser actually touches the window it asserts its own size again.
     if (s.cols && s.rows && (s.cols !== this.term.cols || s.rows !== this.term.rows)) {
       this.sentCols = s.cols; this.sentRows = s.rows;
-      try { this.term.resize(s.cols, s.rows); } catch (e) { /* 판이 닫히는 중 */ }
+      try { this.term.resize(s.cols, s.rows); } catch (e) { /* the pane is closing */ }
       this.showSize();
     }
     const cls = STATUS_CLASS[s.status] || 'idle';
     this.dotEl.className = 'dot ' + cls;
-    // ⑫ 사람이 준 이름이 이긴다. 없으면 지금까지의 경로 이름표 그대로.
-    // 고치는 중이면 그 칸을 건드리지 않는다 — 방송이 와도 사람 손이 먼저다.
+    // ⑫ A name a person gave wins. Without one, the path label as before.
+    // While it is being edited, leave the field alone — a broadcast may arrive, but the hand comes first.
     if (!this.nameEl.querySelector('input')) {
       this.nameEl.textContent = '';
       if (s.name) this.nameEl.textContent = s.name;
@@ -743,7 +751,8 @@ class Tile {
     else { this.pillEl.hidden = true; }
   }
 
-  // 목록의 "마지막 한 줄" — 버퍼에서 커서 위쪽으로 빈 줄이 아닌 첫 줄. 상태 판정에는 안 쓴다(화면을 읽어 상태를 정하지 않는다).
+  // The list's "last line" — the first non-blank line above the cursor in the buffer. Never used to decide
+  // status (we do not read the screen to decide status).
   noteOutput() {
     if (this.msgTimer) return;
     this.msgTimer = setTimeout(() => {
@@ -761,7 +770,7 @@ class Tile {
     const r = this.rect();
     layout[this.id] = { x: r.x, y: r.y, w: r.w, h: r.h, z: parseInt(this.el.style.zIndex, 10) || 0 };
     const f = this.term.options.fontSize;
-    if (f && Math.abs(f - FONT_PX) > 0.01) layout[this.id].f = f;   // 기본값은 안 적는다
+    if (f && Math.abs(f - FONT_PX) > 0.01) layout[this.id].f = f;   // the default is not written
     saveLayout();
   }
 
@@ -769,9 +778,10 @@ class Tile {
     const bar = this.el.firstChild, grip = this.gripEl;
     let mode = null, sx = 0, sy = 0, ox = 0, oy = 0, ow = 0, oh = 0;
     const down = (m) => (ev) => {
-      // 제목줄 위의 단추·입력칸·확인 줄은 끌기가 아니다 (#31: .cl 과 .cfm 이 여기 붙었다)
-      // .sz.own 만 뺀다 — 평소의 크기 표시는 제목줄의 일부라 끌려야 하고, 글자 크기를 바꾼
-      // 판에서만 그것이 되돌리기 단추가 된다(#25). 안 빼면 pointerdown 이 끌기로 잡혀 click 이 안 난다.
+      // Buttons, input fields and the confirm strip on the title bar are not a drag (#31: .cl and .cfm joined here)
+      // Only .sz.own is excluded — the ordinary size readout is part of the title bar and should drag, and it
+      // becomes a reset button only on a pane whose text size was changed (#25). Leave it in and pointerdown is
+      // taken as a drag and no click fires.
       if (ev.button !== 0 || ev.target.closest('.xp, .rn, .cl, .ed, .cfm, .sz.own') || this.el.classList.contains('max')) return;
       mode = m; sx = ev.clientX; sy = ev.clientY;
       ({ x: ox, y: oy, w: ow, h: oh } = this.rect());
@@ -782,7 +792,7 @@ class Tile {
     const move = (ev) => {
       if (!mode) return;
       const dx = ev.clientX - sx, dy = ev.clientY - sy;
-      // 미니맵 사각형은 **방금 계산한 값**으로 같이 옮긴다 — DOM 에 다시 묻지 않는다
+      // Move the minimap rectangle along using **the value just computed** — do not ask the DOM again
       if (mode === 'move') {
         const nx = Math.max(0, ox + dx), ny = Math.max(0, oy + dy);
         this.el.style.left = nx + 'px';
@@ -799,10 +809,10 @@ class Tile {
       if (!mode) return;
       const was = mode; mode = null;
       this.el.classList.remove('drag');
-      paintTidy();          // 창을 옮기면 거둘 것이 생기거나 없어진다
-      if (was === 'size') this.refit();   // 크기 조절을 놓았을 때만 PTY 에 알린다 (스파이크 D)
+      paintTidy();          // moving a window creates or removes slack to close up
+      if (was === 'size') this.refit();   // tell the PTY only when the resize is let go (spike D)
       this.persist();
-      renderMinimap();                    // 세계가 자랐을 수 있다 — 배율을 다시 잡는다
+      renderMinimap();                    // the world may have grown — take the scale again
       refreshOff();
     };
     bar.addEventListener('pointerdown', down('move'));
@@ -827,7 +837,7 @@ function tryWebgl(term, onLoss) {
   if (!window.WebglAddon) return null;
   try {
     const gl = new WebglAddon.WebglAddon();
-    gl.onContextLoss(() => { gl.dispose(); onLoss(); });   // 컨텍스트를 잃으면 xterm 이 DOM 렌더러로 돌아간다
+    gl.onContextLoss(() => { gl.dispose(); onLoss(); });   // on context loss xterm falls back to the DOM renderer
     term.loadAddon(gl);
     return gl;
   } catch (e) {
@@ -848,19 +858,21 @@ function lastLine(term) {
   return '';
 }
 
-// ⑩ 임시: 빈 자리 훑기. 밀어내기는 #23. **같은 캔버스의 창만 본다** — 캔버스는 서로 다른 종이다(⑪).
-// 자리는 DOM 이 아니라 좌표 스토어에서 읽는다: 다른 캔버스의 타일은 display:none 이라 offsetLeft 가 0 이고,
-// DOM 을 믿으면 새 창이 원점에 몰린다. (AGENTS.md "창은 스토어에서 직접 읽는다" 와 같은 이유이기도 하다.)
-// 창을 닫으면 그 자리는 빈다. **아래·오른쪽은 브라우저가 알아서 거둔다** — 스크롤 넓이를 가장 먼
-// 타일까지로 재기 때문이다. 위·왼쪽은 안 거둬진다: 원점이 0 에 고정이라 첫 타일 앞의 빈 자리도
-// 여전히 '내용' 으로 친다. 그래서 맨 아래 창을 닫으면 공간이 줄고 맨 위 창을 닫으면 안 줄었다.
+// ⑩ provisional: scan for a free slot. Push-aside is #23. **Only windows on the same canvas count** — canvases
+// are different sheets of paper (⑪). Positions are read from the coordinate store, not the DOM: a tile on another
+// canvas is display:none so its offsetLeft is 0, and trusting the DOM piles new windows onto the origin.
+// (Same reason as AGENTS.md "창은 스토어에서 직접 읽는다".)
+// Closing a window frees its slot. **The browser closes up below and to the right on its own** — it measures the
+// scroll extent out to the farthest tile. Above and to the left it does not: the origin is pinned at 0, so empty
+// space before the first tile still counts as 'content'. That is why closing the bottom window shrank the space
+// and closing the top one did not.
 //
-// **자동으로는 안 한다.** 원점 앞의 빈 자리는 내용을 움직여야만 없앨 수 있고, 화면 위쪽에 있을 때는
-// 보이는 창이 튄다(실측: 남은 창이 206px 뛰었다). 창을 놓아 둔 자리는 이 프로그램의 약속이라,
-// 남의 창이 닫혔다고 내 창이 움직이면 안 된다. 그래서 **사람이 시킬 때만** 한다 — 시킨 사람에게는
-// 움직이는 것이 놀랄 일이 아니다.
-// 이 캔버스에 거둘 빈 자리가 있나. 단추를 흐리게 할지 정한다 — 눌러도 아무 일이 없으면
-// 단추가 거짓말을 하는 것이다.
+// **Never automatically.** Empty space before the origin can only be removed by moving the content, and when it
+// is above the viewport the visible windows jump (measured: a remaining window jumped 206px). Where a window was
+// put is this program's promise — my window must not move because somebody else's closed. So it happens **only
+// when a person asks** — for the person who asked, movement is not a surprise.
+// Is there slack to close up on this canvas? Decides whether to dim the button — a button that does nothing
+// when pressed is a button that lies.
 function tidySlack(canvasId) {
   const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
   if (!mine.length) return 0;
@@ -886,10 +898,10 @@ function tidyCanvas(canvasId) {
   if (dx <= 0 && dy <= 0) return false;
   const sx = Math.max(0, dx), sy = Math.max(0, dy);
   const l0 = cvScroll.scrollLeft, t0 = cvScroll.scrollTop;
-  // **되돌려 읽지 않고 의도한 값을 적는다.** `persist()` 는 `offsetLeft` 를 읽는데, 자리에 전환이
-  // 걸려 있어 그 값은 옮기는 **중간값**이다 — 그대로 저장하면 옛 자리가 다시 들어가 아무 일도 안
-  // 일어난 것이 된다(실측: 눌러도 자리가 그대로였다). 끄는 길은 `drag` 클래스로 전환을 꺼서 이 함정을
-  // 비껴가고 있었다.
+  // **Write the intended value instead of reading it back.** `persist()` reads `offsetLeft`, but the position has
+  // a transition on it, so that value is a **mid-move** one — save it as-is and the old position goes back in and
+  // nothing appears to have happened (measured: pressing it left the positions unchanged). The drag path was
+  // dodging this trap by turning the transition off with the `drag` class.
   for (const t of mine) {
     const r = layout[t.id];
     t.el.style.left = (r.x - sx) + 'px';
@@ -897,11 +909,11 @@ function tidyCanvas(canvasId) {
     layout[t.id] = Object.assign({}, r, { x: r.x - sx, y: r.y - sy });
   }
   saveLayout();
-  // 보던 자리를 같이 당긴다. 내용이 화면보다 짧아지면 브라우저가 0 으로 깎는데, 그때는 어차피
-  // 전부가 한 화면에 들어온 것이라 볼 것을 놓치지 않는다.
-  // **보고 있는 캔버스일 때만.** 스크롤 상자는 모든 캔버스가 같이 쓴다(안 보이는 판은 display:none
-  // 일 뿐이다). 자동 정리가 켜져 있으면 뒤에 있는 캔버스에서 판 하나가 사라진 것만으로 지금 보던
-  // 화면이 옆으로 미끄러진다 — 아무것도 안 건드렸는데 글자가 움직인다.
+  // Pull the viewport along too. If the content becomes shorter than the viewport the browser clips it to 0, but
+  // by then everything fits on one screen anyway, so nothing is missed.
+  // **Only for the canvas being looked at.** Every canvas shares the one scroll box (a hidden pane is just
+  // display:none). With auto-tidy on, one pane disappearing on a canvas in the background would slide the view
+  // you are looking at sideways — text moves while you touched nothing.
   if (canvasId === current) {
     cvScroll.scrollLeft = Math.max(0, l0 - sx);
     cvScroll.scrollTop = Math.max(0, t0 - sy);
@@ -924,7 +936,7 @@ function firstFree(w, h, canvasId) {
   return { x: GAP, y: bottom ? bottom + GAP : GAP };
 }
 
-// ── 포커스 · 펼치기 ─────────────────────────────────────
+// ── focus · expand ──────────────────────────────────────
 function focusTile(id, opts) {
   opts = opts || {};
   const t = tiles.get(id);
@@ -939,16 +951,16 @@ function focusTile(id, opts) {
     for (const [iid, it] of items) it.classList.toggle('cur', iid === id);
     renderMinimap();
   }
-  // done 은 사용자가 그 창을 봐야 꺼진다 — 사용자의 손이 닿은 포커스만 "봤다" 로 친다
+  // done clears only when the user looks at that window — only focus a hand caused counts as "seen"
   if (opts.user && t.s.status === 'done') sendSeen(id);
   if (opts.keyboard !== false) t.term.focus();
 }
 
-// 그 세션 앞으로 간다. 목록 클릭과 알림 클릭이 같은 길을 쓴다 (#40).
+// Go to that session. A click in the list and a click on a notification take the same path (#40).
 function goToSession(id) {
   const tile = tiles.get(id);
   if (!tile) return;
-  // ⑪ 다른 캔버스의 것이면 그 캔버스로 넘어가서 그 창으로 간다
+  // ⑪ If it belongs to another canvas, cross over to that canvas and go to that window
   if (current !== null && sessions.has(id) && sessions.get(id).canvas !== current) switchCanvas(sessions.get(id).canvas);
   if (maxed && maxed !== tile) setMax(maxed, false);
   tile.el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
@@ -975,50 +987,50 @@ function setMax(tile, on) {
     cvScroll.scrollTo(prevScroll.l, prevScroll.t);
     prevScroll = null;
   }
-  // 행·열이 진짜로 늘어난다 — .tile 의 .35s 전환이 끝난 뒤 한 번 맞춘다
+  // Rows and columns really do grow — fit once after .tile's .35s transition ends
   const targets = new Set([tile, was].filter(Boolean));
   setTimeout(() => { for (const t of targets) if (!t.closed) t.refit(); refreshOff(); }, 380);
 }
 addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !maxed) return;
-  // 터미널 안의 Esc 는 앱(vim·claude)의 것이다 — 빼앗지 않는다. 캔버스·레일에서 누른 Esc 만 되돌린다.
+  // Esc inside a terminal belongs to the app (vim·claude) — do not take it. Only Esc pressed on the canvas or a rail un-expands.
   if (e.target && e.target.closest && e.target.closest('.xterm')) return;
-  // **이미 임자가 있는 Esc 도 빼앗지 않는다.** 이 리스너가 셋 중 먼저 붙어 있어서, 나중 것이
-  // `stopPropagation` 을 해도 소용이 없다 — 여기서 물러나는 것이 유일한 길이다. 안 그러면
-  // 찾기 칸을 지우거나 단축키 창을 닫는 Esc 한 번에 펼친 터미널까지 같이 접힌다.
+  // **Do not take an Esc that already has an owner either.** This listener is attached before the other three,
+  // so a later one calling `stopPropagation` does nothing — standing down here is the only way. Otherwise one
+  // Esc that clears the search field or closes the shortcuts panel folds the expanded terminal with it.
   const t = e.target;
-  if (t === searchEl) return;                                    // 찾기 칸을 비운다
-  if (t && t.closest && t.closest('.rz')) return;                // 레일 너비를 되돌린다
+  if (t === searchEl) return;                                    // it clears the search field
+  if (t && t.closest && t.closest('.rz')) return;                // it resets the rail width
   const keys = document.getElementById('keys');
-  if (keys && !keys.hidden) return;                              // 단축키 창을 닫는다
+  if (keys && !keys.hidden) return;                              // it closes the shortcuts panel
   setMax(maxed, false);
 });
-// #21: 펼친 직후엔 포커스가 터미널 안이라 위 Esc 가 안 먹는다. 안내 알약을 눌러도 캔버스로 돌아가게 한다
-// (터미널의 Esc 는 그대로 앱에 넘긴다 — 이 길은 알약 클릭만).
+// #21: right after expanding, focus is inside the terminal so the Esc above does not fire. Let the hint pill be
+// clicked back to the canvas as well (the terminal's Esc still goes to the app — this path is the pill click only).
 $('.esc').addEventListener('click', () => { if (maxed) setMax(maxed, false); });
 addEventListener('resize', () => {
-  // 창이 좁아지면 지금 레일 폭이 캔버스를 최소치 아래로 밀 수 있다 — 여기서 다시 가둔다.
-  // **폭만 고치고 뒷정리는 아래에서 한 번만** 한다 — setRail 을 쓰면 미니맵을 세 번 다시 그린다.
+  // When the window narrows, the current rail widths can push the canvas below its minimum — clamp again here.
+  // **Fix only the widths and do the cleanup once below** — using setRail would repaint the minimap three times.
   railPut('l', railW('l')); railPut('r', railW('r'));
   if (maxed) maxed.refit(); renderMinimap(); refreshOff();
 });
 
-// ── 레일 폭 (#19) ──────────────────────────────────────────
-// 폭은 CSS 변수 --rail-l·--rail-r 하나에만 있고 .top 과 .body 가 그것을 함께 본다 — 전에는 둘이
-// 같은 값을 따로 적고 있어서 한쪽만 고치면 위 줄과 아래 몸이 어긋났다.
-// **레일이 좁아지면 캔버스가 넓어진다.** 창이 그대로여도 보이는 자리가 달라지므로, 창 크기가
-// 바뀔 때와 **똑같은 뒷정리**가 필요하다(펼친 창 refit · 미니맵 눈금 · 화면 밖 표시).
-//: 자동 정리. **꺼진 채로 시작한다** — 보이는 창을 움직이는 일이라, 남의 창이 닫혔다고 내 창이
-//: 뛰면 안 된다. 켜 두면 그 대가를 알고 켠 것이다.
+// ── rail width (#19) ───────────────────────────────────────
+// The width lives in the CSS variables --rail-l·--rail-r and nowhere else, and .top and .body both read them —
+// the two used to write the same value separately, so fixing one left the top bar and the body below out of line.
+// **A narrower rail is a wider canvas.** Even with the windows unmoved, what is visible changes, so it needs
+// **exactly the same cleanup** as a window resize (refit the expanded window · minimap scale · off-screen markers).
+//: Auto-tidy. **It starts off** — it moves visible windows, and my window must not jump because somebody else's
+//: closed. Leaving it on means the cost was known when it was turned on.
 const LS_AUTOTIDY = 'palmar.autotidy';
 let autoTidy = false;
 try { autoTidy = localStorage.getItem(LS_AUTOTIDY) === '1'; } catch (e) {}
 
 const LS_RAILS = 'palmar.rails';
 const RAIL_DEF = { l: 256, r: 232 };
-const RAIL_MIN = { l: 180, r: 160 };   // 이보다 좁으면 왼쪽은 이름표가, 오른쪽은 위 줄 단추가 깨진다
+const RAIL_MIN = { l: 180, r: 160 };   // narrower than this and the labels break on the left, the top-row buttons on the right
 const RAIL_MAX = 480;
-const CANVAS_MIN = 320;                // 레일 둘이 캔버스를 이만큼 아래로 밀지 못한다
+const CANVAS_MIN = 320;                // the two rails may not push the canvas below this
 
 function railClamp(side, px) {
   const other = side === 'l' ? railW('r') : railW('l');
@@ -1029,7 +1041,7 @@ function railW(side) {
   const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--rail-' + side));
   return isFinite(v) ? v : RAIL_DEF[side];
 }
-function railPut(side, px) {   // 폭만 고친다. 뒷정리 없음
+function railPut(side, px) {   // fixes the width only. No cleanup
   document.documentElement.style.setProperty('--rail-' + side, railClamp(side, px) + 'px');
 }
 function setRail(side, px, save) {
@@ -1046,7 +1058,7 @@ function loadRails() {
   let v = null;
   try { v = JSON.parse(localStorage.getItem(LS_RAILS) || 'null'); } catch (e) {}
   if (!v) return;
-  // 저장된 값이 지금 창에 안 맞을 수 있다(작은 화면으로 옮겼다) — 그대로 쓰지 않고 다시 가둔다.
+  // The saved value may not fit this window (moved to a smaller screen) — clamp again instead of using it as-is.
   for (const side of ['l', 'r']) if (typeof v[side] === 'number') railPut(side, v[side]);
 }
 
@@ -1058,7 +1070,7 @@ function rzGrip(el, side) {
     el.classList.add('on');
     document.body.classList.add('rz-drag');
     const x0 = ev.clientX, w0 = railW(side);
-    // 끄는 동안은 저장하지 않는다 — 손을 뗄 때 한 번만 쓴다(그 사이 localStorage 를 초당 60번 쓰지 않게).
+    // Do not save while dragging — write once when the hand lets go (so localStorage is not written 60 times a second).
     const move = (e2) => setRail(side, side === 'l' ? w0 + (e2.clientX - x0) : w0 - (e2.clientX - x0), false);
     const up = () => {
       el.classList.remove('on');
@@ -1072,9 +1084,9 @@ function rzGrip(el, side) {
     addEventListener('pointerup', up);
     addEventListener('pointercancel', up);
   });
-  // 두 번 누르면 기본값으로. 끌어서 되돌리기 어려운 값을 만들어 놓고 못 빠져나오는 일이 없게 한다.
+  // Double-click resets to the default. So nobody drags themselves into a width that is hard to drag back out of.
   el.addEventListener('dblclick', () => setRail(side, RAIL_DEF[side]));
-  // 키보드로도 닿아야 한다 — 닫기 단추를 <button> 으로 둔 것과 같은 이유다.
+  // It has to be reachable from the keyboard too — the same reason the close control is a <button>.
   el.addEventListener('keydown', (ev) => {
     const step = ev.shiftKey ? 48 : 16;
     if (ev.key === 'ArrowLeft')  { ev.preventDefault(); setRail(side, railW(side) + (side === 'l' ? -step : step)); }
@@ -1083,13 +1095,14 @@ function rzGrip(el, side) {
   });
 }
 
-// ── 캔버스 밖 표시 ("↗ off") ────────────────────────────
-// **자리는 좌표 스토어에서 읽는다 — 미니맵과 같은 이유다**(AGENTS.md "스크롤마다 DOM 레이아웃을 읽지 마라",
-// "창은 스토어에서 직접 읽는다"). 옛 판은 창마다 offsetLeft/Top/Width/Height 를 읽어 스크롤 한 묶음마다
-// **창 수 × 4번**의 레이아웃을 강제했다(실측: 창 5개에 20번). 캔버스는 무한히 자라므로(⑩) 그 값은 창 수를
-// 따라 늘어난다 — cate 가 초당 374번 다시 그린 것이 이 종류다. 지금은 뷰포트를 한 묶음에 한 번만 잰다.
+// ── off-canvas marker ("↗ off") ─────────────────────────
+// **Positions are read from the coordinate store — the same reason as the minimap** (AGENTS.md "do not read DOM
+// layout on every scroll", "read windows straight from the store"). The old version read offsetLeft/Top/Width/Height
+// per window and forced **window count × 4** layouts per scroll batch (measured: 20 for 5 windows). The canvas
+// grows without limit (⑩), so that number grows with the window count — cate's 374 repaints a second was this
+// kind of thing. Now the viewport is measured once per batch.
 function isOff(t, sl, st, vw, vh) {
-  // 펼친 창은 캔버스를 가득 채우니 화면 밖일 수 없다 — 스토어에 남아 있는 옛 자리를 보면 안 된다
+  // An expanded window fills the canvas, so it cannot be off-screen — do not look at the old position left in the store
   if (t.el.classList.contains('max')) return false;
   const r = layout[t.id];
   if (!r) return false;
@@ -1100,14 +1113,15 @@ function refreshOff() {
   if (offTimer) return;
   offTimer = setTimeout(() => {
     offTimer = null;
-    // 뷰포트는 한 묶음에 한 번만 잰다(상수). 창마다 다시 재면 창 수만큼 레이아웃이 강제된다.
+    // Measure the viewport once per batch (constant). Re-measuring per window forces one layout per window.
     const sl = cvScroll.scrollLeft, st = cvScroll.scrollTop;
     const vw = cvScroll.clientWidth, vh = cvScroll.clientHeight;
-    // 다른 캔버스의 것은 "↗ off" 가 아니다 — 거기엔 캔버스 이름표가 붙는다(⑪)
-    // **배지 하나 뒤집자고 목록을 다시 짓지 않는다.** 옛 판은 여기서 renderList() 를 불렀고, 스크롤하는
-    // 동안 그것이 6초에 60번 돌았다(실측 2026-09-08: 창 16개, 5회 중 3회 62·62·60). 매번 모든 .ses 행이
-    // 부서지고 새 click 리스너와 함께 다시 나서 **레일에 잡아 둔 글자 선택이 사라졌다**(실측: 두 번째
-    // 초에 빈 문자열). 일은 O(세션 수)인데 캔버스는 무한히 자란다(⑩) — AGENTS.md 가 경고한 모양이다.
+    // Something on another canvas is not "↗ off" — it gets a canvas label instead (⑪)
+    // **Do not rebuild the list to flip one badge.** The old version called renderList() here, and while scrolling
+    // that ran 60 times in 6 seconds (measured 2026-09-08: 16 windows, 3 of 5 runs at 62·62·60). Every .ses row was
+    // torn down and rebuilt with fresh click listeners each time, and **a text selection held in the rail vanished**
+    // (measured: empty string by the second second). The work is O(sessions) while the canvas grows without limit
+    // (⑩) — exactly the shape AGENTS.md warns about.
     for (const t of tiles.values()) {
       const o = t.visible() ? isOff(t, sl, st, vw, vh) : false;
       if (o !== t.off) { t.off = o; paintOff(t.id); }
@@ -1116,13 +1130,13 @@ function refreshOff() {
 }
 cvScroll.addEventListener('scroll', refreshOff, { passive: true });
 
-// ── 캔버스를 쥐고 끌기 ────────────────────────────────────
-// 빈 자리를 눌러 끌면 화면이 손을 따라온다(지도와 같다). 스크롤 막대와 휠은 그대로 있고, 이건
-// 그 위에 얹는 길이다 — 캔버스는 끝없이 자라므로(⑩) 멀리 가는 길이 하나뿐이면 좁다.
-// **빈 자리에서만** 시작한다: 타일 위에서 눌린 것은 타일의 것이다(제목줄 끌기·글자 선택·터미널 입력).
-const PAN_SLOP = 3;      // 이만큼 움직이기 전에는 끌기가 아니다 — 그래야 그냥 누르기가 살아 있다
+// ── grab and drag the canvas ──────────────────────────────
+// Press on empty space and drag and the view follows the hand (like a map). The scrollbars and the wheel stay;
+// this rides on top of them — the canvas grows without end (⑩), so one way to travel far is too few.
+// It starts **only on empty space**: a press on a tile belongs to the tile (title-bar drag · text selection · terminal input).
+const PAN_SLOP = 3;      // below this much movement it is not a drag — that is what keeps a plain press alive
 cvScroll.addEventListener('pointerdown', (ev) => {
-  if (ev.button !== 0 || ev.target !== cvScroll) return;   // 빈 바닥에서만
+  if (ev.button !== 0 || ev.target !== cvScroll) return;   // on the bare floor only
   const x0 = ev.clientX, y0 = ev.clientY;
   const l0 = cvScroll.scrollLeft, t0 = cvScroll.scrollTop;
   let on = false;
@@ -1134,7 +1148,7 @@ cvScroll.addEventListener('pointerdown', (ev) => {
       cvScroll.classList.add('panning');
       try { cvScroll.setPointerCapture(ev.pointerId); } catch (e) {}
     }
-    // 쥔 자리가 손을 따라오도록 **반대로** 스크롤한다. 브라우저가 알아서 양끝에서 멈춘다.
+    // Scroll **the other way** so the grabbed point follows the hand. The browser stops at both ends on its own.
     cvScroll.scrollLeft = l0 - dx;
     cvScroll.scrollTop = t0 - dy;
   };
@@ -1149,33 +1163,34 @@ cvScroll.addEventListener('pointerdown', (ev) => {
   addEventListener('pointercancel', up);
 });
 
-// ── 캔버스 탭 (⑪) ──────────────────────────────────────
-// 탭은 **전환기**다. 안 놓치는 일은 왼쪽 목록이 맡는다(decisions.md ⑪) — 그래서 탭에 붙는 것은 점 하나뿐이고
-// 개수도 닫기 단추도 없다. 순서의 주인은 데몬이라(protocol.md "순서는 데몬이 갖는다") 끌어 놓으면 지금 있는
-// 전부를 한 번에 POST /api/canvases/order 로 보낸다 — 하나씩 고치면 두 브라우저가 다른 탭 줄을 그린다.
+// ── canvas tabs (⑪) ────────────────────────────────────
+// A tab is **a switch**. Not missing anything is the left list's job (decisions.md ⑪) — so the only thing a tab
+// carries is one dot, no count and no close button. The order belongs to the daemon (protocol.md "the daemon owns
+// the order"), so a drop sends all of them at once through POST /api/canvases/order — fix them one at a time and
+// two browsers draw different tab strips.
 const addTabEl = el('span', 'ib', '＋');
 addTabEl.id = 'tab-add';
 addTabEl.title = 'new canvas';
 
-// PROVISIONAL — ⑪ 이 "캔버스 이름을 사람이 짓는지 폴더에서 따는지" 를 아직 안 정했다. 프로토콜은
-// name: null 만 나르고 글자는 브라우저가 만든다(protocol.md "없는 것"). 그래서 자리표 하나로 둔다.
-// **자리표라 순서를 바꾸면 글자도 바뀐다**(끌어서 앞으로 보낸 "canvas 2" 는 "canvas 1" 이 된다) —
-// 이름 없는 캔버스에만 해당하고, 사람이 이름을 주면 사라지는 성질이다. 폴더에서 따기로 정해지면
-// 이 함수 하나만 바뀐다.
-// 이름 없는 캔버스의 이름표는 **만든 차례(seq)** 로 만든다. order 로 만들면 탭을 끌어 자리를 바꾼
-// 순간 이름표가 서로 바뀌어, 사용자 눈에는 캔버스 이름이 저절로 바뀐 것으로 보인다(보고 2026-09-08).
-// seq 를 모르는 옛 데몬에는 옛 길로 돌아간다 — 그때는 자리가 곧 이름이었다.
+// PROVISIONAL — ⑪ has not decided "whether a person names a canvas or the name comes from the folder". The
+// protocol carries only name: null and the browser makes the text (protocol.md "없는 것"). So it is one
+// placeholder. **Being a placeholder, changing the order changes the text** (a "canvas 2" dragged to the front
+// becomes "canvas 1") — this applies only to nameless canvases, and it is a property that disappears the moment a
+// person gives a name. If naming from the folder is decided, only this one function changes.
+// A nameless canvas's label is built from **the order it was created in (seq)**. Built from order, the labels swap
+// the instant a tab is dragged to a new position, and to the user the canvas names appear to change on their own
+// (report 2026-09-08). For an older daemon that does not know seq, fall back to the old way — back then position was the name.
 function canvasLabel(c) {
   if (c && c.name) return c.name;
   return 'canvas ' + (c && c.seq ? c.seq : ((c ? c.order : 0) + 1));
 }
 function canvasById(id) { return canvases.get(id) || null; }
 
-// 탭의 점은 저장하지 않는다 — 계산한다(protocol.md "탭의 점"). 이 캔버스에 나를 부르는 것이 있으면 켠다.
-// #18 캔버스 지우기. **조건은 데몬이 정한다** — 여기 있는 것은 그 규칙의 사본이 아니라 거울이다.
-// 데몬은 (1) 세션이 하나라도 있으면, (2) 마지막 캔버스면 409 로 거절한다(protocol.md).
-// 그래서 화면은 **그 둘이 아닐 때만** 손잡이를 보여 준다 — 거절당할 요청을 낼 일이 없다.
-// 캔버스 안에서 셸을 죽이며 지우는 길은 만들지 않는다: 화면의 동작이 도는 프로세스를 죽이면 안 된다.
+// The dot on a tab is not stored — it is computed (protocol.md "탭의 점"). On if anything on this canvas wants you.
+// #18 removing a canvas. **The daemon decides the conditions** — what is here is not a copy of that rule but a mirror of it.
+// The daemon refuses with 409 (1) if it holds any session, (2) if it is the last canvas (protocol.md).
+// So the screen shows the handle **only when neither holds** — there is never a request that will be refused.
+// No path is built that removes a canvas by killing the shells inside it: a screen action must not kill a running process.
 function canvasEmpty(id) {
   for (const x of sessions.values()) if (x.canvas === id) return false;
   return true;
@@ -1186,12 +1201,12 @@ async function removeCanvas(id) {
   try {
     await api('DELETE', '/api/canvases/' + encodeURIComponent(id));
   } catch (e) {
-    // 다른 브라우저가 그 사이에 터미널을 하나 열었을 수 있다 — 그때는 데몬이 맞고 우리가 늦은 것이다.
+    // Another browser may have opened a terminal meanwhile — then the daemon is right and we are late.
     if (e.status === 409) { toast([e.message, 'close its terminals first, then try again']); return; }
-    if (e.status === 404) return;                 // 다른 브라우저가 먼저 지웠다 — 시킨 대로 됐다
+    if (e.status === 404) return;                 // another browser removed it first — what was asked for happened
     toast(['remove canvas: ' + e.message]);
   }
-  // 탭은 여기서 지우지 않는다 — canvas_gone 방송이 지운다(터미널 닫기와 같은 규율).
+  // The tab is not removed here — the canvas_gone broadcast removes it (the same discipline as closing a terminal).
 }
 
 function canvasWant(id) {
@@ -1200,37 +1215,37 @@ function canvasWant(id) {
   return wantClass(mine);
 }
 
-function setCanvases(list) {          // hello · canvases — 전체를 갈아 낀다
+function setCanvases(list) {          // hello · canvases — swap the whole thing out
   canvases.clear();
   canvasOrder = [];
   for (const c of [...(list || [])].sort((a, b) => a.order - b.order)) { canvases.set(c.id, c); canvasOrder.push(c.id); }
   if (!current || !canvases.has(current)) current = canvasOrder[0] || null;
   applyCanvas();
 }
-function putCanvas(c) {               // canvas — 하나가 생겼거나 이름이 바뀌었다. id 로 멱등하게 반영한다
+function putCanvas(c) {               // canvas — one was created or renamed. Applied idempotently by id
   const isNew = !canvases.has(c.id);
   canvases.set(c.id, c);
   if (isNew) canvasOrder.push(c.id);
   canvasOrder.sort((a, b) => canvases.get(a).order - canvases.get(b).order);
   if (!current) current = canvasOrder[0] || null;
   renderTabs();
-  renderList();                       // 배지 글자가 이름을 따라간다
+  renderList();                       // the badge text follows the name
 }
-function dropCanvas(id) {             // canvas_gone — 바로 뒤에 canvases 가 따라온다(계약)
+function dropCanvas(id) {             // canvas_gone — canvases follows right behind (contract)
   canvases.delete(id);
   canvasOrder = canvasOrder.filter((x) => x !== id);
   if (current === id) current = canvasOrder[0] || null;
   applyCanvas();
 }
 
-// 펼침은 캔버스를 따라가지 않는다. 펼친 창이 이 캔버스의 것이 아니게 되면 펼침을 푼다 —
-// .cv.has-max 가 남으면 `.cv.has-max .cv-scroll { overflow: hidden }` 때문에 **새 캔버스가 휠로 안 굴러가고**
-// (스크롤이 ⑩ 에서 밀려난 창에 닿는 유일한 길이다), 아무것도 안 펼쳐진 화면 위에 Esc 알약만 떠 있게 된다.
-// 실측(2026-09-08, 헤드리스 크롬 152): 캔버스 2 에서 펼친 뒤 탭으로 캔버스 1 로 오면 has-max=true 인 채
-// deltaY 600 휠에 scrollTop 이 0 그대로였고, .esc 의 display 는 'flex' 였다.
+// Expansion does not follow the canvas. When an expanded window stops belonging to this canvas, un-expand it —
+// leave .cv.has-max on and `.cv.has-max .cv-scroll { overflow: hidden }` means **the new canvas will not scroll
+// with the wheel** (scrolling is the only way to reach a window pushed out under ⑩), and the Esc pill floats over
+// a screen where nothing is expanded. Measured (2026-09-08, headless Chrome 152): expand on canvas 2, then tab
+// over to canvas 1, and with has-max=true a deltaY 600 wheel left scrollTop at 0 while .esc's display was 'flex'.
 function syncMax() { if (maxed && !maxed.visible()) setMax(maxed, false); }
 
-// 캔버스를 바꿔도 타일은 살아 있다 — 화면에만 없다. 보이게 된 것만 다시 잰다.
+// Switching canvases leaves the tiles alive — they are only absent from the screen. Re-measure only the ones that became visible.
 function applyCanvas() {
   syncMax();
   for (const t of tiles.values()) {
@@ -1247,21 +1262,22 @@ function switchCanvas(id) {
   if (!canvases.has(id) || id === current) return;
   current = id;
   applyCanvas();
-  paintTidy();      // 단추는 **지금 보고 있는 캔버스**를 말한다
-  // 숨어 있는 동안 창 크기가 달라졌을 수 있다 — 그려진 다음에 한 번 더 맞춘다
+  paintTidy();      // the button speaks about **the canvas being looked at**
+  // The window may have been resized while it was hidden — fit once more after it has been drawn
   requestAnimationFrame(() => { for (const t of tiles.values()) if (t.visible()) t.refit(); });
 }
 
-// **탭 줄은 다시 짓지 않고 고친다.** 세션 프레임 하나하나가 renderTabs 를 부르는데(점은 계산이다),
-// 옛 판은 그때마다 #tabs 를 통째로 비웠다. 그 사이에 사람이 탭을 끌고 있으면 끌던 칸이 DOM 에서 떨어져
-// 나가고, 아직 살아 있는 pointermove 핸들러가 그 떨어진 칸을 다시 끼워 넣어 **같은 탭이 둘이 됐다**
-// (실측 2026-09-08, 헤드리스 크롬 152 + CDP 진짜 드래그: 훅 하나에 탭 20 → 21, id 중복 1,
-// 놓을 때 21개짜리 order 를 보내 409 "canvas list changed" → 순서 바꾸기가 조용히 사라졌다).
-// 그리고 이름을 고치는 중에는 통째로 미뤄서 **점이 5초 넘게 거짓말을 했다**(실측: 데몬 waiting=1 인데
-// 탭의 점 전부 꺼짐). 점은 탭이 지고 있는 유일한 신호라(⑪) 그게 틀리면 탭 줄이 하는 일이 없다.
-// 그래서: 글자·점·고름은 **언제나** 제자리에서 고치고, 자리 옮기기(순서)만 끌기·고치기 중에 미룬다.
-const tabEls = new Map();     // canvas id → 탭 DOM. 살아 있는 칸을 다시 쓴다
-let tabsShown = null;         // 마지막으로 화면 안으로 끌어다 놓은 현재 탭 — 사람이 민 줄을 매 프레임 되돌리지 않으려고
+// **The tab strip is patched, not rebuilt.** Every session frame calls renderTabs (the dot is computed), and the
+// old version emptied #tabs wholesale each time. If a person was dragging a tab meanwhile, the dragged element fell
+// out of the DOM and the still-live pointermove handler put the detached element back — and **the same tab existed
+// twice** (measured 2026-09-08, headless Chrome 152 + a real CDP drag: one hook took tabs 20 → 21, 1 duplicate id,
+// and the drop sent a 21-entry order and got 409 "canvas list changed" → the reorder vanished silently).
+// And deferring the whole thing while a name was being edited let **the dot lie for over 5 seconds** (measured:
+// daemon waiting=1 while every tab dot was off). The dot is the only signal a tab carries (⑪), so if it is wrong
+// the tab strip is doing nothing.
+// So: text·dot·selection are patched in place **always**, and only reordering is deferred during a drag or an edit.
+const tabEls = new Map();     // canvas id → tab DOM. Live elements are reused
+let tabsShown = null;         // the current tab last scrolled into view — so a strip a person pushed is not undone every frame
 
 function makeTab(id) {
   const t = el('div', 'tab');
@@ -1270,7 +1286,7 @@ function makeTab(id) {
   t.setAttribute('role', 'tab');
   const nm = el('span', 'nm');
   t.appendChild(nm);
-  // 캔버스 객체는 방송마다 갈리므로 id 만 붙들고 그때그때 찾는다
+  // The canvas object is replaced on every broadcast, so hold only the id and look it up each time
   t.addEventListener('click', () => { if (!tabDragged) switchCanvas(id); });
   t.addEventListener('dblclick', (ev) => { ev.preventDefault(); const c = canvasById(id); if (c) renameCanvas(c, nm); });
   t.addEventListener('keydown', (ev) => {
@@ -1286,34 +1302,36 @@ function paintTab(id) {
   if (!c || !t) return;
   const label = canvasLabel(c);
   const nm = $('.nm', t);
-  // 고치는 중인 칸의 글자는 건드리지 않는다 — 사람 손이 먼저다(inlineEdit 이 그 안에 input 을 둔다)
+  // Do not touch the text of an element being edited — the hand comes first (inlineEdit puts an input in there)
   if (nm && !nm.querySelector('input') && nm.textContent !== label) nm.textContent = label;
   t.title = label + ' — double-click to rename';
   const cur = id === current;
   t.classList.toggle('cur', cur);
   t.setAttribute('aria-selected', cur ? 'true' : 'false');
-  // 점 하나. 색은 상태 색 그대로다(⑥ 미정, 새 색 없음). waiting 은 눌러도 안 꺼지고(훅이 꺼 준다),
-  // done 은 그 창을 봐야 꺼진다 — 둘 다 "탭을 누르면 꺼진다" 가 아니다.
+  // One dot. The color is the status color as-is (⑥ undecided, no new colors). waiting does not clear on a click
+  // (a hook clears it), done clears when that window is looked at — neither is "click the tab and it goes out".
   const dot = $('.dot', t), want = canvasWant(id);
   if (!want) { if (dot) dot.remove(); }
   else if (!dot) t.appendChild(el('span', 'dot ' + want));
   else if (dot.className !== 'dot ' + want) dot.className = 'dot ' + want;
 
-  // #18 지우기 손잡이. **지금 보고 있는 탭에만** 둔다 — 탭 줄은 전환기라 탭마다 단추를 달지 않는다
-  // (protocol.md "탭의 점": 탭에 붙는 것은 점 하나뿐이다). 지울 수 없으면 아예 없다.
+  // #18 the remove handle. It sits **only on the tab being looked at** — the tab strip is a switch, not a place to
+  // hang a button on every tab (protocol.md "탭의 점": one dot is all a tab carries). If it cannot be
+  // removed, the handle is simply not there.
   const cx = $('.cx', t), can = cur && canvasRemovable(id);
   if (!can) { if (cx) cx.remove(); }
   else if (!cx) {
     const b = el('button', 'cx'); b.type = 'button';
     b.title = 'remove this canvas';
     b.setAttribute('aria-label', 'remove canvas ' + label);
-    // 물어보지 않는다. 이 캔버스는 **비어 있어서** 손잡이가 있는 것이고, 없어지는 것은 이름과 자리뿐이다.
-    // 안 위험한 것에까지 확인을 붙이면, 정말 위험한 것(터미널 닫기)의 확인까지 습관으로 넘기게 된다.
+    // No question asked. The handle is there **because** this canvas is empty, and all that disappears is a name
+    // and a position. Put a confirm on the harmless thing and the confirm on the dangerous one (closing a
+    // terminal) gets waved through out of habit.
     b.addEventListener('click', (ev) => { ev.stopPropagation(); removeCanvas(id); });
-    b.addEventListener('pointerdown', (ev) => ev.stopPropagation());   // 탭 끌기가 안 걸리게
+    b.addEventListener('pointerdown', (ev) => ev.stopPropagation());   // so the tab drag does not catch
     t.appendChild(b);
   }
-  // 왜 못 지우는지는 탭 자체가 말한다 — 손잡이가 없는 이유를 짐작하게 두지 않는다.
+  // The tab itself says why it cannot be removed — do not leave the missing handle to be guessed at.
   if (cur && !can) {
     t.title = label + (canvasEmpty(id)
       ? ' — the last canvas cannot be removed'
@@ -1322,10 +1340,11 @@ function paintTab(id) {
 }
 
 function renderTabs() {
-  // **캔버스를 하나도 못 받았으면 탭 줄을 아예 내린다.** 이건 ⑪ 의 열린 항목("캔버스가 하나일 때 탭 줄을
-  // 숨길지")을 정한 것이 **아니다** — 계약상 캔버스가 0개인 순간은 없으므로(protocol.md "데몬이 뜨면
-  // 캔버스가 하나 있다") 0개는 "이 데몬은 아직 캔버스를 모른다" 는 뜻이고, 그때 ＋ 를 보여 주면
-  // 없는 경로로 POST 하게 된다. 그 데몬에서는 캔버스가 하나인 것처럼 전부가 한 화면에 있다.
+  // **If no canvases arrived at all, take the tab strip down entirely.** This does **not** settle ⑪'s open item
+  // ("whether to hide the tab strip when there is only one canvas") — by the contract there is never a moment with
+  // zero canvases (protocol.md "데몬이 뜨면 캔버스가 하나 있다"), so zero means "this daemon does not
+  // know canvases yet", and showing ＋ then would POST to a route that is not there. On such a daemon everything
+  // sits on one screen, as if there were a single canvas.
   tabsEl.hidden = canvasOrder.length === 0;
   if (tabsEl.hidden) {
     for (const [, t] of tabEls) t.remove();
@@ -1333,13 +1352,14 @@ function renderTabs() {
     addTabEl.remove();
     return;
   }
-  // 없어진 캔버스의 칸을 뗀다. 끌던 칸이 사라졌으면 tabDrag 의 move 가 스스로 그만둔다(거기서 확인한다).
+  // Remove elements for canvases that are gone. If the dragged one vanished, tabDrag's move gives up on its own (it checks there).
   for (const [id, t] of [...tabEls]) if (!canvases.has(id)) { t.remove(); tabEls.delete(id); }
-  // 새 캔버스는 끝에 붙는다(protocol.md "만들기는 끝에 붙는다") — 고치는 중인 칸을 밀지 않는다
+  // A new canvas joins at the end (protocol.md "만들기는 끝에 붙는다") — it does not shove an element being edited
   for (const id of canvasOrder) if (!tabEls.has(id)) { const t = makeTab(id); tabEls.set(id, t); tabsEl.appendChild(t); }
   for (const id of canvasOrder) paintTab(id);
-  // 자리 옮기기만 미룬다. 끄는 중이면 DOM 순서가 일부러 데몬과 다르고, 고치는 중이면 옮기다가 입력칸의
-  // 포커스를 떨군다. 미룬 것은 끌기가 끝날 때(tabDrag 의 up)와 고치기가 끝날 때(renameCanvas 의 after) 푼다.
+  // Only reordering is deferred. During a drag the DOM order differs from the daemon's on purpose, and during an
+  // edit, moving elements drops the input's focus. What was deferred is released when the drag ends (tabDrag's up)
+  // and when the edit ends (renameCanvas's after).
   if (tabsEl.querySelector('.ed') || tabsEl.querySelector('.tab.drag')) { tabsPending = true; return; }
   tabsPending = false;
   let node = tabsEl.firstChild;
@@ -1349,9 +1369,10 @@ function renderTabs() {
     tabsEl.insertBefore(t, node);
   }
   if (tabsEl.lastChild !== addTabEl) tabsEl.appendChild(addTabEl);
-  // 탭이 20개면 줄이 넘치는데 스크롤바를 감춰 뒀다(.tabs { scrollbar-width: none }) — 현재 탭이 화면 밖에
-  // 있으면 아무것도 안 골라진 줄로 보인다(실측: 왼쪽 목록의 캔버스 배지로 넘어간 뒤 .tab.cur 가 x=-1379).
-  // **현재 탭이 바뀐 순간에만** 끌어다 놓는다 — 매 프레임 하면 사람이 민 줄을 도로 되돌린다.
+  // At 20 tabs the strip overflows, and the scrollbar is hidden (.tabs { scrollbar-width: none }) — with the
+  // current tab off-screen the strip looks like nothing is selected (measured: after crossing over via a canvas
+  // badge in the left list, .tab.cur was at x=-1379).
+  // Scroll it into view **only at the moment the current tab changes** — every frame would undo a strip a person pushed.
   if (current !== tabsShown) {
     tabsShown = current;
     const t = tabEls.get(current);
@@ -1363,29 +1384,30 @@ function renameCanvas(c, host) {
   inlineEdit(host, c.name || '', async (v) => {
     try { putCanvas(await api('PATCH', '/api/canvases/' + encodeURIComponent(c.id), { name: v || null })); }
     catch (e) { toast(['rename: ' + e.message]); renderTabs(); }
-  }, () => renderTabs());   // 고치는 동안 미뤄 둔 자리 옮기기를 여기서 푼다
+  }, () => renderTabs());   // release the reordering deferred while editing
 }
 
-addTabEl.addEventListener('click', newCanvas);   // 방송도 뒤따라 오지만 id 로 멱등하다(protocol.md)
+addTabEl.addEventListener('click', newCanvas);   // a broadcast follows too, but it is idempotent by id (protocol.md)
 
-// 끌어서 순서 바꾸기. 이웃의 가운데를 지나면 자리를 바꾸고, 놓을 때 한 번 보낸다.
-// 여기서 사각형을 읽는 것은 스크롤 핸들러가 아니다 — 미니맵의 금지(스크롤마다 레이아웃 읽기)와 다른 자리다.
+// Reorder by dragging. Cross a neighbour's midpoint and the position changes; the order is sent once on drop.
+// Reading rectangles here is not a scroll handler — a different place from the minimap's ban (reading layout on every scroll).
 function tabDrag(tabEl) {
   tabEl.addEventListener('pointerdown', (ev) => {
     if (ev.button !== 0 || ev.target.closest('.ed, .cx')) return;
     const startX = ev.clientX;
     let dragging = false, aborted = false;
     const move = (e2) => {
-      // 끌던 칸의 캔버스가 그 사이에 지워졌으면(다른 브라우저가 DELETE) 이 칸은 이미 줄에서 떨어져 나갔다.
-      // 여기서 그만두지 않으면 떨어진 칸을 도로 끼워 넣어 줄에 유령이 생긴다.
+      // If the dragged element's canvas was removed meanwhile (another browser's DELETE), this element has already
+      // fallen out of the strip. Not giving up here puts the detached element back and leaves a ghost in the strip.
       if (tabEl.parentNode !== tabsEl) { aborted = true; up(); return; }
       if (!dragging) {
-        if (Math.abs(e2.clientX - startX) < 4) return;   // 누르기와 끌기를 가른다
+        if (Math.abs(e2.clientX - startX) < 4) return;   // tells a press from a drag
         dragging = true;
         tabEl.classList.add('drag');
       }
-      // 갈 자리를 한 번에 셈한다: 손끝보다 오른쪽에 가운데가 있는 **첫** 이웃 앞. 없으면 맨 끝(＋ 앞).
-      // 이웃과 하나씩 바꿔치기하면 한 번에 여러 칸을 건너뛴 움직임에서 한 칸밖에 못 간다(실측).
+      // Work out the destination in one step: before the **first** neighbour whose midpoint is right of the finger.
+      // If there is none, the very end (before ＋). Swapping with one neighbour at a time only moves one slot when
+      // a single move crosses several (measured).
       let ref = addTabEl;
       for (const o of tabsEl.querySelectorAll('.tab')) {
         if (o === tabEl) continue;
@@ -1399,16 +1421,16 @@ function tabDrag(tabEl) {
       removeEventListener('pointerup', up);
       removeEventListener('pointercancel', up);
       tabEl.classList.remove('drag');
-      // 끄는 동안 미뤄 둔 자리 맞추기를 푼다 — 그만둔 경우에도(그때는 데몬 순서가 정본이다)
+      // Release the ordering deferred during the drag — including when it was given up (then the daemon's order is the source of truth)
       if (!dragging || aborted) { if (tabsPending) renderTabs(); return; }
       tabDragged = true;
-      setTimeout(() => { tabDragged = false; }, 0);      // 놓은 직후의 click 은 전환이 아니다
+      setTimeout(() => { tabDragged = false; }, 0);      // the click right after a drop is not a switch
       const order = [...tabsEl.querySelectorAll('.tab')].map((e) => e.dataset.id);
       if (order.join(',') === canvasOrder.join(',')) { if (tabsPending) renderTabs(); return; }
       try {
         setCanvases(await api('POST', '/api/canvases/order', { order }));
       } catch (e) {
-        // 409 면 그 사이에 누가 만들거나 지운 것이다 — 우리가 이미 그 이벤트를 받았으니 다시 그리면 된다
+        // A 409 means somebody created or removed one meanwhile — we already took that event, so redrawing is enough
         toast(['reorder: ' + e.message]);
         renderTabs();
       }
@@ -1419,17 +1441,17 @@ function tabDrag(tabEl) {
   });
 }
 
-// ── 미니맵 (⑩ ⑪, 스파이크 J) ────────────────────────────
-// **지금 보고 있는 캔버스 것 하나뿐이다** — 캔버스마다 늘어놓지 않는다(⑪). 답하는 것은 "이 캔버스 안에서
-// 내가 어디 있나" 하나다. 사각형의 자리는 좌표 스토어(layout)에서 오고 DOM 에는 묻지 않는다.
-// **스크롤 핸들러가 하는 일은 뷰포트 사각형의 transform 하나뿐이다**(합성만). 스파이크 J 는 레이아웃을
-// 읽어도 안 아프다고 쟀지만(6000×4000·pane 40 에서 60fps), 이렇게 짜는 이유는 성능이 아니라 규칙이다
-// (AGENTS.md "창마다 값을 내리지 말고 스토어에서 직접 읽어라").
-const mmRects = new Map();          // id → 미니맵 사각형 DOM
-let mmK = 1, mmOx = 0, mmOy = 0;    // 배율과 가운데 맞춤 여백
-let cvW = 0, cvH = 0;               // 캔버스 뷰포트 크기 — 스크롤 중에 다시 재지 않으려고 들고 있는다
+// ── minimap (⑩ ⑪, spike J) ─────────────────────────────
+// **There is one, for the canvas being looked at** — not one per canvas (⑪). It answers one question: "where am I
+// inside this canvas". The rectangles' positions come from the coordinate store (layout); the DOM is never asked.
+// **All the scroll handler does is a transform on the viewport rectangle** (compositing only). Spike J measured
+// that reading layout would not hurt (60fps at 6000×4000 with 40 panes), but the reason it is written this way is
+// the rule, not performance (AGENTS.md "창마다 값을 내리지 말고 스토어에서 직접 읽어라").
+const mmRects = new Map();          // id → minimap rectangle DOM
+let mmK = 1, mmOx = 0, mmOy = 0;    // scale and the centring margins
+let cvW = 0, cvH = 0;               // canvas viewport size — held so it is not re-measured during a scroll
 
-function mmSet(id, x, y, w, h) {    // 우리가 아는 값으로만 사각형을 놓는다
+function mmSet(id, x, y, w, h) {    // place a rectangle using only values we already know
   const e = mmRects.get(id);
   if (!e) return;
   e.style.left = (mmOx + x * mmK) + 'px';
@@ -1446,18 +1468,18 @@ function renderMinimap() {
   mmEl.hidden = false;
   cvW = cvScroll.clientWidth; cvH = cvScroll.clientHeight;
   const bw = mmEl.clientWidth - MM_PAD * 2, bh = mmEl.clientHeight - MM_PAD * 2;
-  // 세계는 캔버스가 자란 만큼이다(⑩: 한계를 두지 않는다) — 뷰포트보다 작아지지는 않는다
+  // The world is as big as the canvas has grown (⑩: no limit) — it never gets smaller than the viewport
   let worldW = cvW, worldH = cvH;
   for (const t of list) {
     const r = layout[t.id];
     worldW = Math.max(worldW, r.x + r.w + GAP);
     worldH = Math.max(worldH, r.y + r.h + GAP);
   }
-  mmK = Math.min(bw / worldW, bh / worldH);   // 가로·세로 한 배율. 따로 늘이면 모양이 거짓말을 한다
+  mmK = Math.min(bw / worldW, bh / worldH);   // one scale for both axes. Stretch them apart and the shapes lie
   mmOx = MM_PAD + (bw - worldW * mmK) / 2;
   mmOy = MM_PAD + (bh - worldH * mmK) / 2;
   for (const t of list) {
-    // 색은 상태 점과 같은 --st-* 다(⑥). 미니맵을 위한 새 색은 만들지 않았다.
+    // The colors are the same --st-* as the status dots (⑥). No new colors were made for the minimap.
     const e = el('div', 'mm-t ' + (STATUS_CLASS[t.s.status] || 'idle') + (t.id === focused ? ' cur' : ''));
     e.dataset.id = t.id;
     mmWorldEl.appendChild(e);
@@ -1469,14 +1491,14 @@ function renderMinimap() {
   mmVpEl.style.height = Math.max(4, cvH * mmK) + 'px';
   mmMove();
 }
-// 스크롤 핸들러의 전부. 읽는 것은 scrollLeft/scrollTop, 쓰는 것은 transform. 레이아웃은 안 읽는다.
+// The whole of the scroll handler. It reads scrollLeft/scrollTop and writes a transform. It never reads layout.
 function mmMove() {
   mmVpEl.style.transform =
     'translate(' + (mmOx + cvScroll.scrollLeft * mmK) + 'px, ' + (mmOy + cvScroll.scrollTop * mmK) + 'px)';
 }
 cvScroll.addEventListener('scroll', mmMove, { passive: true });
 
-// 눌러서·끌어서 뷰포트를 옮긴다. 미니맵 상자의 사각형은 누를 때 한 번만 잰다(끄는 동안 다시 안 읽는다).
+// Press or drag to move the viewport. The minimap box's rectangle is measured once on press (never re-read during the drag).
 (() => {
   let box = null;
   const seek = (ev) => {
@@ -1501,19 +1523,20 @@ cvScroll.addEventListener('scroll', mmMove, { passive: true });
   });
 })();
 
-// ── 왼쪽 레일: 세션 목록 ────────────────────────────────
+// ── left rail: session list ─────────────────────────────
 function msgText(s) {
-  // 목업의 한 줄은 "무슨 일 · 마지막 줄" 꼴이다. 무슨 일은 훅 이벤트명(last_event), 마지막 줄은 터미널 버퍼에서.
+  // The mockup's one line reads "what happened · last line". What happened is the hook event name (last_event);
+  // the last line comes from the terminal buffer.
   const t = tiles.get(s.id);
   const parts = [];
-  if (s.last_event) parts.push(EVENT_PHRASE[s.last_event] || s.last_event);   // #24: 이벤트명 → 사람 말
+  if (s.last_event) parts.push(EVENT_PHRASE[s.last_event] || s.last_event);   // #24: event name → human words
   if (t && t.lastLine) parts.push(t.lastLine);
   if (parts.length) return parts.join(' · ');
-  // 훅이 없는 것을 조용히 회색으로 두지 않는다 (AGENTS.md 원칙 3) — 글자로 말한다
+  // Do not leave something with no hooks quietly grey (AGENTS.md principle 3) — say it in words
   if (s.status === 'unknown') return s.agent ? 'no hook event yet' : 'no hook seen — status unknown';
   return 'just opened';
 }
-// 목록 행의 확인 줄. 어느 행이 열려 있는지를 들고 있어야 다시 지어도 살아남는다.
+// The confirm strip on a list row. Which row is open has to be held, or it does not survive a rebuild.
 function openRowConfirm(it, s) {
   const h = askClose(it, 'Close this terminal?', () => closeSession(s.id),
                      () => { if (rowConfirm === s.id) rowConfirm = null; });
@@ -1522,21 +1545,21 @@ function openRowConfirm(it, s) {
 function buildItem(s, pinned) {
   const cls = STATUS_CLASS[s.status] || 'idle';
   const t = tiles.get(s.id);
-  // pinned: 접힌 캔버스 묶음 안에서도 남아 있는 줄 — 기다리는 것은 절대 숨지 않는다(#31 ③, decisions.md ⑪)
+  // pinned: a row that stays even inside a folded canvas group — what is waiting is never hidden (#31 ③, decisions.md ⑪)
   const it = el('div', 'ses ' + cls + (s.id === focused ? ' cur' : '') +
                       (pinned ? ' pinned' : '') + (closing.has(s.id) ? ' closing' : ''));
   it.dataset.id = s.id;
   if (pinned) it.title = 'waiting on you — kept visible while this group is collapsed';
   it.appendChild(el('span', 'dot ' + cls));
-  // ⑫ 사람이 준 이름이 이긴다. 없으면 지금까지의 경로 이름표.
+  // ⑫ A name a person gave wins. Without one, the path label as before.
   const who = el('span', 'who');
   if (s.name) who.textContent = s.name;
   else { who.textContent = (s.agent || 'shell') + ' '; who.appendChild(el('span', null, shortPath(s.cwd))); }
   const ago = el('span', 'ago');
-  // ⑪ 다른 캔버스의 것에는 캔버스 이름표가 붙는다 — "↗ off" 와 **같은 칸**이다. 둘이 같이 붙지는 않는다:
-  // 다른 캔버스에 있는 창이 이 캔버스에서 화면 밖인지는 물음이 아니다.
-  // **캔버스로 묶어 그리는 중이면 안 붙인다** — 바로 위 머리글이 이미 그 캔버스를 말한다.
-  // 같은 말을 두 번 하면 머리글과 줄의 경계가 흐려진다(사용자 보고 2026-09-08).
+  // ⑪ Something on another canvas gets a canvas label — in **the same slot** as "↗ off". The two never appear
+  // together: whether a window on another canvas is off-screen on this canvas is not a question anyone asks.
+  // **Not while drawing grouped by canvas** — the header just above already names that canvas.
+  // Say the same thing twice and the line between header and row blurs (user report 2026-09-08).
   if (!inCanvasGroup && current !== null && s.canvas !== current) {
     const label = canvasLabel(canvasById(s.canvas));
     const b = el('span', 'cvb', label);
@@ -1544,24 +1567,25 @@ function buildItem(s, pinned) {
     ago.appendChild(b);
   } else if (t && t.off) ago.appendChild(el('span', 'off', '↗ off'));
   it._ago = document.createTextNode(agoText(s.id));
-  it._agoEl = ago;              // 스크롤 중에 "↗ off" 하나만 뒤집으려고 붙들어 둔다(paintOff)
+  it._agoEl = ago;              // held so only "↗ off" can be flipped during a scroll (paintOff)
   ago.appendChild(it._ago);
   it._msg = el('span', 'msg', msgText(s));
-  // #31 ④ 목록 행에서도 닫는다 — 사용자가 두 자리 다 짚었기 때문이다. 타일의 것과 **같은 상자·같은 물음**이고,
-  // 평소엔 안 보이다가 행에 손이 닿거나(hover) 포커스가 들어오면 뜬다. <button> 이라 Tab 으로 닿는다.
+  // #31 ④ Close from a list row too — the user pointed at both places. **The same box and the same question** as
+  // the tile's, normally invisible and appearing when a hand reaches the row (hover) or focus enters it.
+  // Being a <button>, it is reachable with Tab.
   const cl = el('button', 'cl');
   cl.type = 'button';
   cl.title = 'close terminal';
   cl.setAttribute('aria-label', 'close terminal — ' + (s.name || shortPath(s.cwd)));
   cl.addEventListener('click', (ev) => { ev.stopPropagation(); openRowConfirm(it, s); });
   it.append(who, ago, it._msg, cl);
-  // 목록은 세션 프레임마다 통째로 다시 지어진다 — 열려 있던 확인 줄을 여기서 되살린다(안 그러면 훅 하나에 사라진다)
+  // The list is rebuilt wholesale on every session frame — restore an open confirm strip here (otherwise one hook makes it vanish)
   if (rowConfirm === s.id) openRowConfirm(it, s);
   it.addEventListener('click', () => goToSession(s.id));
   return it;
 }
-// "↗ off" 하나만 제자리에서 뒤집는다. 스크롤 경로에서 부르는 것이라 목록을 다시 짓지 않는다(refreshOff 참고).
-// buildItem 과 같은 규칙을 쓴다: 다른 캔버스의 것에는 캔버스 이름표가 붙고 "↗ off" 는 안 붙는다(⑪).
+// Flip only "↗ off", in place. It is called from the scroll path, so it never rebuilds the list (see refreshOff).
+// It uses the same rule as buildItem: something on another canvas gets a canvas label and no "↗ off" (⑪).
 function paintOff(id) {
   const it = items.get(id), t = tiles.get(id), s = sessions.get(id);
   if (!it || !t || !s) return;
@@ -1570,7 +1594,7 @@ function paintOff(id) {
   if (want && !has) it._agoEl.insertBefore(el('span', 'off', '↗ off'), it._ago);
   else if (!want && has) has.remove();
 }
-// 찾는 중에는 접힘을 무시한다 — 안 그러면 맞는 것이 접힌 그룹 안에 숨어 못 찾는다
+// While searching, folds are ignored — otherwise a match hides inside a folded group and cannot be found
 function collapsed(key) { return !!groupsCollapsed[key] && !searchEl.value.trim(); }
 function toggleGroup(key) {
   groupsCollapsed[key] = !groupsCollapsed[key];
@@ -1584,20 +1608,20 @@ function toggleCvGroup(id) {
   renderList();
 }
 
-// ── 목록의 묶음 (#31 ③) ────────────────────────────────
-// **캔버스로 묶는다 — 그런데 기다리는 것은 절대 못 숨긴다.**
+// ── list groups (#31 ③) ────────────────────────────────
+// **Group by canvas — and yet what is waiting can never be hidden.**
 //
-// 이 둘은 원래 서로 반대였다. 목업을 견줄 때 캔버스 우선 묶기를 반대한 근거가 정확히
-// "접힌 묶음 안에 기다리는 것이 파묻힌다" 였고, **"기다리는 것이 어디 있든 맨 위" 는 palmar 가
-// 존재하는 이유**다(decisions.md ⑪). 사용자가 매일 쓰면서 캔버스 묶기를 요구했으므로(#31) 묶되,
-// 보장은 두 겹으로 지킨다:
-//   1. **기다리는 세션이 있는 캔버스 묶음이 맨 위로 뜬다.** 나머지는 데몬이 준 캔버스 차례 그대로다
-//      (Array.sort 는 안정 정렬이라 같은 편끼리는 차례가 안 흔들린다).
-//   2. **접힌 묶음도 기다리는 줄은 그대로 그린다.** 접힘이 감추는 것은 나머지뿐이고, 감춘 개수는
-//      묶음 아래 "+N more, collapsed" 한 줄로 말한다. 머리글의 수는 언제나 **캔버스 전체**다.
-// 그래서 접어 두어도 기다리는 줄은 목록 맨 위 근처에 남는다 — 두 겹 다 없어야 파묻힌다.
-// 줄은 한 세션에 하나다(위에 따로 복사해 두지 않는다) — 같은 것이 둘로 보이면 수가 거짓말을 한다.
-let inCanvasGroup = false;    // 캔버스로 묶어 그리는 중인가 — 줄의 캔버스 이름표를 뺄지 정한다
+// These two started out opposed. When the mockups were compared, the argument against canvas-first grouping was
+// exactly "what is waiting gets buried inside a folded group", and **"what is waiting is on top, wherever it is"
+// is the reason palmar exists** (decisions.md ⑪). Daily use made the user ask for canvas grouping (#31), so it
+// groups — but the guarantee is held in two layers:
+//   1. **A canvas group holding a waiting session floats to the top.** The rest keep the canvas order the
+//      daemon gave (Array.sort is stable, so ties do not shuffle).
+//   2. **A folded group still draws its waiting rows.** The fold hides only the rest, and how many are hidden is
+//      said in one line under the group, "+N more, collapsed". The count in the header is always **the whole canvas**.
+// So even folded, the waiting rows stay near the top of the list — it takes both layers failing to bury one.
+// One row per session (no separate copy pinned above) — the same thing seen twice makes the counts lie.
+let inCanvasGroup = false;    // are we drawing grouped by canvas — decides whether a row's canvas label is dropped
 function renderByCanvas() {
   const buckets = new Map();
   for (const id of canvasOrder) buckets.set(id, []);
@@ -1607,14 +1631,14 @@ function renderByCanvas() {
     buckets.get(k).push(s);
   }
   const keys = [...buckets.keys()].filter((k) => buckets.get(k).length);
-  // **차례를 바꾸지 않는다.** 탭 줄과 같은 차례, 데몬이 준 차례 그대로다.
-  // 전에는 나를 부르는 캔버스를 맨 위로 올렸다(⑪ 의 "기다리는 것은 못 놓친다"). 그 보장은 이제
-  // 다른 넷이 지고 있다 — 탭의 점, 머리글의 점, 접힌 묶음에도 남는 기다리는 줄, 그리고 창이
-  // 덮여 있을 때의 알림. 반면 값은 계속 나갔다: **손이 가 있는 목록이 눈앞에서 뛴다.**
-  // 자리가 고정된 목록이 훑기 쉽고, 사용자가 그렇게 요구했다(2026-09-08).
+  // **The order is not changed.** The same order as the tab strip, exactly as the daemon gave it.
+  // It used to lift a canvas that wanted you to the top (⑪'s "what is waiting is never missed"). Four other things
+  // carry that guarantee now — the dot on the tab, the dot on the header, the waiting rows that stay even in a
+  // folded group, and the notification when the window is covered. Meanwhile the cost kept being paid: **a list
+  // your hand is on jumps in front of you.** A list that stays put is easier to scan, and the user asked for that (2026-09-08).
   for (const k of keys) {
     const arr = buckets.get(k);
-    arr.sort((a, b) => statusRank(a) - statusRank(b) || a.created - b.created);   // 묶음 안은 상태 차례
+    arr.sort((a, b) => statusRank(a) - statusRank(b) || a.created - b.created);   // inside a group, status order
     const label = k === OTHER_KEY ? 'no canvas' : canvasLabel(canvasById(k));
     const off = cvGroupOff(k);
     const waiting = arr.filter((s) => s.status === 'waiting');
@@ -1626,24 +1650,25 @@ function renderByCanvas() {
               (waiting.length ? ' — ' + waiting.length + ' waiting stay visible either way' : '') +
               (hiddenWant ? ' — ' + hiddenWant + ' more want you, hidden by this fold' : '');
     g.append(el('span', 'car', off ? '▸' : '▾'), el('span', 'nm', label));
-    // 머리글의 점은 탭의 점과 같은 뜻·같은 색이다(protocol.md "탭의 점"): 나를 부르는 것이 있다.
-    // 새 색은 없다(⑥). 접혀 있을 때 이 점이 **접힌 묶음 안을 가리키는 유일한 표시**다.
+    // The dot on a header means the same thing and wears the same color as the dot on a tab (protocol.md "the dot
+    // on a tab"): something in here wants you. No new colors (⑥). When folded, this dot is **the only marker
+    // pointing inside the fold**.
     const wc = wantClass(arr);
     if (wc) g.appendChild(el('span', 'dot ' + wc));
-    g.appendChild(el('span', 'ct', String(arr.length)));       // 접혀도 **캔버스 전체**의 수다
+    g.appendChild(el('span', 'ct', String(arr.length)));       // folded or not, the count is **the whole canvas**
     g.addEventListener('click', () => toggleCvGroup(k));
     listEl.appendChild(g);
     for (const s of shown) {
       inCanvasGroup = true;
       const it = buildItem(s, off);
       inCanvasGroup = false;
-      it.classList.add('cvrow');        // 캔버스 묶음에 딸린 줄 — 한 칸 들여쓴다
+      it.classList.add('cvrow');        // a row that belongs to a canvas group — indented one step
       items.set(s.id, it);
       listEl.appendChild(it);
     }
     if (arr.length > shown.length) {
-      // 접힘이 감춘 것 중 **나를 부르는 것이 몇인지** 여기서 말한다. 접힌 묶음 안에서 done 은 줄로
-      // 남지 않으므로(줄로 남기면 접힘이 쓸모없어진다) 이 수와 머리글의 점이 그 자리를 대신한다.
+      // Say here **how many of the hidden ones want you**. done does not stay as a row inside a folded group
+      // (keeping it as a row would make the fold pointless), so this count and the header's dot stand in for it.
       const more = el('div', 'grest' + (hiddenWant ? ' wants' : ''),
                       '+' + (arr.length - shown.length) + ' more, collapsed'
                       + (hiddenWant ? ' · ' + hiddenWant + ' want' + (hiddenWant > 1 ? '' : 's') + ' you' : ''));
@@ -1654,23 +1679,24 @@ function renderByCanvas() {
   }
 }
 
-// 캔버스를 하나도 못 받은 데몬(renderTabs 가 탭 줄을 내리는 그 경우)에서는 옛 길 그대로 상태로 묶는다.
-// **여기서도 기다리는 것은 못 숨긴다** — 그 묶음만 접히지 않는다(아래).
+// On a daemon that sent no canvases at all (the case where renderTabs takes the tab strip down), group by status
+// the old way. **Here too what is waiting cannot be hidden** — that one group does not fold (below).
 function renderByStatus() {
   const by = { waiting: [], working: [], done: [], idle: [] };
   for (const s of sessions.values()) (by[s.status] || by.idle).push(s);
-  for (const k in by) by[k].sort((a, b) => a.created - b.created);   // 목록의 자리는 안 움직인다 — 만든 순서
+  for (const k in by) by[k].sort((a, b) => a.created - b.created);   // rows do not move — creation order
   for (const [key, cls, label] of GROUPS) {
     const arr = by[key];
     if (!arr.length) continue;
-    // **기다리는 묶음은 접히지 않는다.** 캔버스 묶음에서는 접어도 기다리는 줄이 남지만, 여기서는
-    // 묶음 전체가 기다리는 것이라 접는 순간 기다리는 것이 하나도 안 보인다 — decisions.md ⑪ 은
-    // 조건 없이 "기다리는 것은 절대 못 숨긴다" 이고, 그 보장이 이 길에서만 빠져 있었다.
-    // 캐럿을 아예 안 그린다: 눌러도 아무 일 없는 캐럿보다 없는 캐럿이 정직하다.
-    // 계약상 캔버스가 0개인 순간은 없어(protocol.md: 마지막 하나는 409) 지금 데몬으로는 이 길에 닿지
-    // 않지만, 캔버스를 모르는 데몬(갈아 끼울 Bun 판)이 그 보장까지 잃을 이유는 없다.
+    // **The waiting group does not fold.** In a canvas group the waiting rows survive a fold, but here the whole
+    // group is what is waiting, so folding it hides every waiting thing at once — decisions.md ⑪ says "what is
+    // waiting can never be hidden" with no conditions, and this path was the only one missing that guarantee.
+    // No caret is drawn at all: a caret that is absent is more honest than one that does nothing when pressed.
+    // By the contract there is never a moment with zero canvases (protocol.md: the last one gets 409), so today's
+    // daemon never reaches this path — but a daemon that does not know canvases (the Bun build to come) has no
+    // reason to lose that guarantee too.
     const pin = key === 'waiting';
-    // 접기·펴기는 오른쪽 트리와 같은 캐럿·같은 몸짓이다. 접혀도 **개수는 남는다**.
+    // Fold and unfold use the same caret and the same gesture as the tree on the right. Folded, **the count stays**.
     const off = !pin && collapsed(key);
     const g = el('div', 'grp' + (off ? ' collapsed' : '') + (pin ? ' nofold' : ''));
     g.dataset.key = key;
@@ -1685,32 +1711,33 @@ function renderByStatus() {
 }
 
 function renderList() {
-  // #31 ④: 확인 줄이 열린 채로 목록을 다시 지으면 **그 줄의 포커스가 body 로 떨어진다.**
-  // buildItem 이 부르는 openRowConfirm → askClose 의 `yes.focus()` 는 그 행이 아직 document 에
-  // 안 붙어 있어서 아무 일도 안 한다(detached 엘리먼트의 focus() 는 무시된다). 줄은 그대로 보이는데
-  // 죽어 있게 된다 — 2026-09-08 통합 실측: 확인을 열어 둔 채 **다른 세션의 훅 하나**가 오면
-  // 그 뒤로 Enter 가 Close 를 안 누르고(DELETE 0건), Escape 도 그 줄이 아니라 document 로 갔다.
-  // 훅·resize 방송은 늘 오므로 키보드로 닫는 길(#31 ④ 가 <button> 을 쓴 이유)이 사실상 없어진다.
-  // 그래서 다시 짓기 **전에** 그 줄이 포커스를 갖고 있었는지 재고, 다 붙인 **뒤에** 돌려준다.
-  // 안 갖고 있었으면 건드리지 않는다 — 남이 쓰던 포커스(검색칸·터미널)를 뺏으면 안 된다.
+  // #31 ④: rebuilding the list with a confirm strip open **drops that strip's focus onto body.**
+  // The `yes.focus()` in askClose, reached through the openRowConfirm buildItem calls, does nothing because the row
+  // is not attached to the document yet (focus() on a detached element is ignored). The strip still looks right
+  // while being dead — integration measurement 2026-09-08: with a confirm open, **one hook on a different session**
+  // was enough that Enter no longer pressed Close (0 DELETEs) and Escape went to the document instead of the strip.
+  // Hook and resize broadcasts arrive constantly, so the keyboard path to close (the reason #31 ④ uses a <button>)
+  // effectively disappears. So measure **before** the rebuild whether that strip held focus, and hand it back
+  // **after** everything is attached. If it did not hold focus, do not touch it — never take somebody else's focus
+  // (the search field, a terminal).
   //
-  // **어느 단추였는지도 같이 잰다.** 언제나 Close 로 돌려주면 사용자가 Cancel 에 둔 손이 방송 하나에
-  // Close 로 옮겨 가고, 같은 Enter 가 그만두기에서 부수기로 바뀐다 — 2026-09-08 실측(f3.py):
-  // Cancel 에 포커스를 두고 **다른 세션의 훅 하나**를 넣으니 `cbtn yes`/'Close' 로 옮겨 갔고
-  // 그 자리의 Enter 가 `DELETE /api/sessions/<id>` 를 내 세션이 죽었다. 타일 제목줄은 다시 짓지
-  // 않아 이런 일이 없다(같은 실측에서 'Cancel' 그대로였다) — 목록만 이 자리가 필요하다.
+  // **Measure which button it was, too.** Always handing it back to Close moves a hand resting on Cancel over to
+  // Close on one broadcast, and the same Enter turns from giving up into destroying — measured 2026-09-08 (f3.py):
+  // with focus on Cancel, **one hook on a different session** moved it to `cbtn yes`/'Close', and Enter there sent
+  // `DELETE /api/sessions/<id>` and killed the session. The tile title bar is not rebuilt, so this cannot happen
+  // there (in the same measurement it stayed on 'Cancel') — only the list needs this.
   const keepEl = (rowConfirm && document.activeElement && document.activeElement.closest &&
                   document.activeElement.closest('#list .cfm')) ? document.activeElement : null;
   const keepYes = keepEl ? keepEl.classList.contains('yes') : false;
   listEl.textContent = '';
   items.clear();
   if (canvasOrder.length) renderByCanvas(); else renderByStatus();
-  // #31 ④: **이번 판에 그 줄이 안 그려졌으면 확인은 끝난 것이다.** 접힌 캔버스 묶음은 waiting 인 줄만
-  // 그리므로(renderByCanvas), 훅 하나가 그 세션을 waiting 밖으로 밀면 줄이 조용히 빠진다. 여기서
-  // 안 거두면 rowConfirm 이 남아, 그 세션이 **다시 waiting 이 되는 순간** buildItem 이 아무도 안 물은
-  // 파괴 확인 줄을 되살린다(2026-09-08 실측 f1.py: 되살아난 Close 가 elementFromPoint 로 잡히는
-  // 자리에 있었고, 하필 사용자가 답하러 누르러 가는 그 기다리는 줄이었다).
-  // `document.contains` 로 가려 거두는 것이 중요하다 — 타일 쪽 확인은 목록을 다시 지어도 그대로 있다.
+  // #31 ④: **if that row was not drawn this pass, the confirm is over.** A folded canvas group draws only the
+  // waiting rows (renderByCanvas), so one hook pushing that session out of waiting quietly removes the row. Not
+  // taking it back here leaves rowConfirm set, and **the moment that session becomes waiting again** buildItem
+  // revives a destructive confirm strip nobody asked for (measured 2026-09-08, f1.py: the revived Close sat where
+  // elementFromPoint picked it up, and it was on exactly the waiting row the user was going to press to answer).
+  // Screening with `document.contains` matters — the tile's confirm stays put across a list rebuild.
   if (rowConfirm && !items.has(rowConfirm)) {
     if (activeConfirm && !document.contains(activeConfirm.row)) activeConfirm.cancel();
     rowConfirm = null;
@@ -1729,7 +1756,7 @@ function renderList() {
 }
 setInterval(() => { for (const [id, it] of items) it._ago.nodeValue = agoText(id); }, 10000);
 
-// ── 검색 (⌘K): 세션 목록과 폴더 행을 글자로 거른다 ──
+// ── search (⌘K): filter session rows and folder rows by text ──
 function applyFilter() {
   const q = searchEl.value.trim().toLowerCase();
   for (const [id, it] of items) {
@@ -1744,23 +1771,23 @@ function applyFilter() {
     while (n && n.classList.contains('ses')) { if (!n.classList.contains('hide')) any = true; n = n.nextElementSibling; }
     g.classList.toggle('hide', !!q && !any);
   }
-  // 트리 쪽은 아래 findDirs 가 맡는다 — **펼친 행만 거르는 것은 검색이 아니었다.**
+  // The tree side is findDirs's job below — **filtering only the rows already expanded was not a search.**
 }
 
-// 위 칸은 "sessions and folders" 를 찾는다고 말한다. 전에는 **이미 펼친 행만** 걸러 냈으므로
-// 새로 연 화면에서는 폴더를 사실상 못 찾았다 — 화면이 지키지 않는 약속이었다.
-// 이제 데몬에 묻는다(`GET /api/dirs?find=`). 경로를 그대로 붙여넣는 것도 같은 길로 답한다.
+// The field up top says it searches "sessions and folders". It used to filter **only the rows already expanded**,
+// so on a freshly opened screen folders were effectively unfindable — a promise the screen did not keep.
+// Now it asks the daemon (`GET /api/dirs?find=`). Pasting a path in whole is answered the same way.
 let findSeq = 0, findTimer = null;
 function findDirs() {
   const q = searchEl.value.trim();
   clearTimeout(findTimer);
   if (!q) { findResults = null; renderTree(); return; }
-  // 사람은 치는 중이다. 멎을 때까지 기다렸다 한 번만 묻는다.
+  // A person is still typing. Wait until they stop, then ask once.
   findTimer = setTimeout(async () => {
     const mine = ++findSeq;
     try {
       const r = await api('GET', '/api/dirs?find=' + encodeURIComponent(q));
-      if (mine !== findSeq) return;            // 그 사이 더 쳤다 — 늦게 온 답은 버린다
+      if (mine !== findSeq) return;            // more was typed meanwhile — throw the late answer away
       findResults = { q, entries: r.entries || [] };
     } catch (e) {
       if (mine !== findSeq) return;
@@ -1772,7 +1799,7 @@ function findDirs() {
 let hadQuery = false;
 function onSearch() {
   const q = !!searchEl.value.trim();
-  if (q !== hadQuery) { hadQuery = q; renderList(); }   // 접힘 무시가 켜지거나 꺼진다 — 목록을 다시 짠다
+  if (q !== hadQuery) { hadQuery = q; renderList(); }   // ignoring folds turns on or off — rebuild the list
   else applyFilter();
   findDirs();
 }
@@ -1780,8 +1807,8 @@ searchEl.addEventListener('input', onSearch);
 addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); searchEl.focus(); searchEl.select(); }
-  // **⌘T·⌘N 은 못 쓴다** — 브라우저가 가져가서 preventDefault 가 안 먹는다(새 탭·새 창).
-  // Enter 는 비어 있고, Shift 하나로 "하나 더"(터미널)와 "더 큰 것"(캔버스)이 갈린다.
+  // **⌘T·⌘N cannot be used** — the browser takes them and preventDefault does not hold (new tab, new window).
+  // Enter is free, and Shift alone separates "one more" (a terminal) from "something bigger" (a canvas).
   if (mod && e.key === 'Enter' && !e.altKey) {
     e.preventDefault();
     if (e.shiftKey) newCanvas(); else newTerminal();
@@ -1789,16 +1816,16 @@ addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && e.target === searchEl) { searchEl.value = ''; onSearch(); searchEl.blur(); }
 });
 
-// ── 밖으로 나가는 신호 (#40) ──────────────────────────────
-// 신호등은 palmar 를 보고 있을 때만 값이 있다. 에디터가 위에 떠 있으면 아무한테도 안 닿는데,
-// 하필 그때가 신호등이 필요한 순간이다. 두 층으로 내보낸다:
-//   탭 제목·파비콘 — 브라우저가 보일 때의 곁눈질. 공짜다.
-//   알림 — 창이 덮였을 때의 끼어들기. 127.0.0.1 은 secure context 라 HTTPS 없이도 된다
-//          (2026-09-08 실측: isSecureContext=true, Notification.permission='default').
+// ── signals that reach outside (#40) ──────────────────────
+// The status lights are only worth anything while palmar is being looked at. With an editor on top they reach
+// nobody — and that is exactly the moment the lights are needed. They go out in two layers:
+//   tab title·favicon — a glance while the browser is visible. Free.
+//   notifications — an interruption when the window is covered. 127.0.0.1 is a secure context, so no HTTPS needed
+//          (measured 2026-09-08: isSecureContext=true, Notification.permission='default').
 const LS_NOTIFY = 'palmar.notify';
 const NOTIFY_COALESCE_MS = 500;
-//: "나를 부르는" 상태. **done 도 넣는다** — 훅이 없는 에이전트는 waiting 을 낼 수 없고(#38 은 제목으로
-//: 읽으니 working/done/idle 만 나온다), 회사에서 쓰는 codex 가 정확히 그 경우다(#15).
+//: The "wants you" statuses. **done is in too** — an agent with no hooks cannot produce waiting (#38 reads the
+//: title, so only working/done/idle come out), and the codex used at work is exactly that case (#15).
 const WANTS_YOU = new Set(['waiting', 'done']);
 
 let notifyOn = false;
@@ -1806,13 +1833,13 @@ try { notifyOn = localStorage.getItem(LS_NOTIFY) === '1'; } catch (e) {}
 
 function labelOf(s) { return s ? (s.name || shortPath(s.cwd)) : '?'; }
 
-// 이 무리 중 가장 급한 "나를 부름" 의 상태 클래스. 없으면 null.
-// **waiting 만 보면 안 된다** — 제목으로 읽는 에이전트(#38)는 waiting 을 낼 수 없어 done 으로 온다.
-// 그것만 보던 탓에 codex 가 일을 끝내도 탭과 접힌 묶음이 깜깜했다(사용자 보고 2026-09-08).
+// The status class of the most urgent "wants you" in this bunch. null if there is none.
+// **Do not look at waiting alone** — an agent read through its title (#38) cannot produce waiting and arrives as done.
+// Looking only at waiting is why the tab and the folded group stayed dark when codex finished its work (user report 2026-09-08).
 function wantClass(list) {
   let d = null;
   for (const s of list) {
-    if (s.status === 'waiting') return 'wait';   // 막혀 있는 쪽이 늘 이긴다
+    if (s.status === 'waiting') return 'wait';   // the one that is blocked always wins
     if (s.status === 'done') d = 'done';
   }
   return d;
@@ -1823,28 +1850,28 @@ function wantsYouIds() {
   return out;
 }
 
-// 탭 제목과 파비콘. **색은 CSS 의 --st-* 를 읽어 쓴다** — JS 에 색을 새로 두지 않는다(AGENTS.md).
+// The tab title and the favicon. **Colors are read out of the CSS --st-*** — no new color lives in JS (AGENTS.md).
 const favEl = document.querySelector('link[rel="icon"]');
 let badgeKey = null;
 function renderBadge(force) {
   const n = wantsYouIds().length;
   const key = n + '|' + (document.documentElement.dataset.theme || 'system');
-  if (!force && key === badgeKey) return;      // 세션 프레임마다 캔버스를 다시 그리지 않는다
+  if (!force && key === badgeKey) return;      // do not redraw the canvas on every session frame
   badgeKey = key;
   document.title = n ? '(' + n + ') palmar' : 'palmar';
-  document.body.classList.toggle('wants', n > 0);     // 워드마크의 마지막 점을 켠다
+  document.body.classList.toggle('wants', n > 0);     // light the last dot of the wordmark
   if (!favEl) return;
   const css = getComputedStyle(document.documentElement);
-  // 파비콘도 브랜드의 `p` 다(docs/brand/p.svg) — 속의 점이 앰버면 누가 기다린다는 뜻이고,
-  // 그건 워드마크·탭의 점과 **같은 규칙, 같은 색**이다. 몇 개인지는 말하지 않는다: 16px 에서
-  // 숫자는 못 읽고, 게이지가 아니라 부름이다.
-  // SVG 파비콘을 안 쓰는 이유: 브라우저마다 지원이 갈리고, 격리돼서 CSS 변수도 못 읽는다.
-  // 그래서 같은 경로를 Path2D 에 넣어 캔버스로 굽는다 — PNG 는 어디서나 뜬다.
+  // The favicon is the brand's `p` too (docs/brand/p.svg) — an amber dot inside means somebody is waiting, and
+  // that is **the same rule and the same color** as the dot on the wordmark and on a tab. It does not say how
+  // many: at 16px a number is unreadable, and this is a call, not a gauge.
+  // Why not an SVG favicon: support varies by browser, and being isolated it cannot read the CSS variables either.
+  // So the same path goes into a Path2D and is baked onto a canvas — a PNG shows up everywhere.
   const c = document.createElement('canvas'); c.width = c.height = 64;
   const g = c.getContext('2d');
   if (!g) return;
   const ink = (css.getPropertyValue('--ink') || '').trim() || '#222';
-  // p.svg 의 viewBox 는 "2 46 60 94". 높이로 맞추고 가로는 가운데로.
+  // p.svg's viewBox is "2 46 60 94". Fit by height and centre horizontally.
   const k = 64 * 0.88 / 94;
   g.translate((64 - 60 * k) / 2 - 2 * k, (64 - 94 * k) / 2 - 46 * k);
   g.scale(k, k);
@@ -1852,7 +1879,7 @@ function renderBadge(force) {
   try {
     g.stroke(new Path2D('M 13.50 57.50 V 128.50'));
     g.stroke(new Path2D('M 13.50 76.00 a 18.50 18.50 0 1 0 37.00 0 a 18.50 18.50 0 1 0 -37.00 0'));
-  } catch (e) { return; }                            // Path2D 가 없으면 파비콘을 건드리지 않는다
+  } catch (e) { return; }                            // no Path2D — leave the favicon alone
   g.beginPath(); g.arc(33, 76, 6, 0, Math.PI * 2);
   if (n) { g.fillStyle = (css.getPropertyValue('--st-wait') || '').trim() || '#d99a2b'; g.globalAlpha = 1; }
   else   { g.fillStyle = ink; g.globalAlpha = 0.34; }
@@ -1862,18 +1889,20 @@ function renderBadge(force) {
 
 const notifyQueue = new Set();
 let notifyTimer = null;
-let notifyAt = 0;              // 마지막으로 실제로 울린 시각
+let notifyAt = 0;              // when it actually rang last
 
-// **상태로 바뀌는 순간에만** 부른다. 상태가 이어지는 동안 다시 울리면 사람들은 알림을 통째로 끈다.
+// Called **only at the moment the status changes into one**. Ring again while a status persists and people
+// turn notifications off entirely.
 function onWantsYou(id) {
   if (!notifyOn || !('Notification' in window) || Notification.permission !== 'granted') return;
-  // palmar 를 보고 있으면 신호등으로 충분하다. hasFocus 는 "다른 창이 위에 있다" 와 "다른 탭이다" 를
-  // 둘 다 잡는다 — visibilityState 는 창이 덮여도 'visible' 이라 여기서는 쓸 수 없다.
+  // If palmar is being looked at, the status lights are enough. hasFocus catches both "another window is on top"
+  // and "another tab is up" — visibilityState stays 'visible' with the window covered, so it is no use here.
   if (document.hasFocus()) return;
   notifyQueue.add(id);
-  // **첫 번째는 바로 울린다.** 모아서 보내려고 타이머에 맡겼더니 정작 창이 내려가 있을 때 —
-  // 알림이 가장 필요한 그때 — 늦었다: 숨은 탭의 setTimeout 은 크롬이 1초, 오래 숨어 있으면 1분까지
-  // 미룬다. 뒤이어 오는 것들만 타이머로 묶는다(같은 tag 라 앞의 알림을 갈아 끼운다).
+  // **The first one rings immediately.** Handing it to a timer to coalesce made it late exactly when the window
+  // was down — when a notification is needed most: Chrome defers setTimeout in a hidden tab by 1 second, and up to
+  // a minute once it has been hidden a while. Only the ones that follow are bundled by the timer (same tag, so
+  // each replaces the notification before it).
   if (Date.now() - notifyAt > NOTIFY_COALESCE_MS) { flushNotify(); return; }
   if (notifyTimer === null) notifyTimer = setTimeout(flushNotify, NOTIFY_COALESCE_MS);
 }
@@ -1883,7 +1912,7 @@ function flushNotify() {
   notifyTimer = null;
   const ids = [...notifyQueue].filter((id) => {
     const s = sessions.get(id);
-    return s && WANTS_YOU.has(s.status);      // 그 사이 스스로 풀렸으면 안 울린다
+    return s && WANTS_YOU.has(s.status);      // resolved itself meanwhile — do not ring
   });
   notifyQueue.clear();
   if (!ids.length || document.hasFocus()) return;
@@ -1893,16 +1922,16 @@ function flushNotify() {
     n = new Notification(
       one ? labelOf(one) + ' wants you' : ids.length + ' terminals want you',
       { body: one ? one.cwd : ids.map((i) => labelOf(sessions.get(i))).join(', '),
-        tag: 'palmar-wants-you' });          // 같은 tag 라 쌓이지 않고 갈아 끼워진다
+        tag: 'palmar-wants-you' });          // same tag, so they replace rather than pile up
   } catch (e) { return; }
   notifyAt = Date.now();
-  // 눌렀는데 그 터미널로 안 가면 "가서 찾아봐" 라고 말하는 셈이라 원래 문제를 그대로 둔다.
+  // A click that does not land on that terminal amounts to saying "go find it", which leaves the original problem standing.
   n.onclick = () => { window.focus(); goToSession(ids[0]); n.close(); };
 }
 
-// 켤 때 **한 번 울려 본다.** 알림은 브라우저 권한·OS 방해금지·집중 지원까지 여러 단계를 지나야
-// 도착하고, 그중 어디서 막혀도 화면에서는 똑같이 조용하다. 한 번 보내 보면 그 사슬 전체가 한
-// 번에 확인된다 — "켰는데 안 오네" 를 나중에 알아채는 것보다 지금 아는 편이 낫다.
+// **Ring once when it is turned on.** A notification has to pass browser permission, the OS's do-not-disturb and
+// focus assistance before it arrives, and blocked at any of those it is equally silent on screen. One send checks
+// the whole chain at once — better to know now than to discover "I turned it on and nothing comes" later.
 function notifyTest() {
   try {
     const n = new Notification('palmar notifications are on', {
@@ -1928,8 +1957,9 @@ async function toggleNotify() {
   if (notifyOn) { setNotify(false); return; }
   if (!('Notification' in window)) { toast(['this browser has no Notification API']); return; }
   let perm = Notification.permission;
-  // 켜는 손짓이 있을 때만 묻는다 — 뜨자마자 권한을 묻는 것은 모두가 싫어하는 짓이고,
-  // 브라우저도 손짓을 요구한다. 권한은 **포트까지 포함한 origin** 별이라 --port 를 바꾸면 다시 묻는다.
+  // Ask only when there is a gesture turning it on — asking for permission the moment a page loads is the thing
+  // everybody hates, and the browser demands a gesture anyway. Permission is per **origin, port included**, so
+  // changing --port asks again.
   if (perm === 'default') { try { perm = await Notification.requestPermission(); } catch (e) { perm = 'denied'; } }
   if (perm !== 'granted') {
     toast(['notifications are blocked for ' + location.origin,
@@ -1947,12 +1977,12 @@ if (bellEl) {
   });
 }
 
-// ── 프로토콜 판 ─────────────────────────────────────────
-// 이 페이지가 아는 판. 데몬의 palmar/__init__.py PROTOCOL 과 짝이다.
-// **한 곳에서 클론해 쓰는 동안은 어긋날 수가 없다** — 데몬과 페이지가 같은 커밋이니까.
-// 배포되기 시작하면 달라진다: 브라우저가 캐시한 새 페이지가 안 올린 데몬을 만난다.
-// 그때 조용히 이상하게 구는 대신 **말한다**. 막지는 않는다 — 대개는 그래도 돌아가고,
-// 막아 버리면 고칠 방법(새로고침·데몬 재시작)까지 같이 막힌다.
+// ── protocol version ────────────────────────────────────
+// The version this page speaks. It pairs with PROTOCOL in the daemon's palmar/__init__.py.
+// **While it is cloned and run from one place they cannot drift** — daemon and page are the same commit.
+// Once it starts being deployed that changes: a new page cached by the browser meets a daemon that was not updated.
+// When that happens, **say so** instead of behaving oddly in silence. Do not block — it usually still works, and
+// blocking would block the way out (a reload, a daemon restart) along with it.
 const PROTOCOL = 1;
 let protocolWarned = false;
 function checkProtocol(m) {
@@ -1968,12 +1998,12 @@ function checkProtocol(m) {
   ].filter(Boolean));
 }
 
-// ── 있었던 일 ─────────────────────────────────────────────
-// 신호등은 **지금**을 말한다. 자리를 비운 사이는 아무 데도 안 남아 있었다 — 무엇이 끝났고
-// 무엇이 물어봤는지, 어떤 차례로. 데몬이 그것을 갖고(브라우저를 닫아 둔 동안이야말로 "없는 동안"
-// 이니까) 붙을 때 hello 로 함께 준다. 여기서는 보여 주고, 눌러서 그리로 가는 일만 한다.
+// ── what happened ─────────────────────────────────────────
+// The status lights speak about **now**. The time you were away was kept nowhere — what finished, what asked, in
+// what order. The daemon holds that (the time with the browser closed is precisely "the time you were away") and
+// hands it over with hello on attach. All this side does is show it and take a click through to it.
 const LS_SEEN_AT = 'palmar.seenAt';
-const ACT_MAX = 60;                 // 화면에 두는 개수. 데몬은 더 갖고 있다.
+const ACT_MAX = 60;                 // how many are kept on screen. The daemon holds more.
 const ACT_CLASS = { waiting: 'wait', done: 'done', created: 'idle', gone: 'idle' };
 let acts = [];
 let seenAt = 0;
@@ -1981,26 +2011,27 @@ try { seenAt = Number(localStorage.getItem(LS_SEEN_AT)) || 0; } catch (e) {}
 const actsEl = document.getElementById('acts');
 const actNewEl = document.getElementById('act-new');
 
-// **본 것으로 치는 때**: 이 창이 앞에 있을 때. 덮여 있는 동안 쌓인 것이 곧 "없는 동안" 이다.
+// **When it counts as seen**: while this window is in front. What piled up while it was covered is "the time you were away".
 function markSeen() {
   if (!document.hasFocus()) return;
   seenAt = Date.now() / 1000;
   try { localStorage.setItem(LS_SEEN_AT, String(seenAt)); } catch (e) {}
 }
 
-// **"이제 뭘 해야 하나" 에 답한다.** 처음에는 "없는 동안 무슨 일이 있었나" 를 적는 자리였는데,
-// 그건 지난 일이고 사람이 실제로 하는 물음이 아니었다 — 터미널 여덟 개 앞에서 묻는 것은
-// *무엇이 나를 기다리나, 그중 무엇이 먼저인가* 다. 신호등은 "무엇" 까지만 말한다.
+// **It answers "what do I do now".** It started out as the place that wrote down "what happened while I was
+// away", but that is the past and not the question a person actually asks — in front of eight terminals the
+// question is *what is waiting on me, and which of those comes first*. The status lights only get as far as "what".
 //
-// 세 무리로 나눈다:
-//   기다림 — 나를 부르는 것. **오래 기다린 것이 위**다. 20분 기다린 판과 방금 물어본 판은 다른 일이다.
-//   막힌 듯 — 일하는 중이라는데 STUCK_S 넘게 아무것도 안 찍은 것. 아무도 안 알려 주는 것이고,
-//            PTY 를 우리가 갖고 있어서 알 수 있다. **단정하지 않는다** — 오래 생각하는 중일 수도 있다.
-//   그 밖에 아무것도 없으면 — 그때 비로소 지난 일을 보여 준다. 조용할 때만 값을 하는 것이니까.
-const STUCK_S = 300;      // 5분. 이보다 짧으면 평범한 생각 시간까지 "막혔다" 가 된다
+// Three bunches:
+//   waiting — what wants you. **The longest wait is on top.** A pane that has waited 20 minutes and one that just
+//            asked are not the same job.
+//   looks stuck — says it is working but has printed nothing for more than STUCK_S. Nobody else reports this, and
+//            we can know it because we hold the PTY. **It does not assert** — it may be thinking hard.
+//   nothing else at all — only then does it show the past. It is worth something only when things are quiet.
+const STUCK_S = 300;      // 5 minutes. Shorter and ordinary thinking time becomes "stuck"
 
-//: 마지막 출력 **시각**. 데몬이 주는 `quiet` 은 그 프레임을 만들 때의 값이라, 조용해지는 동안은
-//: 방송이 안 오므로 멈춰 있다 — 받은 순간에 시각으로 바꿔 두면 그때부터는 시계가 흐른다.
+//: The **time** of the last output. The `quiet` the daemon sends is the value at the moment that frame was built,
+//: so while things go quiet no broadcast arrives and it stands still — turn it into a time on arrival and the clock runs from there.
 const lastOutAt = new Map();
 function quietFor(x) {
   const t = lastOutAt.get(x.id);
@@ -2016,7 +2047,7 @@ function renderActs() {
     if (WANTS_YOU.has(x.status)) wants.push(x);
     else if (x.status === 'working') { const q = quietFor(x); if (q !== null && q >= STUCK_S) stuck.push(x); }
   }
-  wants.sort((a, b) => (a.since || now) - (b.since || now));      // 오래 기다린 것이 위
+  wants.sort((a, b) => (a.since || now) - (b.since || now));      // the longest wait on top
   stuck.sort((a, b) => (quietFor(b) || 0) - (quietFor(a) || 0));
   const fresh = acts.filter((e) => e.t > seenAt).length;
   if (actNewEl) actNewEl.textContent = wants.length ? String(wants.length) : (fresh ? fresh + ' new' : '');
@@ -2061,7 +2092,7 @@ function renderActs() {
     }
   }
   if (!wants.length && !stuck.length) {
-    // 조용하다. **그때만** 지난 일을 보여 준다 — 볼 여유가 있는 것은 그때뿐이다.
+    // It is quiet. Show the past **only then** — that is the only time there is room to look at it.
     if (!acts.length) {
       actsEl.appendChild(el('div', 'quiet', 'all quiet · nothing is waiting on you'));
       return;
@@ -2098,11 +2129,11 @@ function pushAct(e) {
   renderActs();
 }
 
-// ── 세션 반영 ───────────────────────────────────────────
+// ── session updates ─────────────────────────────────────
 function upsert(s) {
   const old = sessions.get(s.id);
   if (!old) changedAt.set(s.id, (s.created || Date.now() / 1000) * 1000);
-  // 전이할 때만이다. WANTS_YOU 안에서 waiting ↔ done 으로 옮겨 다니는 것은 새 부름이 아니다.
+  // Only on the transition in. Moving between waiting ↔ done inside WANTS_YOU is not a new call.
   let wants = false;
   if (old && old.status !== s.status) {
     changedAt.set(s.id, Date.now());
@@ -2110,9 +2141,9 @@ function upsert(s) {
   }
   if (typeof s.quiet === 'number') lastOutAt.set(s.id, Date.now() / 1000 - s.quiet);
   sessions.set(s.id, s);
-  // **넣은 다음에 부른다.** 알림은 sessions 에서 다시 읽어 이름과 경로를 만드는데, 먼저 부르면
-  // 그때 거기 있는 것은 아직 옛 세션이라 "부르는 것이 없다" 로 걸러진다. 500ms 타이머로 미룰
-  // 때는 그 사이에 넣어져서 안 보였고, 즉시 울리게 바꾸자마자 드러났다.
+  // **Call after inserting.** The notification reads sessions again to build the name and the path, and calling
+  // first finds the old session still sitting there and filters it out as "nothing is calling". Deferred behind
+  // the 500ms timer the insert happened in between so it never showed; it surfaced the moment it rang immediately.
   if (wants) onWantsYou(s.id);
   renderBadge();
   let t = tiles.get(s.id);
@@ -2120,20 +2151,20 @@ function upsert(s) {
     t = new Tile(s);
     tiles.set(s.id, t);
     t.off = false;
-    refreshOff();    // 남의 브라우저가 연 창은 화면 밖에 놓일 수 있다 — 뷰포트는 저기서 한 번만 잰다
+    refreshOff();    // a window another browser opened can land off-screen — the viewport is measured once in there
   } else {
     const wasVisible = !t.el.classList.contains('other');
     t.update(s);
     const on = t.visible();
-    if (on !== wasVisible) {          // ⑪ 세션이 캔버스를 옮겼다 — session 프레임 하나로 온다
+    if (on !== wasVisible) {          // ⑪ the session moved canvas — it arrives in a single session frame
       t.el.classList.toggle('other', !on);
-      if (on) t.refit(); else { t.off = false; syncMax(); }   // 펼친 창이 남의 캔버스로 갔다
+      if (on) t.refit(); else { t.off = false; syncMax(); }   // the expanded window went to somebody else's canvas
     }
   }
-  renderTabs();      // 점은 계산이다 — status 나 canvas 가 바뀌면 다시 센다
+  renderTabs();      // the dot is computed — recount when status or canvas changes
   renderList();
-  // 오른쪽 목록도 상태를 읽는다. **여기서 안 부르면 한 발 늦는다** — `log` 프레임이 `session` 보다
-  // 먼저 오므로(계약: note 가 broadcast 전이다) 그때 그린 것은 아직 옛 상태다(`gone` 과 같은 자리).
+  // The right-hand list reads status too. **Not calling here leaves it one step behind** — the `log` frame arrives
+  // before `session` (contract: note comes before broadcast), so what was drawn then is still the old status (the same spot as `gone`).
   renderActs();
   renderMinimap();
   updateStatusBar();
@@ -2141,28 +2172,28 @@ function upsert(s) {
 }
 function remove(id) {
   const t = tiles.get(id);
-  const wasIn = t && t.s ? t.s.canvas : null;   // 정리는 그 캔버스에만 한다
+  const wasIn = t && t.s ? t.s.canvas : null;   // the tidy applies to that canvas alone
   if (t) { if (maxed === t) setMax(t, false); t.dispose(); tiles.delete(id); }
   sessions.delete(id);
   lastOutAt.delete(id);
   notifyQueue.delete(id);
   renderBadge();
   changedAt.delete(id);
-  closing.delete(id);                        // #31 ①: gone 이 왔다 — 여기가 진짜로 지우는 유일한 자리다
-  // 이 세션에 열려 있던 확인 줄은 거둔다. 그냥 두고 목록을 다시 지으면 그 줄은 DOM 에서만 떨어지고
-  // document 에 걸어 둔 pointerdown 리스너가 남는다(askClose 의 outside).
+  closing.delete(id);                        // #31 ①: gone arrived — this is the one place that really deletes
+  // Take back any confirm strip open on this session. Leave it and rebuild the list and the strip only falls out
+  // of the DOM while the pointerdown listener hung on document stays (askClose's outside).
   if (rowConfirm === id && activeConfirm) activeConfirm.cancel();
   rowConfirm = rowConfirm === id ? null : rowConfirm;
   if (activeConfirm && !document.contains(activeConfirm.row)) activeConfirm.cancel();
-  delete layout[id];   // id 는 다시 쓰이지 않는다 — 남기면 쌓인다
+  delete layout[id];   // an id is never reused — leave it and it piles up
   saveLayout();
   if (focused === id) focused = null;
-  // 켜 뒀으면 자동으로 거둔다. 아니면 **단추만 켜서** 거둘 것이 생겼다고 말한다 —
-  // 창을 움직이는 일이라 시키지 않았으면 안 움직인다.
+  // If it is on, close up automatically. Otherwise **only light the button** to say there is slack to close up —
+  // it moves windows, so nothing moves unless it was asked for.
   if (wasIn && autoTidy) tidyCanvas(wasIn);
   paintTidy();
-  // 있었던 일의 줄은 "그 세션이 아직 있나" 를 보여 준다. `log` 가 `gone` 보다 먼저 오므로
-  // (계약: note 가 broadcast 전이다) 그때 그린 줄은 아직 살아 있는 것으로 그려진다 — 여기서 고친다.
+  // A row in what-happened shows "is that session still there". `log` arrives before `gone` (contract: note comes
+  // before broadcast), so the row drawn then is drawn as still alive — fix it here.
   renderActs();
   renderTabs();
   renderList();
@@ -2172,13 +2203,13 @@ function remove(id) {
 function reconcile(list) {
   const seen = new Set(list.map((s) => s.id));
   for (const id of [...sessions.keys()]) if (!seen.has(id)) remove(id);
-  // 자리를 기억하는 것 먼저 놓아야 새 것이 그 자리를 차지하지 않는다
+  // Place the ones with a remembered position first, so a new one does not take that slot
   const ordered = [...list].sort((a, b) => (layout[a.id] ? 0 : 1) - (layout[b.id] ? 0 : 1) || a.created - b.created);
   for (const s of ordered) upsert(s);
   refreshOff();
 }
 
-// ── 제어 채널 /events ───────────────────────────────────
+// ── control channel /events ─────────────────────────────
 function connectEvents() {
   const ws = new WebSocket(`ws://${location.host}/events?token=${encodeURIComponent(TOKEN)}`);
   eventsWs = ws;
@@ -2188,7 +2219,7 @@ function connectEvents() {
     let m = null;
     try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (!m) return;
-    // hello 한 프레임 안에서 모든 session.canvas 가 이 canvases 안에 있다(protocol.md) — 캔버스를 먼저 넣는다
+    // Within one hello frame every session.canvas is in this canvases list (protocol.md) — put the canvases in first
     if (m.t === 'hello') {
       checkProtocol(m); setCanvases(m.canvases || []); reconcile(m.sessions || []);
       acts = m.log || []; renderActs();
@@ -2196,50 +2227,51 @@ function connectEvents() {
     else if (m.t === 'log' && m.e) pushAct(m.e);
     else if (m.t === 'session' && m.s) upsert(m.s);
     else if (m.t === 'gone' && m.id) remove(m.id);
-    else if (m.t === 'canvas' && m.c) putCanvas(m.c);           // 생겼거나 이름이 바뀌었다
-    else if (m.t === 'canvases' && m.cs) setCanvases(m.cs);     // 순서가 바뀌었다 — order 순 전체
-    else if (m.t === 'canvas_gone' && m.id) dropCanvas(m.id);   // 바로 뒤에 canvases 가 따라온다
+    else if (m.t === 'canvas' && m.c) putCanvas(m.c);           // created or renamed
+    else if (m.t === 'canvases' && m.cs) setCanvases(m.cs);     // the order changed — all of them, in order
+    else if (m.t === 'canvas_gone' && m.id) dropCanvas(m.id);   // canvases follows right behind
   };
   ws.onclose = () => {
     if (eventsWs !== ws) return;
     eventsWs = null;
     setConnected(false);
     eventsRetry = Math.min(10000, eventsRetry ? eventsRetry * 2 : 1000);
-    // 열리지도 못하고 닫혔다 = 데몬이 없거나(연결 거부) 핸드셰이크에서 거절됐다(403). 뒤쪽은 데몬이 다시 떠
-    // 토큰이 바뀐 경우다 — 토큰은 index.html 로만 오니(protocol.md "뜨기" 4) 그걸 다시 받아 비교한다.
+    // Closed without ever opening = either there is no daemon (connection refused) or the handshake was refused
+    // (403). The latter is the daemon having restarted with a new token — the token only ever arrives with
+    // index.html (protocol.md "뜨기" 4), so fetch that again and compare.
     if (!opened) checkStaleToken();
     setTimeout(connectEvents, eventsRetry);
   };
   ws.onerror = () => {};
 }
-// 데몬이 재시작하면(⑦=b: 업데이트 때만) 토큰이 새로 나고 이 페이지의 것은 영원히 403 이다. index.html 을 다시 받아
-// 심긴 토큰이 우리 것과 다를 때만 새로 고친다 — 같으면(데몬이 아직 없다) 그냥 재시도가 이어진다. 되돌이표는 없다:
-// 새로 고친 뒤에는 토큰이 같다.
+// When the daemon restarts (⑦=b: only on an update) a new token is minted and this page's is 403 forever. Fetch
+// index.html again and reload only when the token baked into it differs from ours — if it is the same (the daemon
+// is still not there) the retries simply continue. There is no loop: after a reload the tokens match.
 let staleCheck = false;
-let daemonBack = false;  // "다시 떴으니 새로고침" 을 한 번 말했나 — 되풀이하지 않는다
+let daemonBack = false;  // has "it restarted, reload" been said once — do not repeat it
 async function checkStaleToken() {
   if (staleCheck) return;
   staleCheck = true;
   try {
-    // **열쇠를 자동으로 보내지 않는다.** 예전에는 여기서 `GET /?k=` 를 해서 새 토큰을 확인하고
-    // 스스로 새로고침했다 — 편했지만, 데몬이 꺼져 있는 동안 10초마다 **영원히** 열쇠를 뿌리는
-    // 짓이었다. 그 포트는 아무 계정이나 잡을 수 있어서(로컬 포트는 사용자별이 아니다), 데몬이
-    // 꺼진 사이 다른 계정이 자리를 차지하면 점심 한 번에 수백 번 받아 간다. 열쇠는 남는 것이라
-    // 한 번이면 끝이다(#14 의 맞바꿈).
+    // **The key is never sent automatically.** This used to do `GET /?k=` to confirm the new token and reload
+    // itself — convenient, but it meant spraying the key every 10 seconds **forever** while the daemon was down.
+    // Any account can grab that port (a local port is not per-user), so if another account takes the spot while
+    // the daemon is off, one lunch break hands the key over hundreds of times. A key persists, so once is enough
+    // (#14's trade-off).
     //
-    // 대신 **비밀이 없는 것으로** 살았는지만 묻는다. `/app.js` 는 열쇠 없이도 200 인 공개 파일이라
-    // (protocol.md "인증") 여기에는 아무것도 실리지 않는다.
+    // Instead ask **with something that carries no secret** whether anyone is alive. `/app.js` is a public file
+    // that returns 200 without a key (protocol.md "인증"), so nothing rides on this request.
     const r = await fetch('/app.js', { method: 'HEAD', cache: 'no-store' });
     if (!r.ok) return;
-    // 누군가 듣고 있는데 우리 웹소켓은 거절당한다 = 우리 토큰이 낡았다(데몬이 다시 떴다).
-    // 여기서 새로고침을 **대신 해 주지 않는다** — 새로고침이 내는 요청에도 주소의 열쇠가 실리므로,
-    // 자동으로 하면 방금 막은 것을 그대로 다시 하는 셈이다. 사람이 누를 때만 나간다.
+    // Somebody is listening and yet our websocket is refused = our token is stale (the daemon restarted).
+    // **Do not do the reload on their behalf** here — the request a reload makes carries the key in the address
+    // too, so doing it automatically is doing again exactly what was just prevented. It goes out only when a person presses.
     if (!daemonBack) {
       daemonBack = true;
       toast([{ b: 'palmar restarted' }, ' — reload this page to reconnect']);
     }
   } catch (e) {
-    // 아무도 안 듣는다 — 데몬이 없는 것이다. 재시도가 이어진다.
+    // Nobody is listening — there is no daemon. The retries continue.
     daemonBack = false;
   } finally {
     staleCheck = false;
@@ -2259,12 +2291,12 @@ function updateStatusBar(note) {
 }
 $('#sb-host').textContent = location.host;
 
-// ── 오른쪽 레일: 디렉터리 (폴더만, 펼칠 때만 읽는다) ──────
+// ── right rail: directories (folders only, read when expanded) ──
 const tree = { roots: [] };   // node: { path, name, branch, hasChildren, depth, expanded, children, loading }
 let selectedDir = null;
 
 function joinDir(parent, name) {
-  // 뿌리 목록의 name 이 절대 경로인지, path 에 붙이는 이름인지 protocol.md 가 못 박지 않았다 — 둘 다 받는다
+  // protocol.md does not pin down whether name in the roots list is an absolute path or a name to join onto path — take both
   if (!name) return parent || '';
   if (name.startsWith('/')) return name;
   if (!parent) return name;
@@ -2281,7 +2313,7 @@ async function loadRoots() {
     home = tree.roots.length ? tree.roots[0].path : null;
     if (!selectedDir && tree.roots.length) selectDir(tree.roots[0]);
     renderTree();
-    renderList();        // 경로 표시가 ~ 로 줄어든다
+    renderList();        // the path display shortens to ~
     for (const t of tiles.values()) t.update(t.s);
   } catch (e) {
     toast(['directories: ' + e.message]);
@@ -2308,14 +2340,14 @@ function selectDir(n) {
   launchBtn.disabled = false;
   renderTree();
 }
-let findResults = null;      // { q, entries } — 검색 중일 때만. null 이면 평소의 트리다.
+let findResults = null;      // { q, entries } — only while searching. null means the ordinary tree.
 
 function renderTree() {
   treeEl.textContent = '';
   const hint0 = document.getElementById('tree-hint');
   if (hint0 && !findResults) hint0.textContent = 'folders only · read when expanded';
   if (findResults) {
-    // **찾은 것을 평평하게 보여 준다.** 트리 속으로 펼쳐 들어가면 어디를 보고 있는지 잃는다.
+    // **Show the matches flat.** Expanding down into the tree loses track of where you are looking.
     const hint = document.getElementById('tree-hint');
     if (hint) hint.textContent = 'matching folders · click one to open a terminal there';
     if (!findResults.entries.length) {
@@ -2325,7 +2357,7 @@ function renderTree() {
       return;
     }
     for (const e of findResults.entries) {
-      // selectDir 이 기대하는 모양 그대로 만든다 (branch — git 가 아니다)
+      // Build exactly the shape selectDir expects (branch — not git)
       const n = { path: e.name, name: e.name, depth: 0, hasChildren: !!e.has_children, branch: e.git_branch };
       const r = el('div', 'row found' + (selectedDir && selectedDir.path === e.name ? ' sel' : ''));
       r.dataset.path = e.name;
@@ -2333,8 +2365,8 @@ function renderTree() {
       r.appendChild(el('span', 'nm', shortPath(e.name)));
       if (e.git_branch) r.appendChild(el('span', 'br', e.git_branch));
       r.title = e.name;
-      // 찾은 것을 고르면 그것이 곧 cwd 다 — 트리를 파고들 필요가 없다.
-      const pick = () => selectDir(n);   // 트리에서 고르는 것과 **같은 길**이다
+      // Pick a match and that is the cwd — no need to dig through the tree.
+      const pick = () => selectDir(n);   // **the same path** as picking from the tree
       r.addEventListener('click', pick);
       r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); pick(); launch(); } });
       treeEl.appendChild(r);
@@ -2366,7 +2398,7 @@ function renderTree() {
   applyFilter();
 }
 $('#refresh').addEventListener('click', () => {
-  // 펼친 것 하나만 다시 읽는다 — 홈 전체를 훑지 않는다. 고른 폴더가 펼쳐져 있으면 그것, 아니면 뿌리 목록
+  // Re-read only the one that is expanded — never sweep all of home. The selected folder if it is expanded, else the roots list
   if (selectedDir && (selectedDir.expanded || selectedDir.hasChildren)) expandNode(selectedDir);
   else loadRoots();
 });
@@ -2383,12 +2415,12 @@ $('#mkdir').addEventListener('click', async () => {
     toast(['new folder: ' + e.message]);
   }
 });
-// 새 터미널. **자리는 손이 가 있는 곳에서 가져온다** — 지금 보고 있는 터미널의 폴더, 없으면
-// 오른쪽에서 고른 폴더, 그것도 없으면 홈(데몬의 기본값). 그래야 단축키 하나로 열 수 있다:
-// 레일에서 폴더를 고르는 것은 **처음 한 번**이고, 그다음부터는 "여기 하나 더" 가 훨씬 잦다.
+// A new terminal. **The place comes from where the hand is** — the folder of the terminal being looked at, else
+// the folder picked on the right, else home (the daemon's default). That is what makes one shortcut enough:
+// picking a folder in the rail is **the first time only**, and after that "one more here" is far more common.
 function nextCwd() {
-  // **손이 실제로 가 있는 판이 먼저다.** `focused` 는 사람이 화면을 눌렀을 때 정해지는데,
-  // 키보드로만 옮겨 다니면 그것이 뒤처질 수 있다 — 진짜 포커스가 어디 있는지 먼저 본다.
+  // **The pane the hand is actually on comes first.** `focused` is set when a person presses the screen, so
+  // moving around by keyboard alone can leave it behind — look at where the real focus is first.
   const el = document.activeElement;
   if (el) {
     for (const t of tiles.values()) {
@@ -2403,7 +2435,7 @@ function nextCwd() {
 async function newTerminal(cwd) {
   const body = {};
   const c = cwd || nextCwd();
-  if (c) body.cwd = c;                 // 없으면 데몬이 홈으로 연다(protocol.md)
+  if (c) body.cwd = c;                 // without it the daemon opens at home (protocol.md)
   if (current) body.canvas = current;
   try {
     const s = await api('POST', '/api/sessions', body);
@@ -2418,7 +2450,7 @@ async function newTerminal(cwd) {
   }
 }
 
-// 새 캔버스. ＋ 를 누르는 것과 **같은 길**이다 — 두 곳에서 다르게 굴면 안 된다.
+// A new canvas. **The same path** as pressing ＋ — the two places must not behave differently.
 async function newCanvas() {
   try {
     const c = await api('POST', '/api/canvases', {});
@@ -2435,12 +2467,12 @@ async function launch() {
   if (!selectedDir || launchBtn.disabled) return;
   launchBtn.disabled = true;
   try {
-    // PROVISIONAL — ⑪ 의 열린 질문("지금 캔버스인가 그 폴더의 캔버스인가")은 **이 한 칸을 무엇으로
-    // 채우느냐** 이지 프로토콜이 아니다(protocol.md). 지금은 보고 있는 캔버스로 둔다.
+    // PROVISIONAL — ⑪'s open question ("this canvas or that folder's canvas") is about **what fills this one
+    // field**, not about the protocol (protocol.md). For now it is the canvas being looked at.
     const body = { cwd: selectedDir.path };
     if (current) body.canvas = current;
     const s = await api('POST', '/api/sessions', body);
-    // /events 의 session 프레임이 먼저 올 수도, 이 응답이 먼저 올 수도 있다 — upsert 는 둘 다 받는다
+    // The session frame from /events may arrive first, or this response may — upsert takes either
     const t = upsert(s);
     t.el.classList.add('fresh');
     setTimeout(() => t.el.classList.remove('fresh'), 2500);
@@ -2456,29 +2488,29 @@ async function launch() {
 }
 launchBtn.addEventListener('click', launch);
 addEventListener('keydown', (e) => {
-  // **맨 Enter 만.** 조정 키가 붙은 Enter 는 전역 단축키의 것이다(Ctrl/⌘+Enter = 새 터미널).
-  // 둘 다 받으면 폴더를 한 번 누른 뒤로는 그 한 번에 터미널이 둘 열린다.
+  // **A bare Enter only.** An Enter with a modifier belongs to the global shortcuts (Ctrl/⌘+Enter = new terminal).
+  // Take both and, once a folder has been clicked, that one press opens two terminals.
   if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey &&
       e.target && e.target.closest && e.target.closest('.rail.right')) { e.preventDefault(); launch(); }
 });
 
-// 콘솔·개발 도구에서 들여다보는 손잡이. 제품 동작은 이것에 기대지 않는다.
+// A handle for poking around from the console and dev tools. No product behaviour leans on it.
 window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   canvas: () => current, groups: () => groupsCollapsed,
                   cvGroups: () => cvCollapsed, closing: () => [...closing],
-                  // 화면에서는 지울 수 있을 때만 손잡이가 나오므로, 거절당하는 길(#18 의 409)은
-                  // 콘솔에서만 태워 볼 수 있다. 데몬이 어차피 막으므로 여기 두는 것이 위험을 늘리지 않는다.
+                  // On screen the handle appears only when removal is possible, so the path that gets refused
+                  // (#18's 409) can only be exercised from the console. The daemon blocks it anyway, so having it here adds no risk.
                   removeCanvas, watchInput, newTerminal, newCanvas,
-                  // 자동 정리는 판이 사라질 때만 도는 길이라 밖에서 그 순간을 만들기가 어렵다.
-                  // 단추가 부르는 것과 **같은 함수**를 그대로 내놓는다.
+                  // Auto-tidy only runs on a pane disappearing, and that moment is hard to create from outside.
+                  // Expose **the same function** the button calls, unchanged.
                   tidyCanvas,
                   lastOutAt, renderActs };
 
-// 콘솔에서 `palmar.watchInput()`. **진짜 IME 는 헤드리스로 못 잰다** — CDP 의 조합 흉내는 통과하는데
-// 실제 기계에서 안 된다는 보고가 있어, 그 기계에서 무엇이 오는지 직접 찍게 한다.
-// 어디서 끊기는지 한 번에 갈린다: composition 이 아예 안 오나 · 와도 data 가 안 나가나 · 나가는데 안 보이나.
-// 화면에서 바로 하는 입력 진단. **개발자 도구를 열 필요가 없다** — 콘솔로 안내했더니 그 자체가
-// 벽이었다(2026-09-09). 브라우저가 치는 동안 무엇을 내는지 그대로 적어 화면에 띄운다.
+// `palmar.watchInput()` from the console. **A real IME cannot be measured headless** — CDP's imitation of
+// composition passes while reports say it fails on a real machine, so let that machine print what actually arrives.
+// It separates where it breaks in one go: composition never arrives · it arrives but data does not go out · it goes out but is not shown.
+// Input diagnostics run straight from the screen. **No need to open dev tools** — pointing people at the console
+// was itself a wall (2026-09-09). It writes down what the browser emits while typing and puts it on screen.
 function recordTyping(secs) {
   const box = document.getElementById('diagbox');
   const out = document.getElementById('diag-out');
@@ -2511,7 +2543,7 @@ function recordTyping(secs) {
     clearInterval(tick); off.forEach((f) => f()); d.dispose();
     out.value = L.join('\n');
     hint.textContent = 'done — press Copy and paste it back.';
-    // 진단을 켜면 사람은 곧바로 터미널을 눌러야 한다. 판 위로 포커스를 옮겨 준다.
+    // Once diagnostics start, a person has to click the terminal right away. Move focus onto the pane for them.
   }, (secs || 15) * 1000);
   setTimeout(() => { if (t.term) t.term.focus(); }, 60);
 }
@@ -2541,26 +2573,26 @@ function watchInput(secs) {
   }, (secs || 20) * 1000);
 }
 
-// ── 시작 ────────────────────────────────────────────────
+// ── start ───────────────────────────────────────────────
 function boot() {
   if (!window.Terminal || !window.FitAddon) {
     toast(['xterm.js is missing under palmar/web/vendor/ — see palmar/web/vendor/VERSIONS']);
     return;
   }
-  // 단축키 안내는 이 기계의 글쇠를 말해야 한다. 처리 쪽은 진작 metaKey 와 ctrlKey 를 둘 다 받고
-  // 있었는데(아래 keydown) 안내만 ⌘ 로 박혀 있어서, 리눅스·WSL 에서는 없는 글쇠를 가리켰다.
-  // HTML 의 기본값은 Ctrl 이다 — 맥이 아닌 곳이 더 넓고, 못 알아보면 안 바꾸는 편이 안전하다.
+  // The shortcut guidance has to name this machine's keys. The handling side had long taken both metaKey and
+  // ctrlKey (keydown below), but the guidance alone was nailed to ⌘, so on Linux·WSL it pointed at a key that is
+  // not there. The default in the HTML is Ctrl — non-Mac is the wider case, and if detection fails, not changing is safer.
   if (IS_MAC) {
     const k = document.getElementById('kmod');
     if (k) k.firstElementChild.textContent = '⌘';
-    // 맥에서는 복사·붙여넣기·글자 크기가 ⌘ 하나다 — Shift 없이. 안내도 그 기계의 글쇠를 말한다.
+    // On a Mac, copy·paste·text size are ⌘ alone — no Shift. The guidance names that machine's keys too.
     for (const el of document.querySelectorAll('.keys kbd.mod')) el.textContent = '⌘';
     for (const el of document.querySelectorAll('.keys dt')) {
       const ks = [...el.querySelectorAll('kbd')];
       if (ks.length === 3 && ks[1].textContent === 'Shift') ks[1].remove();
     }
   }
-  // ── 단축키 판 ──
+  // ── shortcuts panel ──
   const helpBtn = document.getElementById('help'), keysEl = document.getElementById('keys');
   const showKeys = (on) => {
     keysEl.hidden = !on;
@@ -2569,7 +2601,7 @@ function boot() {
   if (helpBtn && keysEl) {
     helpBtn.addEventListener('click', (e) => { e.stopPropagation(); showKeys(keysEl.hidden); });
     document.getElementById('keys-x').addEventListener('click', () => showKeys(false));
-    // 판 밖을 누르거나 Esc 로 닫는다. 판 안의 클릭은 삼킨다.
+    // A press outside the panel or Esc closes it. Clicks inside the panel are swallowed.
     keysEl.addEventListener('click', (e) => e.stopPropagation());
     addEventListener('click', () => { if (!keysEl.hidden) showKeys(false); });
     addEventListener('keydown', (e) => { if (e.key === 'Escape' && !keysEl.hidden) showKeys(false); });
@@ -2601,19 +2633,20 @@ function boot() {
   loadRails();
   rzGrip(document.getElementById('rz-l'), 'l');
   rzGrip(document.getElementById('rz-r'), 'r');
-  // 창이 앞으로 돌아오면 **잠깐 새것으로 보여 준 뒤** 본 것으로 넘긴다. 돌아오자마자 지워 버리면
-  // 없는 동안 무슨 일이 있었는지 볼 새가 없다.
+  // When the window comes back to the front, **show it as new for a moment** and then mark it seen. Clearing it
+  // the instant it returns leaves no time to see what happened while you were away.
   addEventListener('focus', () => setTimeout(() => { markSeen(); renderActs(); }, 4000));
-  // 시각은 흐른다 — 'now' 가 '3m' 이 되는 것을 보이게 한다. 목록의 ago 와 같은 주기다.
-  setInterval(renderActs, 15000);   // 기다린 시간이 흐르는 것이 보이게 한다
+  // Time passes — make 'now' visibly become '3m'. The same interval as the list's ago.
+  setInterval(renderActs, 15000);   // makes the waiting time visibly run
   setNotify(notifyOn && 'Notification' in window && Notification.permission === 'granted');
   applyTheme(storedTheme());
   renderBadge(true);
-  renderTabs();        // 캔버스가 오기 전에는 탭 줄이 내려가 있다 — hello 가 오면 그때 뜬다
+  renderTabs();        // before any canvas arrives the tab strip is down — it comes up when hello arrives
   connectEvents();
   loadRoots();
 }
-// 글꼴이 도착하기 전에 xterm 이 셀을 재면 열 수가 어긋난다. 잠깐(≤1.5s) 기다리고, 안 오면 뒷 글꼴로 간다.
+// If xterm measures a cell before the font arrives, the column count is off. Wait a moment (≤1.5s), and fall
+// back to the next font if it does not come.
 const fontWait = document.fonts && document.fonts.load
   ? Promise.race([document.fonts.load(FONT_PX + 'px "JetBrains Mono"').catch(() => null), new Promise((r) => setTimeout(r, 1500))])
   : Promise.resolve();

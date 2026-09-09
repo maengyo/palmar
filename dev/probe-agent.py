@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""probe-agent — 이 에이전트에서 palmar 의 신호등이 켜질지 **재 본다**.
+"""probe-agent — **measures** whether palmar's status lights come on for this agent.
 
-    python3 dev/probe-agent.py <명령> [인자...]
-    예:  python3 dev/probe-agent.py <에이전트 명령>
+    python3 dev/probe-agent.py <command> [args...]
+    e.g.  python3 dev/probe-agent.py <agent command>
 
-명령을 진짜 PTY 에 띄우고 **그대로 쓰게 해 준다** — 평소처럼 프롬프트를 넣고, 일을 시키고,
-끝나면 그 에이전트를 종료하면 된다. 그동안 palmar 가 볼 것과 **똑같은 바이트**를 기록해 두었다가
-나갈 때 보고한다.
+It runs the command on a real PTY and **lets you use it as usual** — type your prompts as always,
+give it work, and quit the agent when you are done. All the while it records **the exact bytes**
+palmar would see, and reports them on the way out.
 
-왜 필요한가: palmar 는 에이전트에게 아무것도 묻지 않는다. PTY 를 갖고 있으니 흐르는 바이트만
-본다(docs/protocol.md "제목으로 읽기"). 그래서 "이 에이전트에서 켜지나?" 는 짐작할 것이 아니라
-**한 번 돌려 보면 되는 것**이다.
+Why this is needed: palmar asks the agent nothing. It holds the PTY, so all it sees is the bytes
+flowing past (docs/protocol.md "제목으로 읽기"). So "do the lights come on for this agent?" is
+not something to guess at — **you just run it once**.
 
-여기서 재는 것은 palmar 의 판단 근거 그대로다:
-  · 창 제목(OSC 0/1/2)이 얼마나 자주 바뀌는가 — 3초 안에 두 번 이상이면 "일하는 중"
-  · 조용한 구간이 얼마나 되는가 — 되돌림(출력 활동)이 필요한지 가늠하는 값
+What is measured here is exactly what palmar decides on:
+  · how often the window title (OSC 0/1/2) changes — twice or more within 3s means "working"
+  · how long the quiet stretches are — the value that gauges whether the fallback is needed
 
-이 파일은 개발 도구다. 제품(`palmar/`)에는 안 들어간다.
+This file is a dev tool. It does not go into the product (`palmar/`).
 """
 from __future__ import annotations
 
@@ -32,12 +32,12 @@ import tty
 from fcntl import ioctl
 from struct import pack
 
-WINDOW_S = 3.0      # palmar/__init__.py 와 같은 창
-BUSY_N = 2          # 그 안에 제목이 이만큼 바뀌면 "돌고 있다"
+WINDOW_S = 3.0      # the same window as palmar/__init__.py
+BUSY_N = 2          # this many title changes inside it means "it is running"
 OSC = re.compile(rb"\x1b\][012];([^\x07\x1b]{0,255})(?:\x07|\x1b\\)")
 
-#: 기동할 때 에이전트가 터미널에 던지는 질의. 진짜 터미널은 답한다 — 우리는 그냥 지나보내면 되지만
-#: (진짜 터미널이 뒤에 있으니), 무엇을 물었는지는 보고에 적는다.
+#: Queries the agent throws at the terminal on startup. A real terminal answers — we can just pass
+#: them through (a real terminal is behind us), but we note in the report what it asked.
 QUERIES = [
     (b"\x1b]10;?", "foreground colour"),
     (b"\x1b]11;?", "background colour"),
@@ -66,7 +66,7 @@ def main() -> int:
     ioctl(master, termios.TIOCSWINSZ, winsize(sys.stdin.fileno()))
     signal.signal(signal.SIGWINCH,
                   lambda *_: ioctl(master, termios.TIOCSWINSZ, winsize(sys.stdin.fileno())))
-    # 죽이라는 신호에도 **보고는 하고 나간다.** 안 그러면 25초 재 놓고 kill 한 사람은 아무것도 못 본다.
+    # **Report on the way out even when signalled to die.** Else a 25s run ended by kill shows none.
     def _bail(*_):
         raise KeyboardInterrupt
     for _sig in (signal.SIGTERM, signal.SIGHUP):
@@ -76,8 +76,8 @@ def main() -> int:
             pass
 
     t0 = time.monotonic()
-    titles: list[tuple[float, str]] = []      # (시각, 제목) — 값이 실제로 바뀐 것만
-    marks: list[float] = []                   # 바이트가 온 시각
+    titles: list[tuple[float, str]] = []      # (time, title) — only ones that actually changed
+    marks: list[float] = []                   # the times bytes arrived
     asked: set[str] = set()
     total = 0
     last_title = None
@@ -88,7 +88,7 @@ def main() -> int:
         old = termios.tcgetattr(sys.stdin)
         tty.setraw(sys.stdin.fileno())
     except (termios.error, ValueError):
-        pass                                   # 파이프로 돌리는 경우 — 기록은 그대로 된다
+        pass                                   # running under a pipe — the recording still works
 
     try:
         while True:
@@ -100,8 +100,8 @@ def main() -> int:
             if watch_stdin and sys.stdin in r:
                 data = os.read(sys.stdin.fileno(), 65536)
                 if not data:
-                    # 내 입력이 끝난 것이지 **에이전트가 끝난 것이 아니다.** 여기서 그만두면
-                    # 파이프로 돌렸을 때 아무것도 못 재고 0바이트로 끝난다(처음에 그렇게 틀렸다).
+                    # My input ended, **not the agent.** Stopping here measures nothing and
+                    # finishes at 0 bytes under a pipe (that is how this was wrong at first).
                     watch_stdin = False
                     continue
                 os.write(master, data)
@@ -112,7 +112,7 @@ def main() -> int:
                     break
                 if not chunk:
                     break
-                os.write(sys.stdout.fileno(), chunk)   # **그대로 보여 준다** — 평소처럼 쓰면 된다
+                os.write(sys.stdout.fileno(), chunk)   # **shown as-is** — just use it as usual
                 now = time.monotonic() - t0
                 total += len(chunk)
                 marks.append(now)
@@ -151,8 +151,8 @@ def main() -> int:
 
 
 def report(argv, dur, total, titles, marks, asked) -> None:
-    # **파일로도 남긴다.** 전체화면 TUI 가 나가면서 화면을 되돌리면 여기 찍은 것이 묻힌다 —
-    # 그러면 다 재 놓고도 무엇을 봐야 할지 모르게 된다(실제로 그랬다).
+    # **Keep a file copy too.** A full-screen TUI restores the screen as it exits and buries what
+    # was printed here — you measure it all and then cannot find what to look at (it happened).
     lines = []
     def say(x=""):
         lines.append(x)
@@ -168,7 +168,7 @@ def report(argv, dur, total, titles, marks, asked) -> None:
         say("   them through to your real terminal, so what you saw is what it does.)")
         say()
 
-    # 제목이 도는 구간을 palmar 와 같은 규칙으로 센다
+    # Count the stretches where the title is spinning, by the same rule palmar uses
     busy = []
     for i, (t, _) in enumerate(titles):
         n = sum(1 for tt, _ in titles if 0 <= t - tt <= WINDOW_S)
@@ -206,7 +206,7 @@ def report(argv, dur, total, titles, marks, asked) -> None:
         say("  palmar needs the output-activity fallback for this one (issue #22).")
 
     if not spans and marks:
-        # 되돌림이 실제로 이 에이전트를 켤 수 있는지 — 조용한 구간의 모양으로 가늠한다
+        # Could the fallback actually light this agent up — gauged from the quiet gaps' shape
         gaps = [b - a for a, b in zip(marks, marks[1:]) if b - a > 1.0]
         say()
         say("would the output fallback catch it?")

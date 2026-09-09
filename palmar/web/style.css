@@ -1,27 +1,30 @@
-/* palmar — 화면 스타일.
+/* palmar — screen styles.
  *
- * 정본은 디자인 목업(대화 아티팩트 "palmar", decisions.md "디자인" 절)이다. 토큰·레이아웃·컴포넌트는
- * 거기서 그대로 옮겼다. 덧붙인 것은 아래 "xterm 호스팅" 과 "동작용" 절만이다.
+ * The source of truth is the design mockup (conversation artifact "palmar", decisions.md "디자인"
+ * section). Tokens, layout and components were carried over from there as-is. The only additions are the
+ * "xterm hosting" and "behaviour" sections below.
  *
- * 임시(⑥ 미정): --st-work / --st-wait / --st-done / --st-idle 은 상태 색이다. JS 는 status 문자열을
- * 클래스(wait/work/done/idle)로만 바꾸고, 색은 이 파일 밖에 없다. 매핑이 정해지면 여기만 고친다.
+ * Temporary (⑥ undecided): --st-work / --st-wait / --st-done / --st-idle are the status colors. JS turns
+ * the status string into a class (wait/work/done/idle) and nothing else; the colors live nowhere but this
+ * file. Once the mapping is decided, this is the only place to fix.
  *
- * 2026-09-08 에 붙은 것(⑪ ⑫): 캔버스 탭 줄(.tabs), 미니맵(.mm), 목록 그룹 접기(.grp), 이름 고치기(.ed).
- * **새 색을 만들지 않았다** — 탭의 점도 미니맵 사각형도 위 --st-* 를 그대로 쓴다(⑥ 은 여전히 미정).
+ * Added 2026-09-08 (⑪ ⑫): the canvas tab row (.tabs), the minimap (.mm), list group folding (.grp),
+ * renaming (.ed). **No new color was made** — the tab's dot and the minimap rectangles both use the
+ * --st-* above as-is (⑥ is still undecided).
  */
 
-/* 다크 테마에 **금지된 것** (사용자, 2026-09-08):
- *   · 보라색 그라데이션
- *   · 쨍한 테크 기업 스타일의 블루
- *   · AI 웹사이트에 흔한 네온
- * 그래서 다크는 라이트(따뜻한 종이)를 뒤집은 **따뜻한 목탄**이고, 강조는 색이 아니라 밝기다(뼈색).
- * **채도를 가진 것은 신호등 셋뿐이다** — 초록·호박·빨강. 그 셋이 이 화면에서 유일하게 "봐라" 라고
- * 말하는 것이고, 다른 무엇이 색을 가지면 그 말이 묻힌다.
+/* **Banned from the dark theme** (the user, 2026-09-08):
+ *   · purple gradients
+ *   · the loud tech-company blue
+ *   · the neon that is all over AI websites
+ * So dark is light (warm paper) turned over — **warm charcoal** — and emphasis is brightness, not color
+ * (bone). **The only things with saturation are the three status lights** — green, amber, red. Those three
+ * are the one thing on this screen that says "look here", and any other colored thing buries that word.
  */
 
 /* ── tokens: light is the base, dark overrides ── */
 :root {
-  --rail-l: 256px;   /* 왼쪽 레일 폭. 사람이 끌면 JS 가 여기를 고쳐 쓴다 */
+  --rail-l: 256px;   /* left rail width. When a person drags, JS rewrites this */
   --rail-r: 232px;
   color-scheme: light dark;
   --ground:   #f3f1ec;
@@ -34,7 +37,7 @@
   --line-2:   #c9c4b9;
   --ink:      #1f2229;
   --ink-2:    #4f5563;
-  --ink-3:    #656a7a;   /* 4.9:1 위에서. 옛 #858a97 은 3.2:1 이라 작은 글자가 흐렸다 */
+  --ink-3:    #656a7a;   /* 4.9:1 against the above. The old #858a97 was 3.2:1 and small text went faint */
   --accent:   #4a58b8;
   --on-accent:#fcfbf8;
   --accent-2: rgba(74,88,184,.12);
@@ -152,15 +155,17 @@ body {
   -webkit-app-region: drag;
 }
 .top .l { display: flex; align-items: center; gap: 14px; padding: 0 16px 0 22px; }
-/* .lights: 목업의 macOS 창 버튼. 브라우저 탭에서는 기능이 없고, 그 빨강·노랑·초록 세 색은 신호등의
-   것이라 여기 두면 안 된다(AGENTS.md "macOS 식 …버튼을 달지 마라"). DOM 에도 없다(index.html). 그래서
-   죽은 규칙(#19)을 지웠다 — Tauri 로 감쌀 때 창 버튼이 필요하면 그때 신호등 아닌 색으로 다시 넣는다. */
-/* 워드마크. 높이만 주고 너비는 viewBox 가 정한다. 획은 currentColor 라 테마를 따라간다. */
-/* 위 줄이 44px 다. 로고는 그 안에서 위아래 여백이 남는 만큼 크게 — 15px → 21px → 26px 로 왔다. */
+/* .lights: the mockup's macOS window buttons. They do nothing in a browser tab, and their red·yellow·green
+   belong to the status lights, so they must not sit here (AGENTS.md "macOS 식 …버튼을 달지 마라").
+   They are not in the DOM either (index.html). So the dead rule (#19) was deleted — if window buttons are
+   needed when this is wrapped in Tauri, they come back then in colors that are not the status lights'. */
+/* Wordmark. Height only; the viewBox decides the width. Strokes are currentColor, so it follows the theme. */
+/* The top bar is 44px. The logo is as big as the leftover space above and below allows — 15px → 21px → 26px. */
 .brand { height: 26px; width: auto; display: block; color: var(--ink); flex: none; }
 .brand .qd { fill: currentColor; opacity: .34; }
-/* 마지막 속의 점. 나를 부르는 것이 있을 때만 켠다 — 캔버스 탭과 같은 규칙이고 같은 색이다(⑥).
-   몇 개가 기다리든 하나만 켠다: 게이지가 아니다(docs/brand/README.md "점 규칙"). */
+/* The dot in the last counter. It lights only when something is calling for you — the same rule and the
+   same color as the canvas tabs (⑥). However many are waiting, only one lights: it is not a gauge
+   (docs/brand/README.md "점 규칙"). */
 .brand .wd { fill: currentColor; opacity: .34; }
 body.wants .brand .wd { fill: var(--st-wait); opacity: 1; }
 .top .c { display: flex; justify-content: center; }
@@ -184,10 +189,10 @@ kbd {
 }
 .top .r { display: flex; align-items: center; gap: 12px; justify-content: flex-end; padding: 0 14px; color: var(--ink-3); font-size: 11.5px; }
 .top .r .hint { display: flex; align-items: center; gap: 5px; white-space: nowrap; min-width: 0; overflow: hidden; }
-/* 컨트롤은 절대 줄지 않는다. 안 그러면 좁은 레일에서 힌트가 자리를 먹고 단추가 찌그러진다 —
-   벨을 넣기 전에도 그랬고(실측: 톱니가 16px 에서 2px 로 눌렸다) 그냥 안 보였을 뿐이다. */
+/* The controls never shrink. Otherwise, in a narrow rail, the hint eats the space and the buttons get
+   crushed — true before the bell too (measured: the gear squeezed from 16px to 2px), it just did not show. */
 .top .r .bell, .top .r .theme, .top .r .gear { flex: none; }
-/* 단축키 단추. 테마 단추와 같은 상자다 — 위 줄에 새 모양을 만들지 않는다. */
+/* Shortcuts button. The same box as the theme button — no new shape on the top bar. */
 .help {
   width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--btn);
   display: grid; place-items: center; cursor: pointer; color: var(--ink-3); flex: none;
@@ -195,7 +200,7 @@ kbd {
   -webkit-app-region: no-drag;
 }
 .help:hover, .help[aria-expanded="true"] { border-color: var(--accent); color: var(--ink); }
-/* 단축키 판. 위 줄 오른쪽 아래에 뜬다 — 부른 단추 가까이. */
+/* Shortcuts panel. It opens under the right end of the top bar — near the button that called it. */
 .keys {
   position: absolute; top: 46px; right: 14px; z-index: 90; width: 372px; max-width: calc(100vw - 28px);
   background: var(--float); border: 1px solid var(--line-2); border-radius: 10px;
@@ -248,12 +253,12 @@ kbd {
   width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid currentColor; display: block;
   background: linear-gradient(90deg, currentColor 50%, transparent 50%);
 }
-/* 세 상태 표시: system 은 반원(위 기본), light 는 빈 원, dark 는 꽉 찬 원 */
+/* The three states shown: system is a half circle (the default above), light an empty circle, dark a full one */
 .theme[data-mode="light"] i { background: transparent; }
 .theme[data-mode="dark"] i { background: currentColor; }
 
-/* #40 알림 스위치. .theme 과 같은 상자다 — 위 줄에 새 모양을 만들지 않는다.
-   꺼짐은 흐린 글자색, 켜짐은 --st-wait 다(⑥ 의 상태 색을 그대로 쓴다 — 새 색은 없다). */
+/* #40 notification switch. The same box as .theme — no new shape on the top bar.
+   Off is the faint text color, on is --st-wait (⑥'s status color as-is — there is no new color). */
 .bell {
   width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--btn);
   display: grid; place-items: center; cursor: pointer; color: var(--ink-3);
@@ -263,27 +268,27 @@ kbd {
 .bell[data-on="1"] { color: var(--st-wait); border-color: var(--st-wait); }
 
 /* ── body grid ──────────────────────────────── */
-/* 레일 폭은 **한 곳에만** 있다(:root 의 --rail-l·--rail-r). 전에는 .top 과 .body 가 같은 값을
-   `256px 1fr 232px` 로 따로 적고 있어서, 한쪽만 고치면 위 줄과 아래 몸이 어긋났다. */
+/* The rail widths live in **one place only** (--rail-l·--rail-r on :root). Before, .top and .body each wrote
+   the same `256px 1fr 232px` separately, so fixing one side left the top bar and the body below misaligned. */
 .body { display: grid; grid-template-columns: var(--rail-l) 1fr var(--rail-r); min-height: 0;
         position: relative; }
 
-/* 레일 경계를 끄는 손잡이. 격자에 칸을 더하지 않고 경계 위에 얹는다 — 칸을 더하면 위 줄(.top)과
-   칸 수가 달라져 둘을 같은 변수로 묶을 수 없다. */
+/* The grip that drags the rail boundary. It lies on top of the boundary instead of adding a grid column — one
+   more column and the count would differ from the top bar (.top), so the two could not share one variable. */
 .rz {
   position: absolute; top: 0; bottom: 0; width: 7px; z-index: 40;
   cursor: col-resize; touch-action: none; background: transparent;
 }
-.rz::after {                                   /* 잡는 자리를 보여 주는 얇은 선. 평소엔 안 보인다 */
+.rz::after {                                   /* the thin line marking where to grab. Normally unseen */
   content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px;
   background: var(--accent); opacity: 0; transition: opacity .12s;
 }
 .rz:hover::after, .rz:focus-visible::after, .rz.on::after { opacity: .85; }
 .rz:focus-visible { outline: none; }
-/* **스크롤 막대 자리를 비켜 선다.** 경계에 걸쳐 두었더니 왼쪽 손잡이는 왼쪽 레일의 막대를,
-   오른쪽 손잡이는 캔버스의 막대를 덮었다 — 막대를 잡으려다 레일 크기가 바뀌었다(보고 2026-09-08).
-   각자 막대가 없는 쪽으로 통째로 옮긴다: 왼쪽은 캔버스 쪽(캔버스에 왼쪽 막대는 없다),
-   오른쪽은 레일 쪽(레일의 막대는 창 오른쪽 끝에 있다). */
+/* **They stand clear of the scrollbars.** Straddling the boundary, the left grip covered the left rail's
+   scrollbar and the right grip covered the canvas's — reaching for a scrollbar resized the rail instead
+   (reported 2026-09-08). Each moves wholesale to the side with no scrollbar: the left one to the canvas side
+   (the canvas has no left scrollbar), the right one to the rail side (the rail's bar is at the window's edge). */
 .rz.l { left: var(--rail-l); }
 .rz.r { left: auto; right: calc(var(--rail-r) - 7px); }
 .rz.l::after { left: 0; }
@@ -305,8 +310,8 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 }
 .ib:hover { border-color: var(--accent); color: var(--ink); }
 .scroll { overflow-y: auto; min-height: 0; flex: 1; }
-/* 잡기 좋을 만큼 굵게 — 8px 는 손이 자꾸 빗나갔다. 그리고 **손이 올라간 것을 색으로 말한다**:
-   스크롤 막대는 커서 모양이 안 바뀌므로 그것밖에 알릴 길이 없다. */
+/* Thick enough to grab — at 8px the hand kept missing. And **hover is said with color**: the cursor shape
+   does not change over a scrollbar, so there is no other way to tell. */
 .scroll::-webkit-scrollbar { width: 12px; }
 .scroll::-webkit-scrollbar-thumb {
   background: var(--line-2); border-radius: 6px;
@@ -316,42 +321,46 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .scroll::-webkit-scrollbar-thumb:active { background: var(--accent); background-clip: padding-box; }
 
 /* ── sessions (left) ────────────────────────── */
-/* 묶음 머리글. **자기 내용보다 흐리면 머리글로 안 읽힌다** — 전에는 --ink-3 이라 아래 줄들보다
-   뒤로 물러나 있었고, 묶음 사이를 가르는 것도 없어 어디서 끊기는지 안 보였다(사용자 보고).
-   셋으로 고친다: 위에 실선 하나, 스크롤해도 머리글이 남게(sticky), 이름은 한 단계 진하게. */
+/* Group header. **Fainter than its own contents and it stops reading as a header** — it was --ink-3, so it
+   receded behind the rows below it, and nothing divided one group from the next, so where one ended was
+   invisible (user report). Fixed three ways: a solid line above, sticky so the header stays while scrolling,
+   and the name one step darker. */
 .grp {
   display: flex; align-items: center; gap: 7px; padding: 9px 14px 5px;
   font-size: 10.5px; color: var(--ink-3); letter-spacing: .06em; text-transform: uppercase;
   cursor: pointer; user-select: none;
   position: sticky; top: 0; z-index: 2;
-  background: var(--rail);            /* 안 깔면 스크롤할 때 밑의 줄이 비쳐 겹친다 */
+  background: var(--rail);            /* without it, rows underneath show through and overlap while scrolling */
   border-top: 1px solid var(--line); margin-top: 5px;
 }
 .grp:first-child { border-top: 0; margin-top: 0; }
 .grp:hover { color: var(--ink-2); }
-/* #31 ③ 접히지 않는 묶음(상태 묶음의 waiting). 누를 것이 아니므로 손가락도 hover 도 안 준다 —
-   "여기는 접을 수 없다" 를 커서로 먼저 말한다. 캐럿 자리는 빈 채로 남겨 줄이 안 밀리게 한다. */
+/* #31 ③ A group that does not fold (waiting, in the status grouping). It is not for pressing, so it gets no
+   pointer and no hover — the cursor says "this one does not fold" first. The caret slot stays empty so the row
+   does not shift. */
 .grp.nofold { cursor: default; }
 .grp.nofold:hover { color: var(--ink-3); }
-/* 접기 캐럿은 오른쪽 트리(.row .car)와 같은 글리프·같은 폭이다 — 두 곳에서 다르게 생기지 않게 */
+/* The fold caret is the same glyph and width as the right tree's (.row .car) — so the two never diverge */
 .grp .car { color: var(--ink-3); font-size: 9px; width: 8px; flex: none; letter-spacing: 0; }
 .grp .ct { margin-left: auto; color: var(--ink-3); letter-spacing: 0; }
-/* #31 ③ 캔버스 묶음의 머리글. 이름은 사람이 지은 것이라 대문자로 바꾸지 않는다 — 상태 묶음(대문자)과
-   눈으로 갈린다. 지금 보고 있는 캔버스의 머리글만 글자가 진하다(.tab.cur / .ses.cur 와 같은 뜻). */
+/* #31 ③ The header of a canvas group. The name was given by a person, so it is not uppercased — that splits it
+   visually from the status groups (uppercase). Only the header of the canvas being viewed is darker (the same
+   meaning as .tab.cur / .ses.cur). */
 .grp.cvg .nm {
   text-transform: none; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 11.5px; font-weight: 500; color: var(--ink-2);   /* 아래 줄들보다 흐리지 않게 */
+  font-size: 11.5px; font-weight: 500; color: var(--ink-2);   /* not fainter than the rows below */
 }
 .grp.cvg.cur .nm { color: var(--ink); }
 .grp.cvg .dot { margin-left: 2px; }
-/* 접힌 묶음이 감춘 개수. 눌러도 펴진다 — 감춘 것에 닿는 길이 머리글 말고도 하나 더 있게. */
+/* The count a folded group hides. Pressing it unfolds too — one more way to the hidden than the header. */
 .grest {
   margin: 0 6px 2px; padding: 3px 14px 5px 32px; font-size: 10.5px; color: var(--ink-3);
   cursor: pointer; border-radius: 6px;
 }
 .grest:hover { background: var(--hover); color: var(--ink-2); }
-/* 접힘이 감춘 것 중 나를 부르는 것이 있으면 이 줄이 흐린 글자로 남지 않는다 — 접어 둔 캔버스 안을
-   가리키는 표시가 머리글의 점과 이 줄 둘뿐이라, 둘 다 안 보이면 접힘이 신호를 삼킨다(#43). */
+/* If anything the fold hides is calling for you, this row does not stay in the faint text color — the only two
+   marks pointing inside a folded canvas are the header's dot and this row, so if neither shows, folding
+   swallows the signal (#43). */
 .grest.wants { color: var(--ink-2); font-weight: 500; }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .dot.work { background: var(--st-work); box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-work) 16%, transparent); }
@@ -364,11 +373,11 @@ body.rz-drag { cursor: col-resize; user-select: none; }
   cursor: pointer; border: 1px solid transparent;
 }
 .ses:hover { background: var(--hover); }
-/* #31 ③ 접힌 캔버스 묶음 안에서도 남아 있는 줄 — 기다리는 것이다. 왼쪽에 --st-wait 선 하나로 표시한다.
-   새 색이 아니다(⑥ 은 여전히 미정). "왜 접었는데 이건 보이나" 에 답하는 표시다. */
+/* #31 ③ A row that stays even inside a folded canvas group — it is waiting. Marked with one --st-wait line on
+   the left. Not a new color (⑥ is still undecided). It answers "why is this showing when I folded it". */
 .ses.pinned { box-shadow: inset 2px 0 0 var(--st-wait); }
-/* 캔버스 묶음에 속한 줄은 한 칸 들어간다 — 머리글에 딸린 것이 눈으로 보이게. 상태로 묶는 옛 길
-   (renderByStatus)에는 안 붙인다: 거기서는 묶음이 캔버스가 아니라 상태라 들여쓸 것이 없다. */
+/* A row in a canvas group indents one step — so that belonging to the header is visible. Not applied on the old
+   status-grouping path (renderByStatus): there the group is a status, not a canvas, nothing to indent under. */
 .ses.cvrow { margin-left: 14px; }
 .ses.cur { background: var(--accent-2); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 .ses .who { font-size: 12.5px; font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -376,18 +385,18 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .ses .ago { font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
 .ses .msg { grid-column: 2 / 5; grid-row: 2; font-size: 11px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ses.wait .msg { color: var(--st-wait); }
-/* #31 ④ 목록 행의 닫기. **자리는 늘 잡아 둔다**(칸 하나) — 손이 닿을 때 칸이 생기면 줄이 흔들린다.
-   손이 닿거나(hover) 포커스가 들어와야 보이고, 그래야 눌린다. 키보드로는 Tab 으로 닿는다. */
+/* #31 ④ Close, on a list row. **The slot is always held** (one column) — a column appearing on hover would
+   shake the row. It shows, and can be pressed, only on hover or focus. The keyboard reaches it with Tab. */
 .ses .cl { grid-column: 4; grid-row: 1; width: 16px; height: 16px; opacity: 0; }
 .ses .cl::before { width: 8px; height: 8px; }
 .ses:hover .cl, .ses:focus-within .cl { opacity: 1; }
-/* 확인 줄이 열려 있는 동안 그 행의 둘째 줄은 물음이 차지한다 — 마지막 줄 글자는 잠시 내린다 */
+/* While confirm is open, the question takes the row's second line — the last-line text steps aside briefly */
 .ses.cfm-on .msg { display: none; }
 .ses .cfm { grid-column: 2 / 5; grid-row: 2; }
 .ses.closing, .tile.closing { opacity: .5; }
 .ses.closing .cl, .tile.closing .cl { pointer-events: none; }
-/* ⑪: 다른 캔버스의 세션에 붙는 이름표. "↗ off" 와 **같은 칸·같은 생김새**다 — 둘 다 "여기 안 보인다" 는 말이다.
-   (한 세션에 둘이 같이 붙지는 않는다: 다른 캔버스면 이 캔버스에서 화면 밖인지를 따지지 않는다.) */
+/* ⑪: the label on a session from another canvas. **Same slot, same look** as "↗ off" — both say "not visible here".
+   (Never both on one session: if it is on another canvas, being off-screen in this one is not asked.) */
 .ses .off, .ses .cvb {
   font-size: 9.5px; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 3px;
   padding: 0 4px; margin-right: 4px;
@@ -401,17 +410,18 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 }
 .rf b { color: var(--ink-2); font-weight: 500; }
 .rf i { font-style: normal; color: var(--ink-2); }
-/* #18: 훅 설치 표시(✓)와 아래 상태바 데몬 점(●)은 세션 상태가 아니다 — 신호등 초록(--st-work)을 쓰면
-   AGENTS "신호등 색을 다른 데 쓰지 마라" 위반이라 --accent 로 바꿨다. 목업은 초록을 썼으니 디자인 정본과
-   규칙 정본의 충돌이다 — 어느 쪽으로 갈지는 사람이 decisions.md 디자인 절에 적어 정한다. */
+/* #18: the hook-installed mark (✓) and the daemon dot (●) below in the status bar are not session status —
+   using status-light green (--st-work) would break AGENTS "신호등 색을 다른 데 쓰지 마라", so
+   they were changed to --accent. The mockup used green, so the design source of truth and the rules source of
+   truth conflict — which way to go is for a person to settle in the design section of decisions.md. */
 .rf i::before { content: "✓ "; color: var(--accent); }
 .rf i.no { color: var(--ink-3); } .rf i.no::before { content: "– "; color: var(--ink-3); }
 
 /* ── canvas tabs (⑪) ────────────────────────── */
-/* 탭은 캔버스 **위**에 붙고 레일에는 걸치지 않는다(protocol.md "캔버스"). 그래서 가운데 칸 안에서
-   .cvcol 이 세로로 나누고, 탭 줄은 그 첫 줄이다. */
+/* Tabs attach **above** the canvas and never reach over the rails (protocol.md "캔버스"). So inside the middle
+   column .cvcol splits it vertically, and the tab row is its first row. */
 .cvcol { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-/* 탭 줄과 캔버스 단추를 한 줄에. 단추는 탭 줄 밖이라 안 밀려난다. */
+/* The tab row and the canvas button on one line. The button is outside the tab row, so it is not pushed off. */
 .cvbar {
   flex: none; display: flex; align-items: stretch; min-width: 0;
   background: var(--rail); border-bottom: 1px solid var(--line);
@@ -425,7 +435,7 @@ body.rz-drag { cursor: col-resize; user-select: none; }
   -webkit-appearance: none; appearance: none;
 }
 .tidy:hover { border-color: var(--accent); color: var(--ink); }
-/* 할 일이 없으면 있다는 것만 알리고 물러나 있는다 — 눌러도 아무 일이 없으면 단추가 거짓말이 된다. */
+/* With nothing to do it only says it is there and stays back — a button that does nothing when pressed lies. */
 .tidy:disabled { opacity: .3; cursor: default; border-color: var(--line); }
 .tidy:disabled:hover { color: var(--ink-3); }
 .tabs {
@@ -434,7 +444,7 @@ body.rz-drag { cursor: col-resize; user-select: none; }
   overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
 }
 .tabs::-webkit-scrollbar { height: 0; }
-/* display:flex 가 [hidden] 의 display:none 을 이기므로 여기서 다시 내린다 (캔버스를 모르는 데몬) */
+/* display:flex beats [hidden]'s display:none, so it is put back down here (a daemon that knows no canvases) */
 .tabs[hidden] { display: none; }
 .tab {
   flex: none; display: flex; align-items: center; gap: 6px; max-width: 190px;
@@ -443,10 +453,10 @@ body.rz-drag { cursor: col-resize; user-select: none; }
   color: var(--ink-2); font-size: 11.5px; cursor: pointer; user-select: none;
 }
 .tab:hover { background: var(--hover); }
-/* 캔버스 지우기(#18). **지울 수 있을 때만 나타난다** — 지금 보고 있는 탭이고, 그 안에 터미널이
-   하나도 없고, 마지막 캔버스가 아닐 때. 데몬이 409 로 거절하는 두 조건을 그대로 뒤집은 것이라
-   화면이 거절당할 요청을 낼 일이 없다. 없는 동안에는 자리도 안 차지한다.
-   × 는 타일의 닫기(.cl)와 **같은 그림**이다 — 같은 뜻에 다른 그림을 쓰지 않는다. */
+/* Delete canvas (#18). **It appears only when deleting is possible** — the tab being viewed, with not one
+   terminal in it, and not the last canvas. It is exactly the inverse of the two conditions the daemon refuses
+   with 409, so the screen never sends a request that will be refused. While absent it takes up no space either.
+   The × is the **same drawing** as a tile's close (.cl) — the same meaning does not get a different drawing. */
 .tab .cx {
   width: 14px; height: 14px; border-radius: 3px; border: 0; flex: none; margin-right: -3px;
   display: grid; place-items: center; cursor: pointer; color: var(--ink-3); background: transparent;
@@ -459,13 +469,13 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 }
 .tab .cx:hover, .tab .cx:focus-visible { opacity: 1; color: var(--ink); background: var(--btn); }
 .tab .cx:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
-/* 고른 것을 표시하는 법은 목록·트리와 같다(.ses.cur / .row.sel) — 새 표현을 만들지 않는다 */
+/* Selection is shown as in the list and the tree (.ses.cur / .row.sel) — no new expression is made */
 .tab.cur {
   background: var(--accent-2); color: var(--ink);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .tab .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 탭에 붙는 것은 점 하나뿐이다(decisions.md ⑪ "그 이상 안 넣는다"). 색은 --st-wait — 새 색이 아니다 */
+/* One dot on a tab and nothing more (decisions.md ⑪ "그 이상 안 넣는다"). Color --st-wait — not a new color */
 .tab .dot { width: 6px; height: 6px; margin-left: 1px; }
 .tab.drag { opacity: .55; }
 .tabs .ib { margin: 0 0 2px 4px; }
@@ -475,13 +485,13 @@ body.rz-drag { cursor: col-resize; user-select: none; }
   position: relative; overflow: hidden; background-color: var(--canvas);
   flex: 1; min-height: 0;
 }
-/* 동작용: 타일은 이 스크롤 층 안에 놓인다. 빈 자리가 없어 아래에 놓인 타일까지 스크롤로 닿는다
-   (⑩ 미정 — 이건 "밀 자리 없을 때" 의 결정이 아니라 아래에 놓인 것을 볼 최소한이다).
-   점 격자는 내용과 함께 움직인다(background-attachment: local). */
+/* Behaviour: tiles are placed inside this scroll layer. Scrolling reaches even the tiles put below for want of
+   free space (⑩ undecided — this is not the decision about "when there is no room to push", it is the minimum
+   needed to see what was put below). The dot grid moves with the content (background-attachment: local). */
 .cv-scroll {
   position: absolute; inset: 0; overflow: auto;
-  /* 타일의 z-index 는 포커스마다 ++ 되어 끝이 없다. 여기서 쌓임 맥락을 하나 만들어 그것을 이 층 안에
-     가둔다 — 그래야 위에 뜨는 것들(미니맵·토스트·Esc 알약)이 몇 번을 눌러도 타일에 안 덮인다. */
+  /* A tile's z-index goes ++ on every focus, without end. A stacking context here pens that inside this layer —
+     so what floats above (minimap, toast, Esc pill) is never buried by a tile, however often you click. */
   isolation: isolate;
   background-image: radial-gradient(var(--dot) 1px, transparent 1.2px);
   background-size: 22px 22px; background-position: 11px 11px; background-attachment: local;
@@ -494,7 +504,7 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .cv-scroll::-webkit-scrollbar-thumb:hover { background: var(--ink-3); background-clip: padding-box; }
 .cv-scroll::-webkit-scrollbar-thumb:active { background: var(--accent); background-clip: padding-box; }
 .cv.has-max .cv-scroll { overflow: hidden; }
-/* 빈 자리를 쥐고 끌 수 있다는 것을 커서로 먼저 말한다. 타일 위에서는 타일의 커서가 이긴다. */
+/* The cursor says first that empty space can be grabbed and dragged. Over a tile, the tile's cursor wins. */
 .cv-scroll { cursor: grab; }
 .cv-scroll.panning { cursor: grabbing; user-select: none; }
 .cv-scroll > * { cursor: auto; }
@@ -505,10 +515,11 @@ body.rz-drag { cursor: col-resize; user-select: none; }
   transition: left .35s cubic-bezier(.2,.8,.2,1), top .35s cubic-bezier(.2,.8,.2,1),
               width .35s cubic-bezier(.2,.8,.2,1), height .35s cubic-bezier(.2,.8,.2,1);
 }
-.tile.drag { transition: none; }                 /* 동작용: 끌거나 크기 조절하는 동안은 즉시 따라온다 */
+.tile.drag { transition: none; }                 /* Behaviour: while dragging or resizing it follows instantly */
 .tile.focus { border-color: color-mix(in srgb, var(--accent) 60%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent), var(--shadow-2); }
 .tile.fresh { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
-/* 다른 캔버스의 타일. **세션도 웹소켓도 살아 있고 화면에만 없다** — 원칙 2("세션은 UI 보다 오래 산다"). */
+/* A tile from another canvas. **The session and the websocket are both alive; it is only off the screen** —
+   principle 2 ("sessions outlive the UI"). */
 .tile.other { display: none; }
 .tile.max { left: 10px !important; top: 10px !important; width: calc(100% - 20px) !important; height: calc(100% - 20px) !important; z-index: 1000 !important; }
 .tb {
@@ -519,32 +530,35 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .tb .name { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tb .name span { color: var(--ink-3); font-weight: 400; }
 .tb .sz { margin-left: auto; font-size: 10.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; flex: none; }
-/* #25 이 판의 글자 크기가 기본이 아닐 때. 되돌리는 자리라는 것만 알리면 되므로 밑줄 하나다 —
-   제목 줄에 단추를 하나 더 놓지 않으려고 이미 있는 크기 표시에 얹었다. */
+/* #25 For when this pane's font size is not the default. All it need say is where you put it back, so it is
+   one underline — laid onto the size readout already there, to avoid one more button on the title bar. */
 .tb .sz.own { cursor: pointer; color: var(--ink-2); text-decoration: underline dotted; text-underline-offset: 2px; }
 .tb .sz.own:hover { color: var(--ink); }
 .tb .st { font-size: 10.5px; padding: 1px 6px; border-radius: 3px; flex: none; }
 .tb .st.wait { color: var(--st-wait); background: color-mix(in srgb, var(--st-wait) 14%, transparent); }
 .tb .st.work { color: var(--st-work); background: color-mix(in srgb, var(--st-work) 14%, transparent); }
 .tb .st.done { color: var(--st-done); background: color-mix(in srgb, var(--st-done) 14%, transparent); }
-/* #31 ① 닫기(.cl)는 확대(.xp)·이름 바꾸기(.rn)와 **같은 규칙 한 줄** 안에 있다 — 크기·테·hover 가
-   두 곳에서 갈릴 자리를 안 만든다. .cl 만 <button> 이라(키보드로 닿아야 한다) 단추 기본값을 여기서 지운다. */
+/* #31 ① Close (.cl) sits in the **same one rule** as expand (.xp) and rename (.rn) — no place for size, border
+   or hover to diverge in two spots. Only .cl is a <button> (the keyboard must reach it), so the button defaults
+   are cleared here. */
 .xp, .rn, .cl {
   width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--line-2); flex: none;
   display: grid; place-items: center; cursor: pointer; color: var(--ink-3); background: transparent;
   padding: 0; font: inherit; -webkit-appearance: none; appearance: none;
 }
 .xp::before { content: ""; width: 7px; height: 7px; border: 1.5px solid currentColor; border-radius: 1px; }
-/* 획 둘(×). 글리프(✕)를 안 쓴 이유는 .rn 과 같다 — 폰트마다 다르게 그려진다(AGENTS.md).
-   hover 색을 빨강으로 하지 않는다: 빨강은 신호등의 것이다(AGENTS "신호등 색을 다른 데 쓰지 마라", #18 과 같은 자리).
-   그래서 .xp·.rn 과 **똑같이** --accent 로 든다. 부수는 것을 색이 아니라 확인 한 걸음이 막는다. */
+/* Two strokes (×). The glyph (✕) is avoided for the same reason as .rn — fonts draw it differently (AGENTS.md).
+   The hover color is not red: red belongs to the status lights (AGENTS "do not use the status-light colors
+   elsewhere", the same spot as #18). So it lights up **exactly like** .xp·.rn, in --accent. What holds back
+   destruction is one confirmation step, not a color. */
 .cl::before {
   content: ""; width: 9px; height: 9px;
   background: linear-gradient(45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%),
               linear-gradient(-45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%);
 }
-/* ⑫ 이름 바꾸기. 상자는 확대 상자(.xp)와 같은 몸이고 안의 그림만 다르다 — 획 하나(연필).
-   글리프(✎)를 안 쓴 이유는 신호등과 같다: 폰트마다 다르게 그려진다(AGENTS.md). */
+/* ⑫ Rename. The box is the same body as the expand box (.xp), only the drawing inside differs — one stroke
+   (a pencil). The glyph (✎) is avoided for the same reason as the status lights: fonts draw it differently
+   (AGENTS.md). */
 .rn::before {
   content: ""; width: 10px; height: 10px;
   background: linear-gradient(135deg, transparent 0 40%, currentColor 40% 60%, transparent 60%);
@@ -553,9 +567,10 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .tile.focus .xp, .tile.focus .rn, .tile.focus .cl {
   color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent);
 }
-/* ── 닫기 확인 (#31 ①④) ─────────────────────
-   타일 제목줄과 목록 행이 **같은 줄·같은 두 단추**를 쓴다. 있는 동안 host 는 .cfm-on 을 달고,
-   그동안 host 의 다른 자식은 내려간다 — 자식을 떼었다 붙이지 않아 방송이 와도 안 부서진다. */
+/* ── close confirm (#31 ①④) ─────────────────
+   The tile title bar and the list row use the **same row, the same two buttons**. While it is up, host wears
+   .cfm-on and host's other children go down — no child is detached and re-attached, so an arriving broadcast
+   does not break it. */
 .tb.cfm-on > :not(.cfm) { display: none; }
 .cfm { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
 .cfm .q { font-size: 11px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -567,22 +582,22 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .cbtn:hover, .cbtn:focus-visible { border-color: var(--accent); color: var(--ink); }
 .cbtn.yes { margin-left: auto; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .cbtn.yes:hover, .cbtn.yes:focus-visible { color: var(--on-accent); opacity: .88; }
-/* 제자리에서 이름을 고치는 칸. 탭과 타일 제목이 같이 쓴다 — 글꼴은 놓인 자리에서 물려받는다 */
+/* The field for fixing a name in place. Tabs and tile titles share it — the font is inherited where it sits */
 .ed {
   font: inherit; color: var(--ink); background: var(--btn); min-width: 60px; width: 100%;
   border: 1px solid var(--accent); border-radius: 4px; padding: 0 4px; outline: 0;
 }
 .tile.max .xp { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
-/* 목업의 .term 은 글자를 직접 담았다. 여기서는 xterm.js 가 그 안에 그린다 — 글꼴·색은 JS 가 CSS 변수를
-   읽어 xterm 테마로 넘긴다(색이 두 곳에 있지 않게). 여백 9px 12px 은 .xterm 에 둔다 — FitAddon 이
-   그 여백을 빼고 행·열을 센다. */
+/* The mockup's .term held the text itself. Here xterm.js draws inside it — JS reads the CSS variables and hands
+   the font and colors to the xterm theme (so the colors are not in two places). The 9px 12px padding goes on
+   .xterm — FitAddon subtracts that padding when it counts rows and columns. */
 .term {
   flex: 1; min-height: 0; overflow: hidden; position: relative;
   font-size: 11.5px; color: var(--term-ink);
 }
 .term .xterm { height: 100%; padding: 9px 12px; }
-/* xterm.css 는 뷰포트를 #000 으로 칠하고, 뷰포트는 .xterm 의 여백까지 덮는다 — 밝은 테마에서 검은 테가 생겼다(실측).
-   타일 색으로 맞춘다. 색은 여기 한 곳. */
+/* xterm.css paints the viewport #000, and the viewport covers .xterm's padding too — in the light theme that
+   made a black border (measured). Match it to the tile color. The color lives here, in one place. */
 .term .xterm .xterm-viewport { background-color: var(--tile); }
 .term .xterm .xterm-viewport::-webkit-scrollbar { width: 10px; }
 .term .xterm .xterm-viewport::-webkit-scrollbar-thumb {
@@ -607,10 +622,10 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .toast b { color: var(--ink); font-weight: 500; }
 .toast .d { color: var(--ink-3); }
 .toast .undo { color: var(--accent); cursor: pointer; }
-/* ── minimap (⑩ ⑪, 스파이크 J) ──────────────────
-   **지금 보고 있는 캔버스 것 하나뿐이다.** 사각형의 자리는 JS 의 좌표 스토어에서 오고, 스크롤할 때
-   움직이는 것은 .mm-vp 의 transform 하나뿐이다 — DOM 레이아웃을 읽지 않는다(AGENTS.md).
-   색은 상태 점과 같은 --st-* 다. 미니맵을 위한 새 색은 없다. */
+/* ── minimap (⑩ ⑪, spike J) ─────────────────────
+   **There is one, for the canvas being viewed.** The rectangles' positions come from JS's coordinate store, and
+   the only thing that moves on scroll is .mm-vp's transform — the DOM layout is never read (AGENTS.md).
+   The colors are the same --st-* as the status dots. There is no new color for the minimap. */
 .mm {
   position: absolute; right: 12px; bottom: 12px; width: 168px; height: 108px; z-index: 15;
   background: var(--float); border: 1px solid var(--line-2); border-radius: 8px;
@@ -628,19 +643,19 @@ body.rz-drag { cursor: col-resize; user-select: none; }
   position: absolute; left: 0; top: 0; border: 1.5px solid var(--accent); border-radius: 2px;
   background: var(--accent-2); pointer-events: none; will-change: transform;
 }
-.cv.has-max .mm { display: none; }   /* 하나를 펼쳐 보는 동안엔 "어디 있나" 가 질문이 아니다 */
+.cv.has-max .mm { display: none; }   /* while one is expanded, "where is it" is not the question */
 
 .esc {
   position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 1001;
   background: var(--float); border: 1px solid var(--line-2); border-radius: 7px;
   padding: 5px 10px; font-size: 11px; color: var(--ink-2); display: none; gap: 8px; align-items: center;
-  cursor: pointer;   /* #21: 눌러도 캔버스로 돌아간다 — 펼친 타일은 터미널에 포커스라 Esc 가 안 먹을 수 있다 */
+  cursor: pointer;   /* #21: clicking returns to the canvas too — an expanded tile focuses the terminal, so Esc can miss */
 }
 .esc:hover { border-color: var(--accent); color: var(--ink); }
 .cv.has-max .esc { display: flex; }
 
 /* ── directories (right) ────────────────────── */
-/* 있었던 일. 아래 트리가 자리를 다 먹지 않게 높이를 묶어 두고, 넘치면 그 안에서 스크롤한다. */
+/* What happened. Its height is capped so it does not eat the tree's room below; overflow scrolls inside it. */
 .acts { flex: none; max-height: 168px; overflow-y: auto; padding: 0 8px 6px; }
 .act {
   display: grid; grid-template-columns: 7px 1fr auto; align-items: baseline; gap: 8px;
@@ -651,26 +666,26 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 .act .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .act .wt { color: var(--ink-3); }
 .act .ago { color: var(--ink-3); font-size: 10.5px; font-variant-numeric: tabular-nums; }
-/* 오래 기다린 것일수록 글자가 진해진다 — 목록에서 눈이 먼저 가야 할 자리가 곧 가장 오래 기다린 것이다. */
+/* The longer it has waited, the darker the text — the place the eye should land on first is the longest wait. */
 .act.aged .ago { color: var(--st-wait); }
 .act.stuck .ago { color: var(--ink-3); }
-/* 무리를 가르는 작은 머리. 새 색도, 새 굵기도 안 쓴다. */
+/* A small header dividing the clusters. No new color, no new weight. */
 .act-h {
   padding: 8px 6px 3px; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
   color: var(--ink-3);
 }
 .act-h:first-child { padding-top: 2px; }
 .acts .quiet { padding: 8px 6px; color: var(--ink-3); }
-/* 마지막으로 본 뒤에 생긴 것. 여기가 "없는 동안" 이다 — 새로 온 것과 이미 본 것을 가른다. */
+/* What happened since you last looked. This is the "while you were away" — it splits new from already seen. */
 .act.fresh { color: var(--ink); }
 .act.fresh .dot { box-shadow: 0 0 0 3px var(--accent-2); }
-/* 그 세션이 이제 없으면 눌러도 갈 데가 없다 — 그렇게 보이게 둔다. */
+/* If that session is gone, pressing it has nowhere to go — so it is left looking that way. */
 .act.dead { opacity: .55; cursor: default; }
 .act.dead:hover { background: transparent; }
 .acts .hint2 { padding: 6px 6px 2px; }
 
 .tree { padding: 2px 8px; font-size: 12px; line-height: 26px; }
-/* 검색 결과 행. 트리의 행과 같은 몸이고, 계층이 없으므로 캐럿 자리를 안 비운다. */
+/* A search result row. The same body as a tree row, and with no hierarchy it holds no caret slot open. */
 .row.found { padding-left: 8px; }
 .row.found .nm { overflow: hidden; text-overflow: ellipsis; }
 .row.found .br { margin-left: auto; }
@@ -706,5 +721,5 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 }
 .sb .sp { flex: 1; }
 .sb i { font-style: normal; color: var(--ink-2); }
-.sb .live::before { content: "●"; color: var(--accent); margin-right: 6px; font-size: 8px; vertical-align: 1px; }  /* #18: 신호등 초록 아님 */
+.sb .live::before { content: "●"; color: var(--accent); margin-right: 6px; font-size: 8px; vertical-align: 1px; }  /* #18: not status-light green */
 .sb .live.down::before { color: var(--ink-3); }

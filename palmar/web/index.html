@@ -4,30 +4,32 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>palmar</title>
-<link rel="icon" href="data:,">   <!-- 브라우저의 /favicon.ico 자동 요청(404)을 막는다 -->
-<!-- 주소에 열쇠가 실려 있다(#14). 지금은 바깥을 부르는 것이 하나도 없어 샐 자리가 없지만,
-     나중에 누가 하나를 들이면 그 요청의 Referer 에 열쇠가 통째로 실려 나간다. 한 줄로 못 박아 둔다. -->
+<link rel="icon" href="data:,">   <!-- stops the browser's automatic /favicon.ico request (404) -->
+<!-- The key rides in the address (#14). Nothing calls outward now, so it has nowhere to leak, but
+     the day someone adds one, the whole key goes out in that request's Referer. Nailed shut here. -->
 <meta name="referrer" content="no-referrer">
-<!-- 런타임에 외부 서비스를 부르지 않는다(AGENTS 원칙 7·autopilot "외부 서비스 호출" 금지·vendor/VERSIONS
-     "no network at runtime"). 그래서 Google Fonts 링크를 뺐다(#14). JetBrains Mono 는 style.css 의 --mono
-     첫 자리에 그대로 있어 로컬에 깔려 있으면 쓰이고, 없으면 뒷 목록(ui-monospace, Menlo…)으로 떨어진다.
-     웹폰트로 심으려면 JetBrains Mono woff2(OFL)를 palmar/web/vendor/ 에 넣어 @font-face 로 self-host 한다 —
-     디자인 정본(decisions.md:121)은 글자체를 정했지 출처를 정한 게 아니라, 그 걸음은 사람이 고른다. -->
+<!-- Nothing calls an external service at runtime (AGENTS principle 7 · autopilot bans "external service
+     calls" · vendor/VERSIONS "no network at runtime"), so the Google Fonts link is gone (#14). JetBrains
+     Mono still sits first in --mono in style.css: used if it is installed locally, otherwise falling
+     through to the rest of the list (ui-monospace, Menlo…). To self-host it, put JetBrains Mono woff2
+     (OFL) in palmar/web/vendor/ behind an @font-face — the design source of truth (decisions.md:121)
+     fixed the typeface, not where it comes from; a person picks that step. -->
 
 <link rel="stylesheet" href="vendor/xterm.css">
 <link rel="stylesheet" href="style.css">
-<!-- 데몬은 index.html 을 낼 때 head 가 닫히는 자리 바로 앞에 토큰을 심는 script 한 줄을 넣는다 (protocol.md "뜨기" 4).
-     그래서 이 파일에 head 닫는 태그는 정확히 하나여야 한다 — 주석에도 그 글자를 적지 마라(첫 것을 바꿔 끼운다). -->
+<!-- Serving index.html, the daemon inserts one script line that plants the token, right before the head
+     closes (protocol.md "뜨기" 4). So this file must hold exactly one head closing tag — do not write
+     those characters even in a comment (the first one gets substituted). -->
 </head>
 <body>
 <div class="win">
   <div class="top">
     <div class="l">
-      <!-- 목업의 .lights(macOS 창 버튼)는 넣지 않았다 — style.css 의 주석 참고. -->
-      <!-- 워드마크는 **경로로 그린 글자**다(docs/brand/). 폰트로 두면 JetBrains Mono 가 없는 기계에서
-           시스템 모노로 떨어져 얼굴이 달라진다. 여기 **그대로 심는 이유**: <img> 로 부르면 SVG 가
-           격리돼 currentColor 도 --st-wait 도 안 먹어 테마를 못 따라간다.
-           속 셋 중 마지막 점(.wd)이 "하나가 너를 기다린다" 다 — 아무도 안 기다리면 나머지처럼 흐려진다. -->
+      <!-- The mockup's .lights (the macOS window buttons) are not here — see the comment in style.css. -->
+      <!-- The wordmark is **letters drawn as paths** (docs/brand/). As a font it drops to the system mono on
+           a machine without JetBrains Mono and its face changes. **Why it is inlined here**: through <img> the
+           SVG is isolated, so neither currentColor nor --st-wait reaches it — it cannot follow the theme. The
+           last of the three dots (.wd) is "one is waiting for you"; with nobody waiting it dims like the rest. -->
       <svg class="brand" viewBox="2.0 12.0 333.5 128.0" role="img" aria-label="palmar">
       <g fill="none" stroke="currentColor" stroke-width="11.0" stroke-linecap="round" stroke-linejoin="round">
       <path d="M 13.50 57.50 V 128.50"/>
@@ -59,14 +61,14 @@
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
       </span>
       <span class="theme" id="theme" role="button" tabindex="0" title="theme: system"><i></i></span>
-      <!-- 자리표였던 톱니를 진짜 일이 있는 단추로 바꿨다. 단축키가 늘었는데 어디에도 안 적혀
-           있어서, 눌러 보고 알 수 없는 것들(복사는 Ctrl+C 가 아니다)을 아무도 못 찾았다. -->
+      <!-- The gear that was a placeholder is now a button with real work. Shortcuts had piled up with none
+           of them written anywhere, so nobody found the ones pressing does not reveal (copy is not Ctrl+C). -->
       <button class="help" id="help" type="button" title="keyboard shortcuts" aria-label="keyboard shortcuts"
               aria-haspopup="dialog" aria-expanded="false">?</button>
     </div>
   </div>
 
-  <!-- 입력 진단 결과. 개발자 도구 없이 복사할 수 있게 화면에 띄운다. -->
+  <!-- The typing report. Put on screen so it can be copied without the developer tools. -->
   <div class="diagbox" id="diagbox" hidden role="dialog" aria-label="typing report">
     <div class="keys-h">Typing report <button class="keys-x" id="diag-x" type="button" aria-label="close">×</button></div>
     <div class="diag-hint" id="diag-hint"></div>
@@ -75,7 +77,7 @@
       <span>paste this back — it says exactly what your browser sends while typing.</span></div>
   </div>
 
-  <!-- 단축키. 열려 있을 때만 뜬다. -->
+  <!-- Keyboard shortcuts. Shown only while open. -->
   <div class="keys" id="keys" hidden role="dialog" aria-modal="false" aria-label="keyboard shortcuts">
     <div class="keys-h">Keyboard <button class="keys-x" id="keys-x" type="button" aria-label="close">×</button></div>
     <dl>
@@ -105,7 +107,7 @@
   </div>
 
   <div class="body">
-    <!-- 레일 경계 손잡이(#19). 격자 칸이 아니라 경계 위에 얹은 것 — style.css `.rz` 참고. -->
+    <!-- The rail-edge grips (#19). Laid on the boundary, not in a grid cell — see `.rz` in style.css. -->
     <div class="rz l" id="rz-l" role="separator" aria-orientation="vertical" tabindex="0"
          aria-label="resize the terminal list — arrow keys, or double-click to reset"></div>
     <div class="rz r" id="rz-r" role="separator" aria-orientation="vertical" tabindex="0"
@@ -114,18 +116,18 @@
     <aside class="rail left">
       <div class="rh">Terminals <span class="n" id="count">0</span><span class="sp"></span></div>
       <div class="scroll" id="list"></div>
-      <!-- 상태의 근거를 적은 줄이다. 데몬에 물어 얻은 값이 아니라 사실을 적은 것.
-           **에이전트 이름을 늘어놓지 않는다** — 제목으로 읽는 길(protocol.md "제목으로 읽기")은
-           아무 에이전트에서나 되므로, 이름을 세는 순간 그 목록에 없는 것은 안 되는 줄로 읽힌다. -->
+      <!-- The line that says where status comes from. Not a value asked of the daemon — a stated fact.
+           **No listing of agent names** — reading by title (protocol.md "제목으로 읽기") works with
+           any agent, so the moment names are counted, whatever is not on that list reads as unsupported. -->
       <div class="rf"><b>status</b> <i>any agent, by title</i> <i>hooks: claude</i></div>
     </aside>
 
     <!-- ── canvas ─────────────────────────────── -->
-    <!-- ⑪: 탭 줄은 캔버스 **위**에 있고 양옆 레일에는 걸치지 않는다 — 그래서 가운데 칸을 .cvcol 이
-         다시 세로로 나눈다. 탭과 미니맵의 속은 JS 가 채운다(app.js "캔버스 탭" · "미니맵"). -->
+    <!-- ⑪: the tab strip sits **above** the canvas and does not reach over either rail — so .cvcol splits
+         the middle column vertically again. JS fills the tabs and minimap (app.js "canvas tabs" · "minimap"). -->
     <section class="cvcol">
-      <!-- 탭 줄과 캔버스 단추. 단추는 **탭 줄 밖**이라 탭이 많아져도 밀려나지 않는다
-           (탭 줄은 가로 스크롤이고, 그 안에 두면 ＋ 처럼 끝으로 밀린다). -->
+      <!-- The tab strip and the canvas button. The button is **outside the tab strip**, so more tabs never
+           push it away (the strip scrolls sideways, and inside it the button gets shoved to the end like ＋). -->
       <div class="cvbar">
         <div class="tabs" id="tabs" role="tablist" aria-label="canvases"></div>
         <button class="tidy" id="tidy" type="button"
@@ -139,8 +141,8 @@
       </div>
       <main class="cv" id="cv">
         <div class="cv-scroll" id="cv-scroll"></div>
-        <!-- 미니맵은 지금 보고 있는 캔버스 것 하나뿐이다(⑪).
-             데몬은 이게 있는 줄도 모른다(protocol.md "없는 것"). -->
+        <!-- One minimap only, for the canvas you are looking at (⑪).
+             The daemon does not even know it is there (protocol.md "없는 것"). -->
         <div class="mm" id="mm" hidden title="drag to move the viewport">
           <div class="mm-w" id="mm-w"></div>
           <div class="mm-vp" id="mm-vp"></div>
@@ -152,8 +154,8 @@
 
     <!-- ── right: what happened, then directories ── -->
     <aside class="rail right">
-      <!-- 신호등은 "지금" 만 말한다. 자리를 비운 사이는 이 줄이 말한다 — 무엇이 끝났고 무엇이
-           물어봤는지, 어떤 차례로. 데몬이 갖고 있으므로 브라우저를 닫아 둔 동안도 남는다. -->
+      <!-- The status lights only say "now". This list says what happened while you were away — what
+           finished and what asked, and in what order. The daemon holds it, so it survives a closed browser. -->
       <div class="rh">Attention<span class="sp"></span><span class="n" id="act-new"></span></div>
       <div class="acts" id="acts"></div>
       <div class="rh">Directories<span class="sp"></span><span class="ib" id="mkdir" title="new folder">＋</span><span class="ib" id="refresh" title="refresh">↻</span></div>

@@ -1,14 +1,15 @@
-"""palmar — 터미널을 많이 띄워 놓고 쓰는 사람을 위한 가벼운 도구.
+"""palmar — a light tool for people who keep a lot of terminals open.
 
-여는 것은 셸뿐이다. 모델을 돌리지도, 바깥으로 무엇을 보내지도 않는다.
-계약은 `docs/protocol.md` 다.
+The only thing it opens is a shell. It runs no model and sends nothing outside.
+The contract is `docs/protocol.md`.
 """
 
-#: 패키지 판. 배포할 때 올린다.
+#: Package version. Bump it on release.
 __version__ = "0.1.0"
 
-#: 데몬↔브라우저 **프로토콜** 판. 패키지 판과 따로 움직인다 — 겉이 바뀌어도 약속은 그대로일 수
-#: 있고, 그 반대도 있다. `hello` 에 실려 나가고 브라우저가 자기 것과 견준다(protocol.md "판").
-#: **올리는 때:** 프레임이나 필드의 뜻이 바뀌어 옛 페이지가 잘못 읽게 될 때. 필드를 더하기만
-#: 하는 것은 올리지 않는다 — 모르는 필드는 무시하면 그만이다.
+#: Daemon↔browser **protocol** version. It moves separately from the package version — the surface
+#: can change while the promise stays the same, and the other way round too. It rides out on `hello`
+#: and the browser compares it against its own (protocol.md "판").
+#: **Bump it when:** the meaning of a frame or a field changes so an old page reads it wrong. Only
+#: adding a field is not a bump — an unknown field can just be ignored.
 PROTOCOL = 1

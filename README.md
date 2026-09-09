@@ -136,7 +136,7 @@ takes you to that terminal.
 | Daemon | Python standard library only — PTYs, HTTP, WebSocket, hooks. One file, ~1,700 lines. |
 | Python | 3.9 and up. |
 | Browser | Vanilla JavaScript, no framework, no build step. xterm.js draws the terminals. |
-| Runs on | macOS, Linux, and WSL (run the daemon inside WSL, browse from Windows). |
+| Runs on | macOS and Linux. On Windows today, run it inside WSL and browse from Windows — native Windows is the next port, not a flag. |
 | Network | **Nothing goes out.** The daemon has no HTTP client and the page loads nothing from anywhere — no CDN, no font host, no telemetry. It binds `127.0.0.1` to serve the page and that is the only socket it opens. |
 | Security | A key gates the page, a token gates every API request (reads included), plus `Origin` and `Host` checks. Each terminal's pty is closed to every other terminal. **palmar does not isolate terminals from each other** — see below. |
 
@@ -173,6 +173,9 @@ no port to take.
 - **Nothing survives restarting the daemon** — not the canvases, not the names, not the shells.
 - **fish shells do not get the hook shim.** Title-based status still works there.
 - **A settings panel**, and a command palette behind the search box.
+- **Native Windows.** The daemon is POSIX to the bone — `pty.fork`, `tcgetpgrp`, `flock`, signals,
+  `0600` — and does not even import there. ConPTY reaches all of it through `ctypes`, so no
+  dependency is needed, but it is a port of the daemon rather than a switch. WSL works meanwhile.
 
 ## How it works
 
