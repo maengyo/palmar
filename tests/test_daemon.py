@@ -365,6 +365,70 @@ class Restore(unittest.TestCase):
             w.close()
 
 
+class ApprovalHonesty(unittest.TestCase):
+    """palmar shows "this pane wants you", so when the wait ends it must not claim you answered if
+    it never saw you type here (#14). Not a defence — a pane can be driven from outside palmar — but
+    palmar should not *say* you approved when it does not know that you did."""
+
+    def wait_then(self, d, sid, type_here):
+        """Put a pane into waiting, optionally type into it, end the wait, return the log's `what`
+        for the transition and the answered_elsewhere flag."""
+        w = WS(d, "/events?token=" + d.token)
+        w.recv_json()
+        d.raw("POST", "/hook/claude?pane=%s" % sid, {"hook_event_name": "PermissionRequest"})
+        time.sleep(0.5)
+        if type_here:
+            pty = WS(d, "/pty/%s?token=%s&cols=80&rows=24" % (sid, d.token))
+            pty.recv_json()
+            pty.send(b"y\r", opcode=0x2)
+            time.sleep(0.3)
+            pty.close()
+        d.raw("POST", "/hook/claude?pane=%s" % sid, {"hook_event_name": "Stop"})
+        time.sleep(0.8)
+        whats = []
+        w.sock.settimeout(1.5)
+        try:
+            while True:
+                m = w.recv_json()
+                if m.get("t") == "log":
+                    whats.append(m["e"]["what"])
+        except Exception:
+            pass
+        w.close()
+        flag = [x for x in d.panes() if x["id"] == sid][0].get("answered_elsewhere")
+        return whats, flag
+
+    def test_nobody_typing_here_is_not_your_approval(self):
+        with Daemon() as d:
+            s = d.open_pane(name="A")
+            time.sleep(1.0)
+            whats, flag = self.wait_then(d, s["id"], type_here=False)
+            self.assertIn("answered — not by you here", whats)
+            self.assertNotIn("finished", whats)
+            self.assertTrue(flag, "answered_elsewhere should be set")
+
+    def test_typing_here_is_your_approval(self):
+        with Daemon() as d:
+            s = d.open_pane(name="B")
+            time.sleep(1.0)
+            whats, flag = self.wait_then(d, s["id"], type_here=True)
+            self.assertIn("finished", whats)
+            self.assertNotIn("answered — not by you here", whats)
+            self.assertFalse(flag, "a wait you answered here is not 'answered elsewhere'")
+
+    def test_a_fresh_wait_clears_the_flag(self):
+        """The flag is about the *last* wait. A new one starts clean."""
+        with Daemon() as d:
+            s = d.open_pane(name="C")
+            time.sleep(1.0)
+            self.wait_then(d, s["id"], type_here=False)
+            self.assertTrue([x for x in d.panes() if x["id"] == s["id"]][0]["answered_elsewhere"])
+            d.raw("POST", "/hook/claude?pane=%s" % s["id"], {"hook_event_name": "PermissionRequest"})
+            time.sleep(0.6)
+            self.assertFalse([x for x in d.panes() if x["id"] == s["id"]][0]["answered_elsewhere"],
+                             "a fresh wait should clear the flag")
+
+
 class Doctor(unittest.TestCase):
     """--doctor exists to be pasted into an issue, so it must never print a secret."""
 

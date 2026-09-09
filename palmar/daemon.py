@@ -614,6 +614,19 @@ class Session:
         #: A bare zsh on macOS does not set the title, so it never showed up there).
         self.title_spun = False
         self.logged = "unknown"      # the status last written to the activity log (registry.changed reads it)
+        #: When a person last typed into this pane from a browser (monotonic, 0 = never). Used only
+        #: to tell an approval the person gave from one something else answered — palmar shows "this
+        #: pane wants you", so when the wait ends it should not claim you answered if you did not.
+        #: This is not a defence: a pane can be driven from outside palmar (another agent holds the
+        #: token, or edits the shim). It only keeps palmar from **saying** you approved when it does
+        #: not know that you did. See docs/decisions.md and #14.
+        self.typed_at = 0.0
+        #: When the current wait began (monotonic). A person typing *before* the wait started does
+        #: not count as answering it, so the two timestamps are compared, not just checked.
+        self.waited_at = 0.0
+        #: The last wait ended without a person typing here. Set in registry.changed, cleared the
+        #: moment they type or a new wait begins.
+        self.answered_elsewhere = False
         self.last_out = 0.0          # when bytes last came out (monotonic)
         self.out_start = 0.0         # when the output run now in progress started
         self.out_break = False       # a person typed — the next byte opens a new run
@@ -700,6 +713,9 @@ class Session:
             "title": self.title or None,
             "created": self.created, "last_event": self.last_event,
             "canvas": self.canvas, "name": self.name,
+            # True when this pane's last wait ended with nobody typing here (#14). The browser reads
+            # it so the live row says "answered — not here" instead of claiming you finished it.
+            "answered_elsewhere": self.answered_elsewhere,
         }
 
     # ── PTY → browser (spike D) ──────────────────────────────────
@@ -1350,8 +1366,19 @@ class Registry:
         seven call sites silently loses that event — so it goes where it cannot be missed."""
         st = s.eff_status()
         if st != s.logged:
-            if st in self.LOG_WORTH:
+            # **A wait that ends with nobody having typed here is not an approval palmar can vouch
+            # for.** It might be you in another window, an agent in another pane holding the token,
+            # or the command finishing on its own. palmar knows every byte it wrote to this pty
+            # (send_input is the only path), so it can tell "you answered" from "something did" — and
+            # it should not write down the first when it only saw the second (#14).
+            if s.logged == "waiting" and st != "waiting" and s.typed_at <= s.waited_at:
+                s.answered_elsewhere = True
+                self.note(s, st, "answered — not by you here")
+            elif st in self.LOG_WORTH:
                 self.note(s, st, self.LOG_WORTH[st])
+            if st == "waiting":
+                s.waited_at = time.monotonic()   # the moment this wait began, to compare typing against
+                s.answered_elsewhere = False     # a fresh wait — no answer yet
             s.logged = st
         self.broadcast({"t": "session", "s": s.to_json()})
 
@@ -2045,6 +2072,8 @@ async def ws_pty(reader, writer, headers: dict, q: dict, s: Session) -> None:
                 break
             opcode, payload = msg
             if opcode == 0x2:            # binary = keystrokes. Written straight to the PTY
+                s.typed_at = time.monotonic()   # a person touched this pane — remember when (#14)
+                s.answered_elsewhere = False
                 s.send_input(payload)
             elif opcode == 0x1:          # text = control
                 try:

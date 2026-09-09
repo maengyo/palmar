@@ -1569,7 +1569,9 @@ function msgText(s) {
   // the last line comes from the terminal buffer.
   const t = tiles.get(s.id);
   const parts = [];
-  if (s.last_event) parts.push(EVENT_PHRASE[s.last_event] || s.last_event);   // #24: event name → human words
+  // A wait this pane left with nobody typing here is not one palmar can call your approval (#14).
+  if (s.answered_elsewhere) parts.push('answered — not here');
+  else if (s.last_event) parts.push(EVENT_PHRASE[s.last_event] || s.last_event);   // #24: event name → human words
   if (t && t.lastLine) parts.push(t.lastLine);
   if (parts.length) return parts.join(' · ');
   // Do not leave something with no hooks quietly grey (AGENTS.md principle 3) — say it in words
@@ -2155,7 +2157,10 @@ function renderActs() {
     const mid = el('span', 'nm');
     mid.appendChild(el('b', null, labelOf(x)));
     mid.appendChild(document.createTextNode(' '));
-    mid.appendChild(el('span', 'wt', x.status === 'waiting' ? 'needs you' : 'finished'));
+    mid.appendChild(el('span', 'wt',
+      x.status === 'waiting' ? 'needs you'
+      : x.answered_elsewhere ? 'answered — not here'    // the daemon saw no typing in this pane (#14)
+      : 'finished'));
     r.appendChild(mid);
     r.appendChild(el('span', 'ago', right));
     r.title = title;
