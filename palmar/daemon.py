@@ -175,6 +175,13 @@ LOCK_FH = [None]     # 단일 인스턴스 락 fd — 데몬이 사는 동안 �
 #: 스파이크 D 의 크기 상한.
 MAX_COLS, MAX_ROWS = 500, 200
 
+#: 살아 있는 판의 상한. 판 하나는 셸 하나 + pty 하나 + 256KB 링 + 설정 파일 하나다. 상한이 없으면
+#: `POST /api/sessions` 반복만으로 fd 와 프로세스 슬롯이 바닥나고, 그러면 **다른 판도 같이 죽는다**
+#: (WSL 의 흔한 fd soft limit 은 1024 다 — 여기 맥의 1048576 과 딴판이라 그쪽이 먼저 무너진다).
+#: 사람이 쓰는 수보다 한참 위로 잡는다: 200개면 링만 51MB 라 이미 사람이 쓸 수 있는 범위 밖이다.
+#: 막는 것이 목적이 아니라 **바닥이 나기 전에 이유를 말하고 멈추는 것**이 목적이다.
+MAX_PANES = 200
+
 #: 판의 로케일 안전망. xterm.js 는 UTF-8 전용인데, 판의 셸에 UTF-8 로케일이 없으면 셸이 멀티바이트
 #: 입력을 깨뜨린다 — 실측(2026-09-08, `/bin/zsh -f -i`, LANG 을 지우고 "한글" 을 넣어 보고):
 #:   LANG=en_US.UTF-8 → `$ 한글`  ·  LANG 없음/LANG=C → `$ ?\x08?<0095><009c>?<0080>`
@@ -1970,6 +1977,11 @@ async def handle_request(reader, writer) -> None:
                 cid = registry.default_canvas().id
             elif not isinstance(cid, str) or cid not in registry.canvases:
                 writer.write(http_error(400, "unknown canvas"))
+                return
+            # **여기서 막는다 — 설정 파일을 쓰고 fork 하기 전에.** 뒤에서 막으면 반쯤 만들어진
+            # 자원이 남는다.
+            if len(registry.sessions) >= MAX_PANES:
+                writer.write(http_error(409, f"too many terminals ({MAX_PANES}) — close one first"))
                 return
             s = registry.create(str(cwd), cid, name)
             writer.write(http_json(201, s.to_json()))
