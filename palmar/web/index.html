@@ -60,7 +60,9 @@
             title="notify me when a terminal wants me (off)">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
       </span>
-      <span class="theme" id="theme" role="button" tabindex="0" title="theme: system"><i></i></span>
+      <!-- Three states, and the third one used to be a guess (#16). The mark alone cannot say which
+           is which, so the button says it in a word. UI text is English (decisions.md "디자인"). -->
+      <span class="theme" id="theme" role="button" tabindex="0" title="theme: system"><i></i><b>auto</b></span>
       <!-- The gear that was a placeholder is now a button with real work. Shortcuts had piled up with none
            of them written anywhere, so nobody found the ones pressing does not reveal (copy is not Ctrl+C). -->
       <button class="help" id="help" type="button" title="keyboard shortcuts" aria-label="keyboard shortcuts"

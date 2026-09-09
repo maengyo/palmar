@@ -244,16 +244,20 @@ kbd {
   border: 1px solid var(--line-2); border-radius: 3px; padding: 0 4px;
 }
 .theme {
-  width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--btn);
-  display: grid; place-items: center; cursor: pointer; color: var(--ink-2);
+  height: 22px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--btn);
+  display: flex; align-items: center; gap: 5px; padding: 0 7px 0 5px; cursor: pointer; color: var(--ink-2);
   -webkit-app-region: no-drag;
 }
+/* The state in a word (#16). The mark says light/half/dark, the word says which — the title attribute
+   needed a hover, and the third state read as "some third thing". No color: this is not a status light. */
+.theme b { font: inherit; font-size: 11px; font-weight: 400; letter-spacing: .02em; }
 .theme:hover { border-color: var(--accent); color: var(--ink); }
 .theme i {
   width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid currentColor; display: block;
   background: linear-gradient(90deg, currentColor 50%, transparent 50%);
 }
-/* The three states shown: system is a half circle (the default above), light an empty circle, dark a full one */
+/* The three marks: system a half circle (the default above), light an empty one, dark a full one.
+   The word beside them is what actually tells them apart — see .theme b. */
 .theme[data-mode="light"] i { background: transparent; }
 .theme[data-mode="dark"] i { background: currentColor; }
 

@@ -331,7 +331,11 @@ function storedTheme() {
 function applyTheme(mode) {   // mode: 'light' | 'dark' | null (system)
   if (mode) root.dataset.theme = mode; else delete root.dataset.theme;
   themeBtn.dataset.mode = mode || 'system';
-  themeBtn.title = 'theme: ' + (mode || 'system') + ' — click to change';
+  // **The word is the point** (#16). Three marks cannot say which is which on their own; the only
+  // explanation used to be the title attribute, which needs a hover nobody performs.
+  const lab = themeBtn.querySelector('b');
+  if (lab) lab.textContent = mode || 'auto';
+  themeBtn.title = 'theme: ' + (mode || 'follows the system') + ' — click to change';
   try { if (mode) localStorage.setItem(LS_THEME, mode); else localStorage.removeItem(LS_THEME); } catch (e) {}
   if (typeof renderBadge === 'function') renderBadge(true);   // the favicon color reads --st-*
   rethemeTerminals();
