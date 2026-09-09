@@ -940,6 +940,42 @@ function firstFree(w, h, canvasId) {
   return { x: GAP, y: bottom ? bottom + GAP : GAP };
 }
 
+// Lay a canvas out as a grid. **Only used when a batch arrives at once** — a restore. One at a time,
+// firstFree is right: it puts the new window where there is room and leaves everything else alone.
+// A batch is different. firstFree fills a row before starting the next, and at 520px wide only one
+// tile fits across a 912px canvas, so six restored panes came back as a single column 2,232px tall.
+// Nothing overlapped; you just had to scroll past all of it.
+//
+// The column count is chosen so the block's shape is closest to the canvas you are looking at,
+// measured on the **log** of the ratio so that twice-as-wide and half-as-wide count as equally wrong
+// — plain subtraction always prefers the too-tall option and two panes came out stacked.
+function arrangeCanvas(canvasId) {
+  const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
+  if (mine.length < 2) return;
+  mine.sort((a, b) => (a.s.created || 0) - (b.s.created || 0));
+  const w = Math.max(...mine.map((t) => layout[t.id].w));
+  const h = Math.max(...mine.map((t) => layout[t.id].h));
+  const vw = cvScroll.clientWidth || 1, vh = cvScroll.clientHeight || 1;
+  const want = Math.log(vw / vh);
+  let cols = 1, best = Infinity;
+  for (let c = 1; c <= mine.length; c++) {
+    const bw = c * (w + GAP) + GAP, bh = Math.ceil(mine.length / c) * (h + GAP) + GAP;
+    const d = Math.abs(Math.log(bw / bh) - want);
+    if (d < best) { best = d; cols = c; }
+  }
+  mine.forEach((t, i) => {
+    const r = layout[t.id];
+    const x = GAP + (i % cols) * (w + GAP), y = GAP + Math.floor(i / cols) * (h + GAP);
+    t.el.style.left = x + 'px';
+    t.el.style.top = y + 'px';
+    layout[t.id] = Object.assign({}, r, { x, y });
+  });
+  saveLayout();
+  renderMinimap();
+  refreshOff();
+  paintTidy();
+}
+
 // ── focus · expand ──────────────────────────────────────
 function focusTile(id, opts) {
   opts = opts || {};
@@ -2081,7 +2117,13 @@ function renderRestore(offer) {
   yes.addEventListener('click', async () => {
     yes.disabled = no.disabled = true;
     yes.textContent = 'opening…';
-    try { await api('POST', '/api/restore'); renderRestore(null); }
+    try {
+      const made = await api('POST', '/api/restore');
+      renderRestore(null);
+      // The panes arrive as broadcasts, not in this reply — wait for the tiles, then place them.
+      const cvs = [...new Set((made || []).map((x) => x.canvas))];
+      setTimeout(() => { for (const c of cvs) arrangeCanvas(c); }, 400);
+    }
     catch (e) { toast(['could not restore — ', { d: String(e.message || e) }]); yes.disabled = no.disabled = false; yes.textContent = 'Open them again'; }
   });
   no.addEventListener('click', async () => {
