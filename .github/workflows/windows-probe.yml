@@ -1,0 +1,43 @@
+# Answers, on a real Windows machine, the questions the Mac this is written on cannot (#29).
+#
+# **Manual only.** This repository is private, so Actions minutes are metered, and Windows drains
+# them at 2x — 2,000 included minutes a month means about 1,000 Windows-minutes. Running on every
+# push would spend them on commits that never touch the daemon. Start it from the Actions tab, or:
+#
+#     gh workflow run windows-probe.yml
+#     gh run watch
+#
+# One job, one script, a hard timeout. A hung run is the expensive failure here, not a red X.
+name: windows probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      pywinpty:
+        description: "Install pywinpty and run the ConPTY sections"
+        type: boolean
+        default: true
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 10          # the deadline exists to stop a hang from burning minutes
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner's own Python is used deliberately — actions/setup-python costs another 20-30s
+      # and we have no version to pin to yet. What it happens to be is itself a fact worth printing.
+      - name: what python is here
+        run: |
+          python --version
+          python -c "import sys, platform; print(sys.executable); print(platform.machine())"
+
+      # pywinpty ships wheels for 3.10-3.14 on x86-64 and ARM64, so this should never build from
+      # source. If it does, the log will say so and that is a finding.
+      - name: install pywinpty
+        if: ${{ inputs.pywinpty }}
+        run: python -m pip install --disable-pip-version-check --only-binary=:all: pywinpty
+
+      - name: probe
+        run: python dev\win-probe.py
