@@ -1,0 +1,242 @@
+"""The parts that can be asked directly, with no daemon and no browser.
+
+These run in well under a second, so there is no reason not to run them. Everything here is a
+regression somebody already paid for once; the point of writing it down is that nobody pays twice.
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from palmar import daemon as D
+
+
+class AltScreenScan(unittest.TestCase):
+    """`_absorb` finds the alt-screen markers and keeps the ring right.
+
+    It used to search for **both** markers on every pass of the loop, so when one of them was absent
+    from the rest of the buffer each find walked to the end — 256 KB of unpaired ESC[?1049h took
+    **5.8 seconds** on the event loop, and for those seconds no pane moved a byte (2026-09-09)."""
+
+    def fake(self):
+        class F:
+            def __init__(self):
+                self.ring = D.Ring(D.RING)
+                self.alt = False
+                self.carry = b""
+                self.produced = 0
+            _absorb = D.Session._absorb
+        return F()
+
+    def test_unpaired_markers_are_not_quadratic(self):
+        f = self.fake()
+        t = time.perf_counter()
+        f._absorb(D.ALT_ON * 32768)
+        ms = (time.perf_counter() - t) * 1000
+        self.assertLess(ms, 800, "256 KB of unpaired ESC[?1049h took %.0f ms — the scan is "
+                                 "quadratic again (it was 5,830 ms before the fix)" % ms)
+        self.assertTrue(f.alt)
+
+    def test_ordinary_output_is_fast(self):
+        f = self.fake()
+        t = time.perf_counter()
+        f._absorb(b"hello world line\r\n" * 14563)
+        self.assertLess((time.perf_counter() - t) * 1000, 50)
+        self.assertFalse(f.alt)
+
+    def test_split_across_chunks_is_the_same_as_whole(self):
+        """The marker can land across a chunk boundary — `carry` exists for that. Whether it did
+        must make no difference to the ring, the offset or the alt state."""
+        import random
+        random.seed(7)
+        pieces = [D.ALT_ON, D.ALT_OFF, b"abc", b"\x1b[?1049", b"h", b"l", b"\r\n"]
+
+        def run(chunks):
+            f = self.fake()
+            for c in chunks:
+                f._absorb(c)
+            return f.alt, f.produced, f.carry, f.ring.since(0)
+
+        for _ in range(120):
+            blob = b"".join(random.choice(pieces) for _ in range(random.randint(1, 14)))
+            cuts = sorted(random.sample(range(len(blob) + 1), min(4, len(blob) + 1)))
+            chunks = [blob[a:b] for a, b in zip([0] + cuts, cuts + [len(blob)]) if blob[a:b]]
+            self.assertEqual(run(chunks), run([blob]), "chunking changed the result for %r" % blob)
+
+
+class TitleSpin(unittest.TestCase):
+    """A spinner is sustained change, not two changes.
+
+    Shells that retitle per command (oh-my-zsh, p10k, plain WSL bash) change the title two or three
+    times **inside nine milliseconds**, and counting alone read that as a spinner: an untouched pane
+    sat at `done` — the light that means "wants you" — for as long as you left it (2026-09-09)."""
+
+    def busy_with(self, gaps):
+        """Feed title-change timestamps `gaps` seconds apart and ask whether that reads as busy."""
+        class F:
+            title_hits = []
+        f = F()
+        now = time.monotonic()
+        f.title_hits = [now - g for g in gaps]
+        return D.Session._title_busy(f)
+
+    def test_a_burst_inside_one_command_is_not_a_spinner(self):
+        # preexec then precmd: three changes, nine milliseconds apart
+        self.assertFalse(self.busy_with([0.009, 0.005, 0.0]))
+
+    def test_a_slow_spinner_counts(self):
+        # Claude Code, about once a second
+        self.assertTrue(self.busy_with([2.0, 1.0, 0.0]))
+
+    def test_a_fast_spinner_counts(self):
+        # codex, about twelve times a second, filling the window
+        # **Oldest first.** _title_busy measures the span as hits[-1] - hits[0], so a list built
+        # newest-first comes out negative and reads as "not spinning" — which is what this test
+        # said the first time it ran.
+        self.assertTrue(self.busy_with(sorted((i * 0.08 for i in range(30)), reverse=True)))
+
+    def test_one_change_is_never_a_spinner(self):
+        self.assertFalse(self.busy_with([0.0]))
+
+
+class HasContent(unittest.TestCase):
+    """Cursor housekeeping is not output. One TUI printed the same 32 bytes ten times a second
+    while sitting still, and every one of them looked like work."""
+
+    def test_a_cursor_move_is_not_content(self):
+        self.assertFalse(D.Session._has_content(b"\x1b[2;5H"))
+
+    def test_text_is_content(self):
+        self.assertTrue(D.Session._has_content(b"hello"))
+
+    def test_a_newline_is_content(self):
+        self.assertTrue(D.Session._has_content(b"\r\n"))
+
+    def test_anything_large_is_content_without_looking(self):
+        self.assertTrue(D.Session._has_content(b"\x1b[2;5H" * 4000))
+
+
+class ChildAndCwd(unittest.TestCase):
+    """Two questions the daemon asks the kernel about a pane. Both may answer None on a platform
+    nobody has taught them — that is the honest answer and must not be mistaken for a real one."""
+
+    def test_there_is_no_has_child_yet(self):
+        """A direct "does this shell have a child" test was written and **reverted** (#27,
+        2026-09-09): it was measured at 2 µs and changed no observable behaviour, because the layer
+        above it had already stopped misfiring. It belongs with the Windows port (#29 step 5), where
+        there is no tcgetpgrp at all and the question has to be answered somehow. This test is here
+        so that reappearing is a deliberate act with a measurement, not a quiet return."""
+        self.assertFalse(hasattr(D, "has_child"),
+                         "has_child is back — give it a test that shows what it changes")
+
+    def test_cwd_of_reads_where_a_process_actually_is(self):
+        """Not where it started — where it moved to. That is the whole reason it exists."""
+        got = D.cwd_of(os.getpid())
+        if got is None:
+            self.skipTest("cwd_of is not implemented on %s" % sys.platform)
+        self.assertEqual(os.path.realpath(got), os.path.realpath(os.getcwd()))
+        d = os.path.realpath(tempfile.mkdtemp(prefix="palmar-cwd-"))
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(4)"], cwd=d)
+        try:
+            time.sleep(0.4)
+            self.assertEqual(os.path.realpath(D.cwd_of(p.pid)), d)
+        finally:
+            p.kill()
+            p.wait()
+
+    def test_a_dead_pid_is_none_not_a_guess(self):
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        p.wait()
+        time.sleep(0.2)
+        self.assertIsNone(D.cwd_of(p.pid))
+
+
+class RestoreFile(unittest.TestCase):
+    """A recovery file that cannot be trusted is worth less than no recovery file."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="palmar-restore-")
+        self._real = D.RESTORE_FILE
+        D.RESTORE_FILE = __import__("pathlib").Path(self.dir) / "restore.json"
+
+    def tearDown(self):
+        D.RESTORE_FILE = self._real
+
+    def write(self, text):
+        D.RESTORE_FILE.write_text(text)
+
+    def test_missing_is_none(self):
+        self.assertIsNone(D.read_restore())
+
+    def test_not_json_is_none(self):
+        self.write("not json at all {{{")
+        self.assertIsNone(D.read_restore())
+
+    def test_a_version_we_do_not_know_is_none(self):
+        self.write('{"v": 99, "canvases": [], "sessions": []}')
+        self.assertIsNone(D.read_restore())
+
+    def test_wrong_shapes_are_none(self):
+        self.write('{"v": 1, "canvases": "nope", "sessions": []}')
+        self.assertIsNone(D.read_restore())
+
+    def test_a_good_one_comes_back(self):
+        self.write('{"v": 1, "canvases": [{"id": "a", "name": "infra"}], '
+                   '"sessions": [{"name": "x", "cwd": "/tmp", "canvas": "a"}]}')
+        d = D.read_restore()
+        self.assertEqual(d["canvases"][0]["name"], "infra")
+        self.assertEqual(d["sessions"][0]["cwd"], "/tmp")
+
+
+class Names(unittest.TestCase):
+    """protocol.md "이름 규칙": 1–64 characters, trimmed, no control characters."""
+
+    def test_trimmed(self):
+        self.assertEqual(D.clean_name("  hi  "), "hi")
+
+    def test_blank_is_no_name(self):
+        self.assertIsNone(D.clean_name("   "))
+        self.assertIsNone(D.clean_name(None))
+
+    def test_too_long_is_refused(self):
+        with self.assertRaises(ValueError):
+            D.clean_name("x" * 65)
+
+    def test_control_characters_are_refused(self):
+        with self.assertRaises(ValueError):
+            D.clean_name("a\x07b")
+
+
+class Startup(unittest.TestCase):
+    """The guards at the top of the module — both of them used to sit *below* `import fcntl`, where
+    neither could ever run on a platform that could not import it."""
+
+    def test_windows_gets_a_sentence_not_a_stack(self):
+        code = ("import sys; sys.platform = 'win32'; sys.path.insert(0, %r); import palmar.daemon"
+                % os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+        out = r.stdout + r.stderr
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("Traceback", out)
+        self.assertIn("does not run natively on Windows", out)
+        self.assertIn("issues/29", out)
+
+    def test_the_package_itself_imports_anywhere(self):
+        """`import palmar` must work even where the daemon cannot — it is what lets dev-stub run
+        on Windows today."""
+        code = ("import sys; sys.platform = 'win32'; sys.path.insert(0, %r); "
+                "import palmar; print(palmar.PROTOCOL)"
+                % os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), str(D.PROTOCOL))
+
+
+if __name__ == "__main__":
+    unittest.main()
