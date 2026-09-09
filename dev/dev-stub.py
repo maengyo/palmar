@@ -44,6 +44,9 @@ WEB = (Path(__file__).resolve().parent.parent / "palmar" / "web").resolve()
 # 베끼면 한쪽만 올라갔을 때 스텁이 조용히 거짓말을 한다.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from palmar import PROTOCOL
+#: 제품(palmar/daemon.py)과 같은 값이어야 한다 — 스텁이 더 헐거우면 여기서만 되는 화면을 만들게 된다.
+MAX_BODY = 1024 * 1024
+REQUEST_TIMEOUT = 10
 TOKEN = secrets.token_urlsafe(32)
 #: 페이지를 받아 갈 자격(#14). 제품과 같은 규칙 — 스텁이 더 헐거우면 여기서만 되는 화면을 만들게 된다.
 #: 제품은 이것을 ~/.palmar/run/key 에 남기지만, 스텁은 지어낸 세션을 쓰는 개발 도구라 매번 새로 난다.
@@ -374,8 +377,19 @@ async def handle(reader, writer):
         return ok
 
     async def body_json():
-        n = int(headers.get("content-length", "0") or 0)
-        raw = await reader.readexactly(n) if n else b"{}"
+        # **제품과 같은 상한과 시한을 건다.** 그냥 `Content-Length` 를 믿고 `readexactly` 에 넘기면
+        # 인증도 없는 요청 하나가 1TiB 를 선언해 메모리를 먹거나, 몸을 안 보내고 연결을 붙들 수 있다
+        # (Codex 리뷰 2026-09-09: 1TiB 선언이 그대로 `readexactly` 까지 갔다).
+        try:
+            n = int(headers.get("content-length", "0") or 0)
+        except ValueError:
+            return {}
+        if n < 0 or n > MAX_BODY:
+            return {}
+        try:
+            raw = await asyncio.wait_for(reader.readexactly(n), REQUEST_TIMEOUT) if n else b"{}"
+        except (asyncio.TimeoutError, asyncio.IncompleteReadError):
+            return {}
         try:
             return json.loads(raw or b"{}")
         except json.JSONDecodeError:
@@ -601,8 +615,10 @@ async def handle(reader, writer):
             respond(writer, 501, jbody({"error": "dev-stub is read-only — folder creation is the daemon's job"}))
     elif path == "/hook/claude" and method == "POST":
         # 훅은 항상 200 {}. 모르는 pane 도 200.
+        # **하지만 토큰이 틀리면 상태를 바꾸지 않는다** — 제품이 그렇다(protocol.md "인증").
+        # 안 그러면 토큰 없이도 남의 판을 `waiting` 으로 만들고 방송까지 시킬 수 있다.
         hook = await body_json()
-        s = SESSIONS.get(q.get("pane", [""])[0])
+        s = SESSIONS.get(q.get("pane", [""])[0]) if has_token() else None
         ev = hook.get("hook_event_name")
         if s is not None and ev in HOOK_STATUS:
             s.status = HOOK_STATUS[ev]
