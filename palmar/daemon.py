@@ -195,6 +195,11 @@ URL_FILE = RUN_DIR / "url"
 RESTORE_FILE = PALMAR_DIR / "restore.json"
 RESTORE_EVERY_S = 10.0
 RESTORE = [None]          # what the previous daemon left, read once at start-up
+#: old canvas id → the id of the canvas restored in its place. **A restored canvas is a new canvas** —
+#: it gets a fresh id like any other — so a pane that remembers "I was on <old id>" points at nothing
+#: and would silently land on the first canvas instead (measured: a pane on `infra` came back on
+#: `canvas 1`). The map is what keeps a restored workspace shaped the way it was left.
+RESTORE_CV = [{}]
 RESTORE_TIMER = [None]
 # web/ sits **next to** this file. The path is the same whether it runs from the repo with
 # `python3 -m palmar` or installed from a wheel — if the two differed you would get bugs that only appear on one side.
@@ -2239,7 +2244,8 @@ async def handle_request(reader, writer) -> None:
                     # The folder is gone, or outside the roots now. Open it at home rather than
                     # dropping the pane — losing the name too would make the restore quietly partial.
                     cwd = HOME
-                cid = x.get("canvas")
+                # Through the map, or the pane loses the canvas it was on (see RESTORE_CV).
+                cid = RESTORE_CV[0].get(x.get("canvas"))
                 try:
                     name = clean_name(x.get("name"))
                 except ValueError:
@@ -2471,7 +2477,9 @@ async def main(port: int) -> None:
     named = (RESTORE[0] or {}).get("canvases") or []
     if named:
         for c in named:
-            registry.new_canvas(c.get("name") if isinstance(c.get("name"), str) else None)
+            made = registry.new_canvas(c.get("name") if isinstance(c.get("name"), str) else None)
+            if isinstance(c.get("id"), str):
+                RESTORE_CV[0][c["id"]] = made.id
         log(f"restored {len(named)} canvas(es) from {RESTORE_FILE.name}")
     else:
         registry.new_canvas()
