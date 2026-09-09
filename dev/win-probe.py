@@ -352,8 +352,14 @@ def _paste():
             "import sys, traceback\n"
             "out = sys.argv[1]\n"
             "try:\n"
-            "    d = sys.stdin.buffer.read()\n"
-            "    open(out, 'w').write('OK %d %d' % (len(d), len(d.splitlines())))\n"
+            "    n = b = 0\n"
+            "    while True:\n"
+            "        line = sys.stdin.buffer.readline()\n"
+            "        if not line or b'PALMARENDOFPASTE' in line:\n"
+            "            break\n"
+            "        n += 1\n"
+            "        b += len(line)\n"
+            "    open(out, 'w').write('OK %d %d' % (b, n))\n"
             "except Exception:\n"
             "    open(out, 'w').write('ERR ' + traceback.format_exc())\n")
     n = 2600
@@ -374,7 +380,10 @@ def _paste():
         say(NO, "write raised on a big payload —", e)
         return
     dt = time.time() - t
-    p.write("\x1a\r\n")                    # Ctrl-Z: end of input on a Windows console
+    # **A sentinel, not Ctrl-Z.** The run before this one showed the receiver still alive with the
+    # payload echoing back: `\x1a` is an end-of-input signal to a console in line mode, and through
+    # a ConPTY pipe it is just another byte. So the payload ends with a line the receiver watches for.
+    p.write("PALMARENDOFPASTE\r\n")
     say(OK, "wrote %d bytes in %.2fs without raising" % (len(blob), dt))
     for _ in range(80):                      # wait for the child to finish writing the file
         if os.path.exists(outfile):
