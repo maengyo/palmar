@@ -358,9 +358,15 @@ def _paste():
             "    open(out, 'w').write('ERR ' + traceback.format_exc())\n")
     n = 2600
     blob = ("x" * 79 + "\n") * n            # ~208 KB
-    p = open_pty(sys.executable, cols=200, rows=50,
-                 cmdline='"%s" "%s" "%s"' % (sys.executable, script, outfile))
-    drain(p, 2.0)                            # let the interpreter come up
+    # **The high-level class, because it takes a list.** With PTY.spawn(appname, cmdline=...) the
+    # run before this one produced `SyntaxError: Non-UTF-8 code ... in file python.exe`: pywinpty
+    # puts appname at the front itself, so repeating the executable in cmdline shifted argv by one
+    # and Python was handed its own binary as a script. PtyProcess.spawn(argv) has no quoting and
+    # no argv[0] convention to get wrong — worth knowing for the port, which needs cwd and env too.
+    import winpty
+    p = winpty.PtyProcess.spawn([sys.executable, script, outfile], dimensions=(50, 200))
+    say(OK, "spawned via PtyProcess.spawn(argv) · alive %s" % p.isalive())
+    time.sleep(1.5)                          # let the interpreter come up
     t = time.time()
     try:
         p.write(blob)
@@ -374,10 +380,14 @@ def _paste():
         if os.path.exists(outfile):
             break
         time.sleep(0.25)
-    tail = drain(p, 2.0)
+    tail = b""
+    try:
+        tail = p.read(4096).encode("utf-8", "replace")
+    except Exception:
+        pass
     if not os.path.exists(outfile):
         say(NO, "the receiver never wrote its count")
-        say(HM, "  alive:", p.isalive(), "· exit:", getattr(p, "get_exitstatus", lambda: "?")())
+        say(HM, "  alive:", p.isalive(), "· exit:", getattr(p, "exitstatus", "?"))
         say(HM, "  what the pane showed:", repr(tail[-400:]))
         return
     raw = open(outfile).read()
