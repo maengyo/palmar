@@ -367,7 +367,8 @@ def _paste():
             "    put()\n"
             "    n = 1 if first and b'PALMARENDOFPASTE' not in first else 0\n"
             "    b = len(first) if n else 0\n"
-            "    t = time.time() + 25\n"
+            "    t0 = time.time()\n"
+            "    t = t0 + 90\n"
             "    while time.time() < t:\n"
             "        line = sys.stdin.buffer.readline()\n"
             "        if not line:\n"
@@ -378,7 +379,11 @@ def _paste():
             "            break\n"
             "        n += 1\n"
             "        b += len(line)\n"
-            "    log.append('OK %d %d' % (b, n))\n"
+            "        if n %% 400 == 0:\n"
+            "            log.append('at %d lines / %d bytes after %.1fs' %% (n, b, time.time() - t0))\n"
+            "            put()\n"
+            "    log.append('rate %.0f bytes/s' %% (b / max(0.001, time.time() - t0)))\n"
+            "    log.append('OK %d %d' %% (b, n))\n"
             "    put()\n"
             "except Exception:\n"
             "    log.append('ERR ' + traceback.format_exc())\n"
@@ -406,7 +411,7 @@ def _paste():
     # a ConPTY pipe it is just another byte. So the payload ends with a line the receiver watches for.
     p.write("PALMARENDOFPASTE\r\n")
     say(OK, "wrote %d bytes in %.2fs without raising" % (len(blob), dt))
-    for _ in range(120):                     # the receiver writes early and often; wait for its count
+    for _ in range(400):                     # the receiver writes early and often; wait for its count
         if os.path.exists(outfile) and "OK " in open(outfile).read():
             break
         time.sleep(0.25)
