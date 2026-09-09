@@ -1459,22 +1459,52 @@ def under_roots(p: Path) -> bool:
     return any(p.is_relative_to(r) for r in roots())
 
 
+#: `.git` 와 `HEAD` 에서 읽을 최대 바이트. 브랜치 한 줄과 `gitdir:` 한 줄에 이보다 필요할 일이 없다.
+META_MAX = 4096
+
+
+def read_meta(p: Path) -> str:
+    """폴더 메타데이터 한 조각을 **막히지 않게** 읽는다. 못 읽으면 빈 문자열.
+
+    평범한 `open()` 으로 읽으면 안 된다. 이건 사용자가 고른 폴더가 아니라 **화면에 목록을 그리다가
+    지나가는 남의 폴더**라, 그 안에 무엇이 있는지 우리가 못 고른다:
+      · `.git/HEAD` 가 FIFO 면 `open()` 이 쓰는 쪽을 기다리며 **영원히 선다.** 이건 한 판이 아니라
+        **데몬 전체**가 서는 것이다 — 목록 그리기는 이벤트 루프 위에서 돌아 그동안 다른 판의
+        바이트도, `/events` 방송도, 모든 요청도 멈춘다(2026-09-09 실측: 4초를 재니 4초 내내 막혔다).
+      · `/dev/zero` 로 이어 두면 줄바꿈이 영영 안 나와 읽는 족족 메모리가 자란다.
+    그래서 셋을 다 건다: `O_NONBLOCK` 으로 열고, 연 **다음에** 그것이 진짜 일반 파일인지 보고
+    (열기 전에 보면 그 사이에 바뀔 수 있다), 읽는 양에 상한을 둔다.
+    """
+    fd = None
+    try:
+        fd = os.open(str(p), os.O_RDONLY | os.O_NONBLOCK)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""                       # FIFO·장치·소켓 — 우리가 읽을 것이 아니다
+        return os.read(fd, META_MAX).decode("utf-8", "replace")
+    except OSError:
+        return ""
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 def git_branch(d: Path):
     """<dir>/.git/HEAD 한 줄. .git 이 파일이면(worktree) gitdir: 을 따라간다. git 은 절대 안 돌린다.
     분리 HEAD 면 짧은 해시(7자) — 브랜치 이름은 아니지만 '저장소가 아니다' 로 보이면 안 되니까."""
     try:
         g = d / ".git"
         if g.is_file():
-            with open(g, "r", errors="replace") as fh:
-                first = fh.readline().strip()
+            first = read_meta(g).split("\n", 1)[0].strip()
             if not first.startswith("gitdir:"):
                 return None
             gd = Path(first[len("gitdir:"):].strip())
             head = (gd if gd.is_absolute() else d / gd) / "HEAD"
         else:
             head = g / "HEAD"
-        with open(head, "r", errors="replace") as fh:
-            line = fh.readline().strip()
+        line = read_meta(head).split("\n", 1)[0].strip()
     except OSError:
         return None
     if line.startswith("ref: "):
