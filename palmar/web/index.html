@@ -86,8 +86,12 @@
       <dt><kbd class="mod">Ctrl</kbd><kbd>⏎</kbd></dt><dd>new terminal, in the folder of the one you are on</dd>
       <dt><kbd class="mod">Ctrl</kbd><kbd>Shift</kbd><kbd>⏎</kbd></dt><dd>new canvas</dd>
       <dt><kbd class="mod">Ctrl</kbd><kbd>K</kbd></dt><dd>search sessions and folders</dd>
-      <dt><kbd class="mod">Ctrl</kbd><kbd>Shift</kbd><kbd>C</kbd></dt><dd>copy the selection in a terminal</dd>
-      <dt><kbd class="mod">Ctrl</kbd><kbd>Shift</kbd><kbd>V</kbd></dt><dd>paste into a terminal</dd>
+      <!-- data-mac-drops-shift: on a Mac these two are ⌘C and ⌘V, with no Shift. Only these two.
+           New canvas below is Ctrl/⌘ + Shift + Enter on **every** platform — Shift is what separates
+           it from new terminal (app.js: `if (e.shiftKey) newCanvas(); else newTerminal()`), so
+           stripping Shift there made both rows read the same and one of them lie. -->
+      <dt data-mac-drops-shift><kbd class="mod">Ctrl</kbd><kbd>Shift</kbd><kbd>C</kbd></dt><dd>copy the selection in a terminal</dd>
+      <dt data-mac-drops-shift><kbd class="mod">Ctrl</kbd><kbd>Shift</kbd><kbd>V</kbd></dt><dd>paste into a terminal</dd>
       <dt><kbd>Ctrl</kbd><kbd>C</kbd></dt><dd>left alone — it is the terminal's interrupt</dd>
       <dt><kbd class="mod">Ctrl</kbd> + wheel</dt><dd>text size of the terminal under the pointer</dd>
       <dt>click <span class="ex">68×19</span></dt><dd>back to the default text size</dd>

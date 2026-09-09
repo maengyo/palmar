@@ -2591,7 +2591,10 @@ function boot() {
     if (k) k.firstElementChild.textContent = '⌘';
     // On a Mac, copy·paste·text size are ⌘ alone — no Shift. The guidance names that machine's keys too.
     for (const el of document.querySelectorAll('.keys kbd.mod')) el.textContent = '⌘';
-    for (const el of document.querySelectorAll('.keys dt')) {
+    // **Only the rows marked for it.** Matching on "three keys with Shift in the middle" also caught
+    // Ctrl+Shift+Enter, and new canvas needs Shift on a Mac too — both Enter rows came out reading
+    // ⌘⏎ and one of them was wrong.
+    for (const el of document.querySelectorAll('.keys dt[data-mac-drops-shift]')) {
       const ks = [...el.querySelectorAll('kbd')];
       if (ks.length === 3 && ks[1].textContent === 'Shift') ks[1].remove();
     }
