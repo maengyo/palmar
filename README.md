@@ -133,7 +133,7 @@ takes you to that terminal.
 
 | | |
 |---|---|
-| Daemon | Python standard library only — PTYs, HTTP, WebSocket, hooks. One file, ~1,700 lines. |
+| Daemon | Python standard library only — PTYs, HTTP, WebSocket, hooks. One file, ~2,500 lines. |
 | Python | 3.9 and up. |
 | Browser | Vanilla JavaScript, no framework, no build step. xterm.js draws the terminals. |
 | Runs on | macOS and Linux. On Windows today, run it inside WSL and browse from Windows — native Windows is the next port, not a flag. |
