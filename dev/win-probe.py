@@ -330,17 +330,28 @@ def _korean():
 def _paste():
     if PTY is None:
         return
-    p = open_pty(SHELL, cols=200, rows=50)
-    if not settle(p):
-        say(NO, "the shell is not answering")
-        return
-    # **Make the shell count what it received.** `write()` returning without raising says nothing —
-    # the macOS bug this mirrors (#1) was a short write that dropped bytes silently. `find /c /v ""`
-    # counts the lines it reads from stdin, so the number coming back is the number that arrived.
+    # **Let the receiving end count, and write the count to a file.** Two earlier tries failed for
+    # the same reason in different clothes: `write()` not raising proves nothing (the macOS bug this
+    # mirrors, #1, was a short write that dropped bytes in silence), and `find /c /v ""` does not
+    # read a pty's stdin — what came back was 200 KB of console echo and cursor moves.
+    # Python in the pane reads stdin to EOF and writes what it got somewhere this probe can read,
+    # so nothing has to be parsed out of the echo at all.
+    tmpdir = tempfile.gettempdir()
+    outfile = os.path.join(tmpdir, "palmar_paste_count.txt")
+    script = os.path.join(tmpdir, "palmar_paste_count.py")
+    try:
+        os.remove(outfile)
+    except OSError:
+        pass
+    with open(script, "w") as fh:
+        fh.write("import sys\n"
+                 "d = sys.stdin.buffer.read()\n"
+                 "open(r%r, 'w').write('%%d %%d' %% (len(d), len(d.splitlines())))\n" % outfile)
     n = 2600
     blob = ("x" * 79 + "\n") * n            # ~208 KB
-    p.write('find /c /v ""\r\n')
-    drain(p, 1.0)
+    p = open_pty(sys.executable, cols=200, rows=50,
+                 cmdline='"%s" "%s"' % (sys.executable, script))
+    drain(p, 2.0)                            # let the interpreter come up
     t = time.time()
     try:
         p.write(blob)
@@ -348,23 +359,23 @@ def _paste():
         say(NO, "write raised on a big payload —", e)
         return
     dt = time.time() - t
-    p.write("\x1a\r\n")                    # Ctrl-Z: end of input on Windows
-    out = drain(p, 8.0)
+    p.write("\x1a\r\n")                    # Ctrl-Z: end of input on a Windows console
     say(OK, "wrote %d bytes in %.2fs without raising" % (len(blob), dt))
-    import re as _re
-    hits = [int(x) for x in _re.findall(rb"^\s*(\d+)\s*$", out, _re.M)]
-    if hits:
-        got = max(hits)
-        say(OK if got == n else NO, "the shell counted %d lines of %d" % (got, n))
-        if got != n:
-            say(HM, "  -> input is being truncated, which is #1 all over again from the other side")
-    else:
-        say(HM, "no count came back — `find` may not read a pty's stdin this way")
-        say(HM, "  raw tail:", repr(out[-200:]))
-    try:
-        p.write("\x03"); p.write("exit\r\n"); drain(p, 1.0)
-    except Exception:
-        pass
+    for _ in range(80):                      # wait for the child to finish writing the file
+        if os.path.exists(outfile):
+            break
+        time.sleep(0.25)
+    if not os.path.exists(outfile):
+        say(NO, "the receiver never wrote its count — it did not reach EOF")
+        say(HM, "  alive:", p.isalive(), "· exit:", getattr(p, "get_exitstatus", lambda: "?")())
+        return
+    got = open(outfile).read().split()
+    nbytes, nlines = int(got[0]), int(got[1])
+    say(OK if nlines == n else NO, "the receiver got %d lines of %d" % (nlines, n))
+    say(OK, "  and %d bytes (sent %d — a difference here is CRLF translation, not loss)"
+        % (nbytes, len(blob)))
+    if nlines != n:
+        say(HM, "  -> input is being truncated. That is #1 again, from the other side.")
 
 
 @guarded("item 16 — how many processes does an idle shell have?")
