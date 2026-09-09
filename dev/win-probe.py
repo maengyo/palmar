@@ -326,30 +326,17 @@ def _korean():
         pass
 
 
-@guarded("item 8 — does a 200 KB paste arrive whole?")
+@guarded("item 8 — how much of a paste actually arrives, and above what size does it stop?")
 def _paste():
     if PTY is None:
         return
-    # **Let the receiving end count, and write the count to a file.** Two earlier tries failed for
-    # the same reason in different clothes: `write()` not raising proves nothing (the macOS bug this
-    # mirrors, #1, was a short write that dropped bytes in silence), and `find /c /v ""` does not
-    # read a pty's stdin — what came back was 200 KB of console echo and cursor moves.
-    # Python in the pane reads stdin to EOF and writes what it got somewhere this probe can read,
-    # so nothing has to be parsed out of the echo at all.
+    # **A staircase, not one big write.** 208 KB in a single write got the receiver exactly one line
+    # and then nothing for ninety seconds — which is not slowness, it is loss, and it is the same
+    # shape as #1 on macOS (a short write whose return value was dropped). What the port needs is
+    # not "does 200 KB work" but **where the edge is**, so it knows what to chunk to.
+    import winpty
     tmpdir = tempfile.gettempdir()
-    outfile = os.path.join(tmpdir, "palmar_paste_count.txt")
     script = os.path.join(tmpdir, "palmar_paste_count.py")
-    try:
-        os.remove(outfile)
-    except OSError:
-        pass
-    # **The path goes in as an argument, not baked into the source.** The first attempt wrote
-    # `open(r%r, ...)` with %r on a Windows path, which doubles every backslash inside a raw string
-    # — the receiver died with exit 1 and the probe could only report that it "never reached EOF".
-    # It also writes the traceback into the same file, so a failure explains itself next time.
-    # **Make the receiver describe what it sees.** Two runs said "0 lines" without saying why, and
-    # a third guess would cost more than an answer. It records whether stdin is a tty, what the
-    # first read actually returns, and only then counts — so a wrong assumption shows up as data.
     with open(script, "w") as fh:
         fh.write(
             "import sys, time, traceback\n"
@@ -358,87 +345,63 @@ def _paste():
             "def put():\n"
             "    open(out, 'w').write('\\n'.join(log))\n"
             "try:\n"
-            "    log.append('isatty %s' % sys.stdin.isatty())\n"
-            "    log.append('encoding %s' % sys.stdin.encoding)\n"
-            "    log.append('buffer %s' % type(sys.stdin.buffer).__name__)\n"
-            "    put()\n"
-            "    first = sys.stdin.buffer.readline()\n"
-            "    log.append('first readline %r' % first[:60])\n"
-            "    put()\n"
-            "    n = 1 if first and b'PALMARENDOFPASTE' not in first else 0\n"
-            "    b = len(first) if n else 0\n"
+            "    n = b = 0\n"
             "    t0 = time.time()\n"
-            "    t = t0 + 90\n"
-            "    while time.time() < t:\n"
+            "    while time.time() - t0 < 20:\n"
             "        line = sys.stdin.buffer.readline()\n"
             "        if not line:\n"
-            "            log.append('EOF after %d lines' % n)\n"
             "            break\n"
             "        if b'PALMARENDOFPASTE' in line:\n"
-            "            log.append('sentinel after %d lines' % n)\n"
+            "            log.append('SENTINEL')\n"
             "            break\n"
             "        n += 1\n"
             "        b += len(line)\n"
-            "        if n % 400 == 0:\n"
-            "            log.append('at %d lines / %d bytes after %.1fs' % (n, b, time.time() - t0))\n"
+            "        if n % 25 == 0:\n"
+            "            log.append('at %d after %.1fs' % (n, time.time() - t0))\n"
             "            put()\n"
-            "    log.append('rate %.0f bytes/s' % (b / max(0.001, time.time() - t0)))\n"
-            "    log.append('OK %d %d' % (b, n))\n"
+            "    log.append('OK %d %d %.1f' % (b, n, time.time() - t0))\n"
             "    put()\n"
             "except Exception:\n"
             "    log.append('ERR ' + traceback.format_exc())\n"
             "    put()\n")
-    n = 2600
-    blob = ("x" * 79 + "\n") * n            # ~208 KB
-    # **The high-level class, because it takes a list.** With PTY.spawn(appname, cmdline=...) the
-    # run before this one produced `SyntaxError: Non-UTF-8 code ... in file python.exe`: pywinpty
-    # puts appname at the front itself, so repeating the executable in cmdline shifted argv by one
-    # and Python was handed its own binary as a script. PtyProcess.spawn(argv) has no quoting and
-    # no argv[0] convention to get wrong — worth knowing for the port, which needs cwd and env too.
-    import winpty
-    p = winpty.PtyProcess.spawn([sys.executable, script, outfile], dimensions=(50, 200))
-    say(OK, "spawned via PtyProcess.spawn(argv) · alive %s" % p.isalive())
-    time.sleep(1.5)                          # let the interpreter come up
-    t = time.time()
-    try:
-        p.write(blob)
-    except Exception as e:
-        say(NO, "write raised on a big payload —", e)
-        return
-    dt = time.time() - t
-    # **A sentinel, not Ctrl-Z.** The run before this one showed the receiver still alive with the
-    # payload echoing back: `\x1a` is an end-of-input signal to a console in line mode, and through
-    # a ConPTY pipe it is just another byte. So the payload ends with a line the receiver watches for.
-    p.write("PALMARENDOFPASTE\r\n")
-    say(OK, "wrote %d bytes in %.2fs without raising" % (len(blob), dt))
-    for _ in range(400):                     # the receiver writes early and often; wait for its count
-        if os.path.exists(outfile) and "OK " in open(outfile).read():
-            break
-        time.sleep(0.25)
-    tail = b""
-    try:
-        tail = p.read(4096).encode("utf-8", "replace")
-    except Exception:
-        pass
-    if not os.path.exists(outfile):
-        say(NO, "the receiver never wrote its count")
-        say(HM, "  alive:", p.isalive(), "· exit:", getattr(p, "exitstatus", "?"))
-        say(HM, "  what the pane showed:", repr(tail[-400:]))
-        return
-    raw = open(outfile).read()
-    for line in raw.strip().split("\n"):
-        say(HM, "  receiver:", line[:150])
-    ok = [l for l in raw.split("\n") if l.startswith("OK ")]
-    if not ok:
-        say(NO, "the receiver never got to a count — see its notes above")
-        return
-    got = ok[-1].split()
-    nbytes, nlines = int(got[1]), int(got[2])
-    say(OK if nlines == n else NO, "the receiver got %d lines of %d" % (nlines, n))
-    say(OK, "  and %d bytes (sent %d — a difference here is CRLF translation, not loss)"
-        % (nbytes, len(blob)))
-    if nlines != n:
-        say(HM, "  -> input is being truncated. That is #1 again, from the other side.")
+
+    for lines in (12, 100, 800, 2600):        # ~1 KB, 8 KB, 64 KB, 208 KB
+        out = os.path.join(tmpdir, "palmar_paste_%d.txt" % lines)
+        try:
+            os.remove(out)
+        except OSError:
+            pass
+        blob = ("x" * 79 + "\n") * lines
+        p = winpty.PtyProcess.spawn([sys.executable, script, out], dimensions=(50, 200))
+        time.sleep(1.2)
+        try:
+            p.write(blob)
+            p.write("PALMARENDOFPASTE\r\n")
+        except Exception as e:
+            say(NO, "%6d lines (%6d B): write raised — %s" % (lines, len(blob), e))
+            continue
+        got, secs, sent = None, None, False
+        for _ in range(90):
+            time.sleep(0.25)
+            if not os.path.exists(out):
+                continue
+            raw = open(out).read()
+            sent = sent or "SENTINEL" in raw
+            ok = [l for l in raw.split("\n") if l.startswith("OK ")]
+            if ok:
+                f = ok[-1].split()
+                got, secs = int(f[2]), float(f[3])
+                break
+        if got is None:
+            say(NO, "%6d lines (%6d B): the receiver never finished" % (lines, len(blob)))
+        else:
+            say(OK if got == lines else NO,
+                "%6d lines (%6d B): %d arrived in %.1fs%s"
+                % (lines, len(blob), got, secs, "" if got == lines else "   <- LOST %d" % (lines - got)))
+        try:
+            p.kill()
+        except Exception:
+            pass
 
 
 @guarded("item 16 — how many processes does an idle shell have?")
