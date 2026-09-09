@@ -156,30 +156,25 @@ def _api():
             pass
 
 
-def open_pty(cmd, cols=100, rows=30):
-    """Open one pseudoconsole on `cmd`. **Checks that the spawn worked** — the first run of this
-    probe read zero bytes from every pane and reported that as "no markers seen", when the real
-    answer was that nothing had been asked in a way that could answer."""
+def open_pty(cmd, cols=100, rows=30, cmdline=None):
+    """Open one pseudoconsole. **Checks the spawn** — a failed spawn and a silent one used to look
+    the same, and every downstream answer was really "nothing was read"."""
     p = PTY(cols, rows)
-    got = p.spawn(cmd)
-    say(OK if got is not False else NO, "spawn(%r) returned %r" % (cmd, got))
-    try:
-        say(OK if p.isalive() else NO, "  isalive", p.isalive(), "· pid", getattr(p, "pid", "?"))
-    except Exception as e:
-        say(HM, "  isalive raised —", e)
+    got = p.spawn(cmd, cmdline=cmdline) if cmdline else p.spawn(cmd)
+    say(OK if got is not False else NO, "spawn(%s) -> %r · alive %s · pid %s"
+        % (os.path.basename(cmd), got, p.isalive(), getattr(p, "pid", "?")))
     return p
 
 
 def drain(p, seconds=3.0, stop=None):
-    """Read until quiet, the deadline, or `stop` appears.
+    """Read until `stop` appears, or until the deadline. **Never exits early on quiet.**
 
-    **`PTY.read` takes no length.** Its real signature is `(self, /, blocking=False)` — the first
-    run passed 4096 into the `blocking` slot and polled with a 50 ms sleep, which is how a shell
-    that prints a banner immediately came back as zero bytes. Non-blocking with a tight poll: a
-    blocking read that never returns would hold a metered runner for the whole job timeout."""
+    The previous version stopped after 0.4 s with nothing coming in, which on a cold pane meant it
+    returned ConPTY's own handshake and quit before cmd.exe had printed a single character — and
+    every later section then measured that emptiness instead of the thing it was asking about.
+    Quiet is not the end of anything here; the sentinel is."""
     buf = b""
     end = time.time() + min(seconds, DEADLINE)
-    empty = 0
     while time.time() < end:
         try:
             chunk = p.read()
@@ -187,109 +182,144 @@ def drain(p, seconds=3.0, stop=None):
             say(HM, "  read raised —", type(e).__name__, e)
             break
         if chunk:
-            empty = 0
             buf += chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8", "replace")
             if stop and stop in buf:
                 break
         else:
-            empty += 1
-            if empty > 40 and buf:
-                break              # it printed, then went quiet — that is the end of the burst
             time.sleep(0.01)
     return buf
 
 
+SEQ = [0]
+
+
+def command(p, line, seconds=8.0):
+    """Send one command and read until **its own** end marker comes back.
+
+    Everything before used a timer and hoped. A marker is the only way to know the shell got as far
+    as the end of what we sent — and when it does not come back, that is itself the finding."""
+    SEQ[0] += 1
+    mark = "PALMARDONE%d" % SEQ[0]
+    p.write("%s & echo %s\r\n" % (line, mark))
+    out = drain(p, seconds, stop=mark.encode())
+    if mark.encode() not in out:
+        say(NO, "  the shell never echoed %s back — it did not run: %r" % (mark, out[-120:]))
+    return out
+
+
+def settle(p, seconds=8.0):
+    """Wait for a cold shell to actually reach a prompt, proved by a round trip."""
+    drain(p, 1.5)
+    out = command(p, "echo PROBEREADY", seconds)
+    return b"PROBEREADY" in out
+
+
 # ── the stream questions (#29 items 3, 4, 5, 15) ───────────────────────────────────────────
-@guarded("items 3 & 5 — the opening bytes, and the window-title terminator")
-def _stream():
+SHELL = os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe")
+
+
+@guarded("does input reach the shell at all? (everything below is worthless if not)")
+def _alive():
     if PTY is None:
         say(HM, "skipped: no PTY class")
         return
-    shell = os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe")
-    p = open_pty(shell)
-    first = drain(p, 2.0)
-    say(OK, "shell     ", shell)
-    say(OK, "first 160 bytes", repr(first[:160]))
-    # item 5: a title is set, then look at what ends it
-    p.write("prompt $P$G\r\n")
-    p.write("title palmar-probe\r\n")
-    b = drain(p, 2.0)
-    i = b.find(b"\x1b]0;")
-    if i < 0:
-        say(HM, "no ESC]0; seen — either the title went nowhere or it uses another OSC number")
-        say(HM, "  raw:", repr(b[:200]))
-    else:
-        seg = b[i:i + 80]
-        say(OK, "title sequence", repr(seg[:60]))
-        say(OK, "terminator    ", "BEL (\\x07)" if b"\x07" in seg else ("ST (ESC\\\\)" if b"\x1b\\" in seg else "neither — look above"))
+    p = open_pty(SHELL)
+    say(OK if settle(p) else NO, "a round trip through cmd.exe completes")
     try:
         p.write("exit\r\n"); drain(p, 1.0)
     except Exception:
         pass
 
 
-@guarded("item 4 — does a full-screen app emit ESC[?1049h / l ?")
-def _alt():
+@guarded("items 3 & 5 — the opening bytes, and the window-title terminator")
+def _stream():
     if PTY is None:
-        say(HM, "skipped: no PTY class")
         return
-    shell = os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe")
-    p = open_pty(shell)
-    drain(p, 1.5)
-    # `more` on a long file is the cheapest full-screen thing every Windows has.
-    tmp = os.path.join(tempfile.gettempdir(), "palmar_probe_lines.txt")
-    with open(tmp, "w") as fh:
-        for i in range(400):
-            fh.write("line %d\n" % i)
-    p.write("more %s\r\n" % tmp)
-    b = drain(p, 3.0)
-    on, off = b.count(b"\x1b[?1049h"), b.count(b"\x1b[?1049l")
-    say(OK if on or off else HM, "a real full-screen app: ESC[?1049h x%d   ESC[?1049l x%d" % (on, off))
-    if not (on or off):
-        say(HM, "  -> alt-screen is invisible here. palmar's `alt` would always be false on Windows,")
-        say(HM, "     and the ⑨ reconnect-restore path for alt panes would not exist. That is a")
-        say(HM, "     contract fact (#29 item 4), so paste this line back either way.")
+    p = open_pty(SHELL)
+    first = drain(p, 2.0)
+    say(OK, "opening bytes  ", repr(first[:120]))
+    say(HM, "  these land in the ring and get replayed to a late browser — _absorb may have to")
+    say(HM, "  filter them the way it filters 1049.")
+    if not settle(p):
+        say(NO, "  the shell is not answering; the title result below means nothing")
+        return
+    out = command(p, "title palmar-probe")
+    i = out.find(b"\x1b]0;")
+    if i < 0:
+        say(HM, "cmd's `title` produced no ESC]0; — ConPTY may not translate it")
+        say(HM, "  raw:", repr(out[:200]))
+    else:
+        seg = out[i:i + 80]
+        say(OK, "title sequence ", repr(seg[:60]))
+        say(OK, "terminator     ", "BEL" if b"\x07" in seg else ("ST (ESC backslash)" if b"\x1b\\" in seg else "neither"))
+    # An agent sets the title itself rather than through `title`, so ask that way too — it is the
+    # path #38 actually depends on.
+    out2 = command(p, 'echo \x1b]0;palmar-osc\x07')
+    j = out2.find(b"]0;palmar-osc")
+    say(OK if j >= 0 else HM, "an OSC written by the program survives:", j >= 0)
+    if j >= 0:
+        say(OK, "  terminator   ", repr(out2[j + 13:j + 16]))
     try:
-        p.write("q"); p.write("exit\r\n"); drain(p, 1.0)
+        p.write("exit\r\n"); drain(p, 1.0)
     except Exception:
         pass
 
-    # **The question `_absorb` actually asks is whether the marker survives the pipe**, not whether
-    # some app on this machine happens to use it. Emit it deliberately and look for it coming back.
-    # If it does not survive, palmar can never see alt-screen on Windows no matter what runs there.
-    q = open_pty("powershell.exe -NoLogo -NoProfile")
-    drain(q, 2.5)
-    q.write("[Console]::Write(\"`e[?1049h\"); [Console]::Write(\"MARKER-BETWEEN\"); [Console]::Write(\"`e[?1049l\")\r\n")
-    c = drain(q, 3.0)
-    say(OK if b"MARKER-BETWEEN" in c else HM, "the deliberate write came back:", b"MARKER-BETWEEN" in c)
-    say(OK if b"\x1b[?1049h" in c else NO,
-        "ESC[?1049h survives the pipe:", b"\x1b[?1049h" in c)
-    say(OK if b"\x1b[?1049l" in c else NO,
-        "ESC[?1049l survives the pipe:", b"\x1b[?1049l" in c)
-    if b"\x1b[?1049h" not in c:
-        say(HM, "  raw around the marker:", repr(c[-260:]))
-    try:
-        q.write("exit\r\n"); drain(q, 1.0)
-    except Exception:
-        pass
+
+@guarded("item 4 — alt-screen: does ESC[?1049h get through ConPTY?")
+def _alt():
+    if PTY is None:
+        return
+    # **Spawn the writer directly instead of typing at a prompt.** Quoting a PowerShell one-liner
+    # through a pty is its own source of failure, and the last run could not tell that apart from
+    # "the marker did not survive".
+    ps = "powershell.exe"
+    line = ('powershell.exe -NoLogo -NoProfile -Command '
+            '"[Console]::Write([char]27 + \'[?1049h\'); '
+            '[Console]::Write(\'MARKERBETWEEN\'); '
+            '[Console]::Write([char]27 + \'[?1049l\')"')
+    q = open_pty(ps, cmdline=line)
+    c = drain(q, 6.0, stop=b"MARKERBETWEEN")
+    say(OK if b"MARKERBETWEEN" in c else NO, "the writer ran at all:", b"MARKERBETWEEN" in c)
+    on = b"\x1b[?1049h" in c
+    off = b"\x1b[?1049l" in c
+    say(OK if on else NO, "ESC[?1049h survives the pipe:", on)
+    say(OK if off else NO, "ESC[?1049l survives the pipe:", off)
+    if not on:
+        say(HM, "  -> palmar's `alt` can never be true on Windows. _absorb would never fire, and")
+        say(HM, "     the reconnect-restore path for alt panes (⑨) does not exist there.")
+        say(HM, "  raw:", repr(c[-300:]))
+
+    # And what a real full-screen program does, which is a different question.
+    p = open_pty(SHELL)
+    if settle(p):
+        tmp = os.path.join(tempfile.gettempdir(), "palmar_probe_lines.txt")
+        with open(tmp, "w") as fh:
+            for i in range(400):
+                fh.write("line %d\n" % i)
+        p.write("more %s\r\n" % tmp)
+        b2 = drain(p, 4.0)
+        say(OK if b"\x1b[?1049" in b2 else HM,
+            "a real pager: h x%d  l x%d" % (b2.count(b"\x1b[?1049h"), b2.count(b"\x1b[?1049l")))
+        try:
+            p.write("q"); p.write("exit\r\n"); drain(p, 1.0)
+        except Exception:
+            pass
 
 
 @guarded("item 15 — does Korean survive the round trip? (bytes only; IME needs a person)")
 def _korean():
     if PTY is None:
-        say(HM, "skipped: no PTY class")
         return
-    shell = os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe")
-    p = open_pty(shell)
-    drain(p, 1.5)
-    p.write("chcp 65001\r\n")
-    drain(p, 1.5)
-    p.write("echo 한글도 잘 되나\r\n")
-    b = drain(p, 2.0)
-    txt = b.decode("utf-8", "replace")
+    p = open_pty(SHELL)
+    if not settle(p):
+        say(NO, "the shell is not answering")
+        return
+    command(p, "chcp 65001")
+    out = command(p, "echo 한글도 잘 되나")
+    txt = out.decode("utf-8", "replace")
     say(OK if "한글도 잘 되나" in txt else NO, "echoed back intact")
     if "한글도 잘 되나" not in txt:
-        say(HM, "  raw tail:", repr(b[-160:]))
+        say(HM, "  raw tail:", repr(out[-200:]))
     try:
         p.write("exit\r\n"); drain(p, 1.0)
     except Exception:
@@ -299,22 +329,40 @@ def _korean():
 @guarded("item 8 — does a 200 KB paste arrive whole?")
 def _paste():
     if PTY is None:
-        say(HM, "skipped: no PTY class")
         return
-    shell = os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe")
-    p = open_pty(shell, cols=200, rows=50)
-    drain(p, 1.5)
-    blob = ("x" * 79 + "\n") * 2600          # ~208 KB
+    p = open_pty(SHELL, cols=200, rows=50)
+    if not settle(p):
+        say(NO, "the shell is not answering")
+        return
+    # **Make the shell count what it received.** `write()` returning without raising says nothing —
+    # the macOS bug this mirrors (#1) was a short write that dropped bytes silently. `find /c /v ""`
+    # counts the lines it reads from stdin, so the number coming back is the number that arrived.
+    n = 2600
+    blob = ("x" * 79 + "\n") * n            # ~208 KB
+    p.write('find /c /v ""\r\n')
+    drain(p, 1.0)
     t = time.time()
     try:
         p.write(blob)
     except Exception as e:
         say(NO, "write raised on a big payload —", e)
         return
-    say(OK, "wrote %d bytes in %.2fs without raising" % (len(blob), time.time() - t))
-    say(HM, "whether the child RECEIVED all of it needs the daemon; this only shows write() survives")
+    dt = time.time() - t
+    p.write("\x1a\r\n")                    # Ctrl-Z: end of input on Windows
+    out = drain(p, 8.0)
+    say(OK, "wrote %d bytes in %.2fs without raising" % (len(blob), dt))
+    import re as _re
+    hits = [int(x) for x in _re.findall(rb"^\s*(\d+)\s*$", out, _re.M)]
+    if hits:
+        got = max(hits)
+        say(OK if got == n else NO, "the shell counted %d lines of %d" % (got, n))
+        if got != n:
+            say(HM, "  -> input is being truncated, which is #1 all over again from the other side")
+    else:
+        say(HM, "no count came back — `find` may not read a pty's stdin this way")
+        say(HM, "  raw tail:", repr(out[-200:]))
     try:
-        p.write("\x03"); drain(p, 1.0)
+        p.write("\x03"); p.write("exit\r\n"); drain(p, 1.0)
     except Exception:
         pass
 
