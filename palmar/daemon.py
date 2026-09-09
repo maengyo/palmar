@@ -21,6 +21,22 @@ loop over a self-pipe, so the single thread stays single. A PTY hitting EOF arri
 from __future__ import annotations
 
 import argparse
+import sys
+
+# **A platform we do not support must not be a traceback.** `fcntl`, `pty` and `termios` do not
+# exist on Windows, so importing them there kills the process before a line of palmar runs and the
+# person sees an ImportError stack instead of a sentence. The check has to sit **above** the import
+# block for that reason — and above the Python-version check below, which was equally unreachable.
+# The daemon is POSIX to the bone (pty.fork, tcgetpgrp, flock, signals, 0600); the native port is #29.
+if sys.platform == "win32":
+    raise SystemExit(
+        "palmar does not run natively on Windows yet.\n"
+        "  Run the daemon inside WSL and open the address it prints in your Windows browser.\n"
+        "  The native port is tracked at https://github.com/maengyo/palmar/issues/29"
+    )
+if sys.version_info < (3, 9):
+    raise SystemExit("palmar: Python 3.9 or newer is required (/usr/bin/python3 is 3.9.6)")
+
 import asyncio
 import base64
 import collections
@@ -36,16 +52,12 @@ import signal
 import stat
 import struct
 import subprocess
-import sys
 import termios
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import PROTOCOL, __version__
-
-if sys.version_info < (3, 9):
-    sys.exit("palmard: 파이썬 3.9 이상이 필요하다 (/usr/bin/python3 가 3.9.6 이다)")
 
 WS_MAGIC = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
