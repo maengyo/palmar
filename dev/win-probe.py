@@ -343,14 +343,23 @@ def _paste():
         os.remove(outfile)
     except OSError:
         pass
+    # **The path goes in as an argument, not baked into the source.** The first attempt wrote
+    # `open(r%r, ...)` with %r on a Windows path, which doubles every backslash inside a raw string
+    # — the receiver died with exit 1 and the probe could only report that it "never reached EOF".
+    # It also writes the traceback into the same file, so a failure explains itself next time.
     with open(script, "w") as fh:
-        fh.write("import sys\n"
-                 "d = sys.stdin.buffer.read()\n"
-                 "open(r%r, 'w').write('%%d %%d' %% (len(d), len(d.splitlines())))\n" % outfile)
+        fh.write(
+            "import sys, traceback\n"
+            "out = sys.argv[1]\n"
+            "try:\n"
+            "    d = sys.stdin.buffer.read()\n"
+            "    open(out, 'w').write('OK %d %d' % (len(d), len(d.splitlines())))\n"
+            "except Exception:\n"
+            "    open(out, 'w').write('ERR ' + traceback.format_exc())\n")
     n = 2600
     blob = ("x" * 79 + "\n") * n            # ~208 KB
     p = open_pty(sys.executable, cols=200, rows=50,
-                 cmdline='"%s" "%s"' % (sys.executable, script))
+                 cmdline='"%s" "%s" "%s"' % (sys.executable, script, outfile))
     drain(p, 2.0)                            # let the interpreter come up
     t = time.time()
     try:
@@ -365,12 +374,20 @@ def _paste():
         if os.path.exists(outfile):
             break
         time.sleep(0.25)
+    tail = drain(p, 2.0)
     if not os.path.exists(outfile):
-        say(NO, "the receiver never wrote its count — it did not reach EOF")
+        say(NO, "the receiver never wrote its count")
         say(HM, "  alive:", p.isalive(), "· exit:", getattr(p, "get_exitstatus", lambda: "?")())
+        say(HM, "  what the pane showed:", repr(tail[-400:]))
         return
-    got = open(outfile).read().split()
-    nbytes, nlines = int(got[0]), int(got[1])
+    raw = open(outfile).read()
+    if not raw.startswith("OK "):
+        say(NO, "the receiver raised:")
+        for line in raw.strip().split("\n")[-5:]:
+            print("      " + line)
+        return
+    got = raw.split()
+    nbytes, nlines = int(got[1]), int(got[2])
     say(OK if nlines == n else NO, "the receiver got %d lines of %d" % (nlines, n))
     say(OK, "  and %d bytes (sent %d — a difference here is CRLF translation, not loss)"
         % (nbytes, len(blob)))
