@@ -1550,7 +1550,17 @@ def list_dirs(path: Path) -> list[dict]:
                     continue
             except OSError:
                 continue
-            entries.append(dir_entry(e.name, e.path))
+            # **자식도 뿌리 안이어야 메타데이터를 읽는다.** 부모만 검사하고 자식은 그냥 따라가면,
+            # 홈 안의 링크 하나로 뿌리 **밖** 폴더의 브랜치 이름과 하위 폴더 유무가 새어 나온다 —
+            # 같은 경로를 직접 물으면 400 인데도 그렇다(2026-09-09 실측: 뿌리 밖 저장소의
+            # `git_branch` 가 목록에 그대로 찍혔다). 줄에서 빼지는 않는다: 링크는 보이되 그 안을
+            # 들여다보지 않을 뿐이고, 눌러서 들어가려 하면 그때 `under_roots` 가 400 으로 막는다.
+            try:
+                inside = under_roots(Path(e.path).resolve())
+            except OSError:
+                inside = False
+            entries.append(dir_entry(e.name, e.path) if inside
+                           else {"name": e.name, "git_branch": None, "has_children": False})
     entries.sort(key=lambda x: x["name"].casefold())
     return entries
 
