@@ -138,7 +138,31 @@ takes you to that terminal.
 | Browser | Vanilla JavaScript, no framework, no build step. xterm.js draws the terminals. |
 | Runs on | macOS, Linux, and WSL (run the daemon inside WSL, browse from Windows). |
 | Network | **Nothing goes out.** The daemon has no HTTP client and the page loads nothing from anywhere — no CDN, no font host, no telemetry. It binds `127.0.0.1` to serve the page and that is the only socket it opens. |
-| Security | A token in a `0600` file, plus `Origin` and `Host` checks, on every API request — reads included. Each terminal's pty is closed to every other terminal. |
+| Security | A key gates the page, a token gates every API request (reads included), plus `Origin` and `Host` checks. Each terminal's pty is closed to every other terminal. **palmar does not isolate terminals from each other** — see below. |
+
+## What palmar does not protect you from
+
+Worth saying plainly, because the opposite is easy to assume.
+
+**Anything running in a terminal can drive palmar.** Unix permissions separate *users*, not
+programs: `0600` means "only you", not "only palmar", and the shells palmar opens run as you. So a
+script or an agent in one pane can read the daemon's token and attach to any other pane — reading
+its output and typing into it, including answering another agent's approval prompt. It can also
+rewrite the hook shim, which sits at the front of every pane's `PATH`.
+
+This is not a hole palmar opens. Anything running as you already has your SSH keys, your browser
+cookies and your shell startup files. But palmar makes it easy and specific, and the approval
+prompt is the part that matters: it is meant for a human to answer.
+
+Closing it for real needs an OS boundary — a separate user or a container per pane — which would
+make palmar a different program. It is written down rather than papered over.
+
+**The key lives in the URL.** That is the cost of the bookmark surviving restarts. On a machine
+where another account can run programs, that account can take the daemon's port while it is stopped
+and be handed the key by a page that opens against it. The page never sends the key on its own for
+exactly this reason — it asks you to reload instead — but opening the link yourself while an
+impostor holds the port would hand it over. A desktop build will use a Unix socket, where there is
+no port to take.
 
 ## What is not built yet
 
