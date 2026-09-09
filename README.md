@@ -16,7 +16,7 @@ agent inside.
 
 Close the browser tab and the sessions keep running.
 
-![palmar running: canvases as tabs, terminals placed on the canvas, the session that wants you at the top of the list](docs/img/palmar-light.png)
+![palmar running: eight terminals at sizes their work asked for, spread across a canvas wider and taller than the window. Two are cut off at the edges, the left list marks the ones currently off-screen, and the minimap bottom-right frames the part being looked at](docs/img/palmar-light.png)
 
 ## What it does
 
