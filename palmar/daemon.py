@@ -66,6 +66,14 @@ RING_MAX_SEGS = 64
 SHAKE_MS = 50
 #: 브라우저가 보낼 수 있는 웹소켓 메시지 상한. 길이 필드는 2^63 까지 적을 수 있으니 막아야 한다.
 MAX_WS_MESSAGE = 16 * 1024 * 1024
+#: 한 연결에 쌓아 둘 수 있는 **아직 안 나간** 바이트. 넘으면 그 연결을 끊는다.
+#: `write()` 는 즉시 돌아오고 못 보낸 것은 트랜스포트가 들고 있으므로, 안 읽는 상대에게 계속 쓰면
+#: 그 큐가 무한정 자란다 — 그리고 그 메모리는 데몬의 것이라 **다른 판까지 같이 죽는다.**
+#: 응용 계층의 ACK 흐름 제어(스파이크 D)는 상대가 정직할 때만 듣는다: 안 읽으면서 ACK 만 지어내면
+#: 그대로 뚫린다. 이건 그 아래에 까는 마지막 그물이다.
+WS_QUEUE_MAX = 8 * 1024 * 1024
+#: 제어 프레임(close·ping·pong)은 RFC 6455 상 125바이트 이하이고 쪼갤 수 없다. 안 지키면 16MB 짜리
+#: ping 하나로 같은 크기의 pong 을 받아 낼 수 있다.
 #: HTTP 요청 몸 상한.
 MAX_BODY = 1024 * 1024
 #: pane 입력 큐 상한. PTY 슬레이브가 안 빠질 때 여기까지만 쌓고 넘으면 버린다(로그) (#1).
@@ -431,6 +439,12 @@ async def read_frame(reader) -> tuple[bool, int, bytes]:
         n = struct.unpack("!Q", await reader.readexactly(8))[0]
     if n > MAX_WS_MESSAGE:
         raise ValueError("websocket frame too large")
+    if opcode & 0x8:                       # 제어 프레임
+        if n > 125 or not fin:
+            raise ValueError("bad control frame")
+    if not masked:
+        # 클라이언트는 **반드시** 마스킹한다(RFC 6455 §5.1). 안 한 프레임은 브라우저가 아니다.
+        raise ValueError("unmasked client frame")
     mask = await reader.readexactly(4) if masked else b""
     payload = await reader.readexactly(n) if n else b""
     if masked and n:
@@ -438,6 +452,20 @@ async def read_frame(reader) -> tuple[bool, int, bytes]:
         full = (mask * (n // 4 + 1))[:n]
         payload = (int.from_bytes(payload, "big") ^ int.from_bytes(full, "big")).to_bytes(n, "big")
     return fin, opcode, payload
+
+
+def queue_full(writer) -> bool:
+    """이 연결에 안 나간 바이트가 너무 많나 = 상대가 안 읽고 있다.
+
+    `asyncio` 의 `write()` 는 절대 막히지 않는다 — 못 보낸 것은 트랜스포트 버퍼에 쌓인다.
+    그래서 안 읽는 상대에게 계속 쓰면 조용히 데몬 메모리가 는다(Codex 리뷰 2026-09-09: 1KB ping
+    100개에 응답 102,800바이트가 드레인 0회로 쌓였다). 판 하나의 문제가 아니라 데몬 전체의 문제다.
+    """
+    t = getattr(writer, "transport", None)
+    try:
+        return t is not None and t.get_write_buffer_size() > WS_QUEUE_MAX
+    except Exception:
+        return False
 
 
 async def read_message(reader, writer) -> tuple[int, bytes] | None:
@@ -450,6 +478,8 @@ async def read_message(reader, writer) -> tuple[int, bytes] | None:
         if opcode == 0x8:
             return None
         if opcode == 0x9:
+            if queue_full(writer):
+                return None            # 안 읽으면서 계속 묻는다 — 끊는다
             writer.write(Frame.build(payload, 0xA))
             continue
         if opcode == 0xA:
@@ -694,6 +724,16 @@ class Session:
         alt_changed = self._absorb(data)
         frame = Frame.build(data)
         for a in list(self.attached):
+            # ACK 흐름 제어(위 `_flow`)는 상대가 정직할 때만 듣는다 — 안 읽으면서 ACK 만 지어내면
+            # `unacked` 는 0 인 채로 트랜스포트 큐만 부푼다. 그 아래에 까는 마지막 그물이다.
+            if queue_full(a.writer):
+                log(f"session {self.id}: client not reading, detaching")
+                self.detach(a)
+                try:
+                    a.writer.close()
+                except Exception:
+                    pass
+                continue
             try:
                 a.writer.write(frame)
                 a.unacked += len(data)
@@ -1246,6 +1286,14 @@ class Registry:
         for w in list(self.event_clients):
             if w.is_closing():
                 self.event_clients.discard(w)
+                continue
+            if queue_full(w):
+                # 안 읽는 구경꾼 하나가 데몬 메모리를 먹게 두지 않는다. 끊으면 브라우저가 다시 붙는다.
+                self.event_clients.discard(w)
+                try:
+                    w.close()
+                except Exception:
+                    pass
                 continue
             try:
                 w.write(frame)
