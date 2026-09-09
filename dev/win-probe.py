@@ -27,6 +27,14 @@ import tempfile
 import time
 import traceback
 
+# The Windows console starts on a legacy code page and `print` dies on anything outside it — the
+# first run of this probe was killed mid-section by a UnicodeEncodeError on a circled digit.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 DEADLINE = 20.0          # seconds any single read loop may take
 OK, NO, HM = "  ok ", "  NO ", "  ?? "
 
@@ -130,33 +138,64 @@ def _api():
     # the README nor PyPI says. Look for a blocking flag on the signature first.
     try:
         import inspect
-        say(OK, "PTY.read signature", str(inspect.signature(PTY.read)))
+        for n in ("__init__", "spawn", "read", "write", "set_size", "get_exitstatus"):
+            f = getattr(PTY, n, None)
+            if f is not None:
+                say(OK, "  PTY.%-14s %s" % (n, inspect.signature(f)))
     except Exception as e:
-        say(HM, "no signature for PTY.read —", e)
+        say(HM, "signatures unavailable —", e)
+    # The high-level class as well: it may be the better fit, and one run costs real minutes.
+    PP = getattr(winpty, "PtyProcess", None)
+    if PP is not None:
+        say(OK, "PtyProcess methods", ", ".join(sorted(n for n in dir(PP) if not n.startswith("_")))[:220])
+        try:
+            import inspect
+            say(OK, "  PtyProcess.spawn", str(inspect.signature(PP.spawn)))
+            say(OK, "  PtyProcess.read ", str(inspect.signature(PP.read)))
+        except Exception:
+            pass
 
 
 def open_pty(cmd, cols=100, rows=30):
-    """Open one pseudoconsole on `cmd` and return (pty, first bytes)."""
+    """Open one pseudoconsole on `cmd`. **Checks that the spawn worked** — the first run of this
+    probe read zero bytes from every pane and reported that as "no markers seen", when the real
+    answer was that nothing had been asked in a way that could answer."""
     p = PTY(cols, rows)
-    p.spawn(cmd)
+    got = p.spawn(cmd)
+    say(OK if got is not False else NO, "spawn(%r) returned %r" % (cmd, got))
+    try:
+        say(OK if p.isalive() else NO, "  isalive", p.isalive(), "· pid", getattr(p, "pid", "?"))
+    except Exception as e:
+        say(HM, "  isalive raised —", e)
     return p
 
 
-def drain(p, seconds=2.0, stop=None):
-    """Read until quiet, the deadline, or `stop` appears. Never longer than DEADLINE."""
+def drain(p, seconds=3.0, stop=None):
+    """Read until quiet, the deadline, or `stop` appears.
+
+    **`PTY.read` takes no length.** Its real signature is `(self, /, blocking=False)` — the first
+    run passed 4096 into the `blocking` slot and polled with a 50 ms sleep, which is how a shell
+    that prints a banner immediately came back as zero bytes. Non-blocking with a tight poll: a
+    blocking read that never returns would hold a metered runner for the whole job timeout."""
     buf = b""
     end = time.time() + min(seconds, DEADLINE)
+    empty = 0
     while time.time() < end:
         try:
-            chunk = p.read(4096)
-        except Exception:
+            chunk = p.read()
+        except Exception as e:
+            say(HM, "  read raised —", type(e).__name__, e)
             break
         if chunk:
-            buf += chunk if isinstance(chunk, bytes) else chunk.encode("utf-8", "replace")
+            empty = 0
+            buf += chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8", "replace")
             if stop and stop in buf:
                 break
         else:
-            time.sleep(0.05)
+            empty += 1
+            if empty > 40 and buf:
+                break              # it printed, then went quiet — that is the end of the burst
+            time.sleep(0.01)
     return buf
 
 
@@ -205,13 +244,32 @@ def _alt():
     p.write("more %s\r\n" % tmp)
     b = drain(p, 3.0)
     on, off = b.count(b"\x1b[?1049h"), b.count(b"\x1b[?1049l")
-    say(OK if on or off else HM, "ESC[?1049h x%d   ESC[?1049l x%d" % (on, off))
+    say(OK if on or off else HM, "a real full-screen app: ESC[?1049h x%d   ESC[?1049l x%d" % (on, off))
     if not (on or off):
         say(HM, "  -> alt-screen is invisible here. palmar's `alt` would always be false on Windows,")
         say(HM, "     and the ⑨ reconnect-restore path for alt panes would not exist. That is a")
         say(HM, "     contract fact (#29 item 4), so paste this line back either way.")
     try:
         p.write("q"); p.write("exit\r\n"); drain(p, 1.0)
+    except Exception:
+        pass
+
+    # **The question `_absorb` actually asks is whether the marker survives the pipe**, not whether
+    # some app on this machine happens to use it. Emit it deliberately and look for it coming back.
+    # If it does not survive, palmar can never see alt-screen on Windows no matter what runs there.
+    q = open_pty("powershell.exe -NoLogo -NoProfile")
+    drain(q, 2.5)
+    q.write("[Console]::Write(\"`e[?1049h\"); [Console]::Write(\"MARKER-BETWEEN\"); [Console]::Write(\"`e[?1049l\")\r\n")
+    c = drain(q, 3.0)
+    say(OK if b"MARKER-BETWEEN" in c else HM, "the deliberate write came back:", b"MARKER-BETWEEN" in c)
+    say(OK if b"\x1b[?1049h" in c else NO,
+        "ESC[?1049h survives the pipe:", b"\x1b[?1049h" in c)
+    say(OK if b"\x1b[?1049l" in c else NO,
+        "ESC[?1049l survives the pipe:", b"\x1b[?1049l" in c)
+    if b"\x1b[?1049h" not in c:
+        say(HM, "  raw around the marker:", repr(c[-260:]))
+    try:
+        q.write("exit\r\n"); drain(q, 1.0)
     except Exception:
         pass
 
