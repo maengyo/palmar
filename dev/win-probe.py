@@ -347,21 +347,42 @@ def _paste():
     # `open(r%r, ...)` with %r on a Windows path, which doubles every backslash inside a raw string
     # — the receiver died with exit 1 and the probe could only report that it "never reached EOF".
     # It also writes the traceback into the same file, so a failure explains itself next time.
+    # **Make the receiver describe what it sees.** Two runs said "0 lines" without saying why, and
+    # a third guess would cost more than an answer. It records whether stdin is a tty, what the
+    # first read actually returns, and only then counts — so a wrong assumption shows up as data.
     with open(script, "w") as fh:
         fh.write(
-            "import sys, traceback\n"
+            "import sys, time, traceback\n"
             "out = sys.argv[1]\n"
+            "log = []\n"
+            "def put():\n"
+            "    open(out, 'w').write('\\n'.join(log))\n"
             "try:\n"
-            "    n = b = 0\n"
-            "    while True:\n"
+            "    log.append('isatty %s' % sys.stdin.isatty())\n"
+            "    log.append('encoding %s' % sys.stdin.encoding)\n"
+            "    log.append('buffer %s' % type(sys.stdin.buffer).__name__)\n"
+            "    put()\n"
+            "    first = sys.stdin.buffer.readline()\n"
+            "    log.append('first readline %r' % first[:60])\n"
+            "    put()\n"
+            "    n = 1 if first and b'PALMARENDOFPASTE' not in first else 0\n"
+            "    b = len(first) if n else 0\n"
+            "    t = time.time() + 25\n"
+            "    while time.time() < t:\n"
             "        line = sys.stdin.buffer.readline()\n"
-            "        if not line or b'PALMARENDOFPASTE' in line:\n"
+            "        if not line:\n"
+            "            log.append('EOF after %d lines' % n)\n"
+            "            break\n"
+            "        if b'PALMARENDOFPASTE' in line:\n"
+            "            log.append('sentinel after %d lines' % n)\n"
             "            break\n"
             "        n += 1\n"
             "        b += len(line)\n"
-            "    open(out, 'w').write('OK %d %d' % (b, n))\n"
+            "    log.append('OK %d %d' % (b, n))\n"
+            "    put()\n"
             "except Exception:\n"
-            "    open(out, 'w').write('ERR ' + traceback.format_exc())\n")
+            "    log.append('ERR ' + traceback.format_exc())\n"
+            "    put()\n")
     n = 2600
     blob = ("x" * 79 + "\n") * n            # ~208 KB
     # **The high-level class, because it takes a list.** With PTY.spawn(appname, cmdline=...) the
@@ -385,8 +406,8 @@ def _paste():
     # a ConPTY pipe it is just another byte. So the payload ends with a line the receiver watches for.
     p.write("PALMARENDOFPASTE\r\n")
     say(OK, "wrote %d bytes in %.2fs without raising" % (len(blob), dt))
-    for _ in range(80):                      # wait for the child to finish writing the file
-        if os.path.exists(outfile):
+    for _ in range(120):                     # the receiver writes early and often; wait for its count
+        if os.path.exists(outfile) and "OK " in open(outfile).read():
             break
         time.sleep(0.25)
     tail = b""
@@ -400,12 +421,13 @@ def _paste():
         say(HM, "  what the pane showed:", repr(tail[-400:]))
         return
     raw = open(outfile).read()
-    if not raw.startswith("OK "):
-        say(NO, "the receiver raised:")
-        for line in raw.strip().split("\n")[-5:]:
-            print("      " + line)
+    for line in raw.strip().split("\n"):
+        say(HM, "  receiver:", line[:150])
+    ok = [l for l in raw.split("\n") if l.startswith("OK ")]
+    if not ok:
+        say(NO, "the receiver never got to a count — see its notes above")
         return
-    got = raw.split()
+    got = ok[-1].split()
     nbytes, nlines = int(got[1]), int(got[2])
     say(OK if nlines == n else NO, "the receiver got %d lines of %d" % (nlines, n))
     say(OK, "  and %d bytes (sent %d — a difference here is CRLF translation, not loss)"
