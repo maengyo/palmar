@@ -2042,6 +2042,57 @@ function quietFor(x) {
   return t === undefined ? null : Math.max(0, Date.now() / 1000 - t);
 }
 
+// ── the offer left by a daemon that stopped ────────────────────────────────────────────────
+// The shells are gone and cannot come back (⑦=b — no handoff, and that stands). What can come back
+// is **where you were**: each pane's name and the folder it was in when the daemon stopped, which is
+// the folder you had `cd`-ed to, not the one it opened at. Canvases are already back — they are data.
+const restoreEl = $('#restore');
+
+// Keep the end of a path and drop the front. The rail is narrow and the tail is the part that says
+// which folder this is — `…/deep/nested` tells you something, `~/Users/very/long/…` does not.
+function tailPath(p, max = 26) {
+  return p.length <= max ? p : '…' + p.slice(-(max - 1));
+}
+
+function renderRestore(offer) {
+  if (!restoreEl) return;
+  restoreEl.textContent = '';
+  const ss = offer && offer.sessions;
+  if (!ss || !ss.length) { restoreEl.hidden = true; return; }
+  restoreEl.hidden = false;
+  const head = el('div', 'rs-h', ss.length + (ss.length === 1 ? ' terminal from before' : ' terminals from before'));
+  restoreEl.appendChild(head);
+  // **Two lines, name first.** One line each put the name and the path in the same row and the rail
+  // is narrow: the path won and the names came out as "a…" and "w…". The name is what tells one pane
+  // from another, so it gets the line, and the folder sits under it in faint ink — the same shape the
+  // left list already uses for a session row.
+  for (const x of ss.slice(0, 8)) {
+    const row = el('div', 'rs-r');
+    row.append(el('div', 'rs-n', x.name || shortPath(x.cwd)));
+    if (x.name) row.append(el('div', 'rs-p', tailPath(shortPath(x.cwd))));
+    restoreEl.appendChild(row);
+  }
+  if (ss.length > 8) restoreEl.appendChild(el('div', 'rs-r', el('div', 'rs-p', '+ ' + (ss.length - 8) + ' more')));
+  const act = el('div', 'rs-a');
+  const yes = el('button', 'rs-y', 'Open again');
+  const no = el('button', 'rs-n2', 'Dismiss');
+  // **The daemon does it, so every open browser follows along.** Restoring in one tab and leaving
+  // another showing the offer would be two truths about one workspace.
+  yes.addEventListener('click', async () => {
+    yes.disabled = no.disabled = true;
+    yes.textContent = 'opening…';
+    try { await api('POST', '/api/restore'); renderRestore(null); }
+    catch (e) { toast(['could not restore — ', { d: String(e.message || e) }]); yes.disabled = no.disabled = false; yes.textContent = 'Open them again'; }
+  });
+  no.addEventListener('click', async () => {
+    no.disabled = true;
+    try { await api('DELETE', '/api/restore'); } catch (e) {}
+    renderRestore(null);
+  });
+  act.append(yes, no);
+  restoreEl.appendChild(act);
+}
+
 function renderActs() {
   if (!actsEl) return;
   actsEl.textContent = '';
@@ -2226,6 +2277,7 @@ function connectEvents() {
     // Within one hello frame every session.canvas is in this canvases list (protocol.md) — put the canvases in first
     if (m.t === 'hello') {
       checkProtocol(m); setCanvases(m.canvases || []); reconcile(m.sessions || []);
+      renderRestore(m.restore);
       acts = m.log || []; renderActs();
     }
     else if (m.t === 'log' && m.e) pushAct(m.e);

@@ -162,6 +162,10 @@
     <aside class="rail right">
       <!-- The status lights only say "now". This list says what happened while you were away — what
            finished and what asked, and in what order. The daemon holds it, so it survives a closed browser. -->
+      <!-- The offer left by a daemon that stopped. Canvases come back on their own; terminals are
+           processes, so opening eight of them is a thing a person presses once. Hidden unless there
+           is something to offer, and gone once anything has been opened. -->
+      <div class="restore" id="restore" hidden></div>
       <div class="rh">Attention<span class="sp"></span><span class="n" id="act-new"></span></div>
       <div class="acts" id="acts"></div>
       <div class="rh">Directories<span class="sp"></span><span class="ib" id="mkdir" title="new folder">＋</span><span class="ib" id="refresh" title="refresh">↻</span></div>

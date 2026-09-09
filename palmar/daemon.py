@@ -187,6 +187,15 @@ TOKEN_FILE = RUN_DIR / "token"
 KEY_FILE = RUN_DIR / "key"
 #: Where to recover the address printed at start-up once it is lost. One `cat ~/.palmar/run/url` does it.
 URL_FILE = RUN_DIR / "url"
+#: **A recovery file, not a config.** A daemon dies — an update, a crash, a laptop that slept — and
+#: with it go every pane's shell, name and folder. The shells cannot come back (⑦=b: no handoff, and
+#: that stands), but *where you were* can: the canvases, and each pane's name and last directory.
+#: It lives outside `run/`, which is this daemon's live state and gets swept at start-up; this file
+#: is meant to outlive a daemon, which is the whole point of it. 0600 — it holds paths.
+RESTORE_FILE = PALMAR_DIR / "restore.json"
+RESTORE_EVERY_S = 10.0
+RESTORE = [None]          # what the previous daemon left, read once at start-up
+RESTORE_TIMER = [None]
 # web/ sits **next to** this file. The path is the same whether it runs from the repo with
 # `python3 -m palmar` or installed from a wheel — if the two differed you would get bugs that only appear on one side.
 WEB = (Path(__file__).resolve().parent / "web").resolve()
@@ -1384,6 +1393,47 @@ def ensure_private_dir(p: Path) -> None:
         os.chmod(p, 0o700)        # something merely readable like 0755 is not refused, it is tightened
 
 
+#: Reading a pane's **current** directory. The cwd a session was created with is not where the person
+#: ended up — they `cd` — and what is worth remembering across a restart is where they ended up.
+#: `None` means "cannot ask on this platform"; the caller then falls back to the cwd it opened at,
+#: which is a worse answer but never a wrong one. A platform we have not taught this to must not
+#: silently report the wrong folder.
+#: macOS: proc_pidinfo(PROC_PIDVNODEPATHINFO). struct proc_vnodepathinfo is two vnode_info_path of
+#: 1176 bytes each, cdir first, and the path sits at offset 152 inside it (152 + MAXPATHLEN 1024).
+#: Measured on this machine: 7.9 µs a call, so 50 panes cost 0.4 ms.
+_LIBPROC = [False]
+_VPI_SIZE, _VPI_OFF, _VPI_PATH = 2352, 152, 1024
+
+
+def cwd_of(pid: int):
+    if sys.platform == "darwin":
+        if _LIBPROC[0] is False:
+            try:
+                import ctypes, ctypes.util
+                lib = ctypes.CDLL(ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib")
+                lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                             ctypes.c_void_p, ctypes.c_int]
+                lib.proc_pidinfo.restype = ctypes.c_int
+                _LIBPROC[0] = (ctypes, lib)
+            except Exception as e:
+                log(f"cannot read a pane's directory on this machine — {e}")
+                _LIBPROC[0] = None
+        if _LIBPROC[0] is None:
+            return None
+        ctypes, lib = _LIBPROC[0]
+        buf = ctypes.create_string_buffer(_VPI_SIZE)
+        if lib.proc_pidinfo(pid, 9, 0, buf, _VPI_SIZE) <= 0:      # 9 = PROC_PIDVNODEPATHINFO
+            return None
+        raw = buf.raw[_VPI_OFF:_VPI_OFF + _VPI_PATH].split(b"\0", 1)[0]
+        return raw.decode("utf-8", "replace") or None
+    if sys.platform.startswith("linux"):
+        try:
+            return os.readlink("/proc/%d/cwd" % pid)
+        except OSError:
+            return None
+    return None
+
+
 def write_private(path: Path, data: bytes, mode: int) -> None:
     """Writes anew with mode. Writes a temp file and renames — never leaves a running shim half-written."""
     tmp = path.with_name(path.name + ".tmp")
@@ -1401,6 +1451,72 @@ def write_pane_settings(sid: str) -> None:
     url = f"http://127.0.0.1:{PORT[0]}/hook/claude?pane={sid}&token={TOKEN[0]}"
     hooks = {ev: [{"hooks": [{"type": "http", "url": url}]}] for ev in HOOK_EVENTS}
     write_private(RUN_DIR / f"{sid}.json", json.dumps({"hooks": hooks}, indent=1).encode() + b"\n", 0o600)
+
+
+#: The last snapshot written, so an unchanged one is not rewritten. cwd is polled, and polling
+#: something that rarely changes should not mean writing a file every time it is looked at.
+_LAST_SNAP = [None]
+
+
+def snapshot() -> dict:
+    """What is worth having back after this daemon is gone: the canvases, and each pane's name and
+    **the folder it is in now** — not the one it opened at."""
+    return {
+        "v": 1,
+        "canvases": [{"id": c.id, "name": c.name} for c in registry.canvas_list()],
+        "sessions": [{"name": s.name, "canvas": s.canvas,
+                      "cwd": cwd_of(s.pid) or s.cwd}
+                     for s in registry.list()],
+    }
+
+
+def save_restore() -> None:
+    """Write the recovery file, but only when it would say something new."""
+    try:
+        snap = snapshot()
+    except Exception as e:
+        log(f"could not take a restore snapshot — {e}")
+        return
+    if snap == _LAST_SNAP[0]:
+        return
+    _LAST_SNAP[0] = snap
+    body = dict(snap)
+    body["saved"] = time.time()
+    try:
+        write_private(RESTORE_FILE, json.dumps(body).encode() + b"\n", 0o600)
+    except OSError as e:
+        log(f"could not write {RESTORE_FILE} — {e}")
+
+
+def read_restore():
+    """The file left by the previous daemon, or None. Anything malformed is None — a recovery file
+    that cannot be trusted is worth less than no recovery file."""
+    try:
+        d = json.loads(RESTORE_FILE.read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(d, dict) or d.get("v") != 1:
+        return None
+    cs = d.get("canvases")
+    ss = d.get("sessions")
+    if not isinstance(cs, list) or not isinstance(ss, list):
+        return None
+    return d
+
+
+def restore_offer():
+    """The sessions the previous daemon left, or None once there is nothing to offer.
+
+    It stops being offered the moment a pane exists — restoring "your eight from before" next to
+    panes you have already opened would double them, and the person plainly moved on."""
+    d = RESTORE[0]
+    if not d or registry.sessions:
+        return None
+    ss = [x for x in d.get("sessions") or []
+          if isinstance(x, dict) and isinstance(x.get("cwd"), str)]
+    if not ss:
+        return None
+    return {"saved": d.get("saved"), "sessions": ss}
 
 
 def acquire_single_instance_lock() -> None:
@@ -1884,7 +2000,11 @@ async def ws_events(reader, writer, headers: dict) -> None:
                              "sessions": [s.to_json() for s in registry.list()],
                              # **It comes along at the moment of attaching.** The moment you want to know
                              # "what happened while I was away" is exactly then, so it is not asked twice.
-                             "log": list(registry.log)}))
+                             "log": list(registry.log),
+                             # What the previous daemon left, offered rather than acted on. Dropped once
+                             # anything has been opened — an offer to restore beside panes you already
+                             # opened is noise, and the workspace it describes is no longer the one you have.
+                             "restore": restore_offer()}))
     try:
         while True:
             msg = await read_message(reader, writer)
@@ -2104,6 +2224,40 @@ async def handle_request(reader, writer) -> None:
         writer.write(http_json(200, s.to_json()))
         return
 
+    if path == "/api/restore":
+        # **The daemon does it, so every open browser follows along** — the same rule as everything
+        # else that changes state (protocol.md "/events"). Two browsers, one restore.
+        offer = restore_offer()
+        if method == "POST":
+            if offer is None:
+                writer.write(http_error(409, "nothing to restore"))
+                return
+            made = []
+            for x in offer["sessions"]:
+                cwd = resolve_under_roots(x.get("cwd"))
+                if cwd is None:
+                    # The folder is gone, or outside the roots now. Open it at home rather than
+                    # dropping the pane — losing the name too would make the restore quietly partial.
+                    cwd = HOME
+                cid = x.get("canvas")
+                try:
+                    name = clean_name(x.get("name"))
+                except ValueError:
+                    name = None
+                if len(registry.sessions) >= MAX_PANES:
+                    break
+                made.append(registry.create(str(cwd), cid, name).to_json())
+            RESTORE[0] = None                 # offered once
+            log(f"restored {len(made)} pane(s)")
+            writer.write(http_json(201, made))
+        elif method == "DELETE":
+            RESTORE[0] = None
+            save_restore()                    # the offer is declined — do not offer it again
+            writer.write(http(204))
+        else:
+            writer.write(http(405))
+        return
+
     if path == "/api/canvases":
         if method == "GET":
             writer.write(http_json(200, [c.to_json() for c in registry.canvas_list()]))
@@ -2285,6 +2439,9 @@ def shutdown() -> None:
     The browser keeps holding `/events`, so simply waiting means **Ctrl-C does not shut it down; only
     closing the tab does.** Reproduced on 3.13, never seen on 3.9 — the kind of thing you miss writing on
     macOS alone (the user saw it on WSL first)."""
+    # **Before anything is torn down.** die() empties the registry, and a snapshot taken after that
+    # would faithfully record an empty workspace over the one the person had.
+    save_restore()
     writers = [a.writer for s in registry.sessions.values() for a in s.attached]
     for s in list(registry.sessions.values()):
         s.die("daemon stopping")          # on the pane side, die has already sent the close frame
@@ -2306,7 +2463,18 @@ async def main(port: int) -> None:
     PORT[0] = port
     UTF8_CTYPE[0] = pick_utf8_locale()
     TOKEN[0] = setup_palmar_dir()
-    registry.new_canvas()      # there is never a moment without a canvas — start with one unnamed (⑪)
+    # **Canvases come back on their own; terminals are offered.** A canvas is data — restoring it
+    # surprises nobody. A terminal is a process, and starting eight of them is a thing a person
+    # should press once (protocol.md "되살리기"). If there is nothing to restore this is the same
+    # single unnamed canvas as before — there is never a moment without one (⑪).
+    RESTORE[0] = read_restore()
+    named = (RESTORE[0] or {}).get("canvases") or []
+    if named:
+        for c in named:
+            registry.new_canvas(c.get("name") if isinstance(c.get("name"), str) else None)
+        log(f"restored {len(named)} canvas(es) from {RESTORE_FILE.name}")
+    else:
+        registry.new_canvas()
     loop = asyncio.get_running_loop()
     reaper.install(loop)
     try:
@@ -2328,6 +2496,14 @@ async def main(port: int) -> None:
     except OSError as e:
         log(f"run/url 을 못 남겼다 — {e}")
     print(url, flush=True)
+
+    # Polled rather than hooked into every broadcast: what it watches is the *directory* a pane sits
+    # in, which changes with a `cd` that may print nothing and fire no event. Ten seconds is the most
+    # that can be lost to a kill -9; a clean stop saves on the way out.
+    def tick():
+        save_restore()
+        RESTORE_TIMER[0] = loop.call_later(RESTORE_EVERY_S, tick)
+    RESTORE_TIMER[0] = loop.call_later(RESTORE_EVERY_S, tick)
     await stop
     server.close()
     shutdown()

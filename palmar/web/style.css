@@ -660,6 +660,26 @@ body.rz-drag { cursor: col-resize; user-select: none; }
 
 /* ── directories (right) ────────────────────── */
 /* What happened. Its height is capped so it does not eat the tree's room below; overflow scrolls inside it. */
+/* The offer a stopped daemon left. It sits above Attention because on the first screen after a
+   restart this **is** the question of what to do next. No new color: the accent it already uses for
+   "the thing to press", and the same faint ink as the rows below it. */
+.restore { flex: none; margin: 8px; padding: 9px 10px 10px; border: 1px solid var(--line-2);
+  border-radius: 7px; background: var(--btn); }
+.rs-h { font-size: 11.5px; color: var(--ink); margin-bottom: 6px; }
+.rs-r { font-size: 11.5px; color: var(--ink-2); padding: 2px 0; }
+.rs-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+/* The front of the path is what gets cut — the tail says which folder it is. Done in JS, not with
+   `direction: rtl`: that puts the ellipsis in the right place but reorders the string, and
+   `~/work/deep/nested` came out as `work/deep/nested/~`. */
+.rs-p { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-a { display: flex; gap: 6px; margin-top: 9px; }
+.rs-a button { height: 26px; border-radius: 6px; font: 500 11.5px var(--mono); cursor: pointer;
+  padding: 0 10px; border: 1px solid transparent; }
+.rs-a button:disabled { opacity: .45; cursor: default; }
+.rs-y { background: var(--accent); color: var(--on-accent); flex: 1; }
+.rs-n2 { background: transparent; border-color: var(--line-2); color: var(--ink-2); }
+.rs-n2:hover { color: var(--ink); border-color: var(--ink-3); }
+
 .acts { flex: none; max-height: 168px; overflow-y: auto; padding: 0 8px 6px; }
 .act {
   display: grid; grid-template-columns: 7px 1fr auto; align-items: baseline; gap: 8px;

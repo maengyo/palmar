@@ -170,7 +170,10 @@ no port to take.
   one onto another overlaps them.
 - **No button moves a terminal between canvases.** The daemon does it and every open browser
   follows along — where the handle belongs on screen is not settled.
-- **Nothing survives restarting the daemon** — not the canvases, not the names, not the shells.
+- **A daemon restart still ends every shell.** What comes back is where you were: the canvases
+  return on their own, and the terminals are offered — each with the name you gave it and the folder
+  it was in, including one you had `cd`-ed to. One click reopens them. The shells themselves cannot
+  be handed to a new daemon, and palmar does not pretend otherwise.
 - **fish shells do not get the hook shim.** Title-based status still works there.
 - **A settings panel**, and a command palette behind the search box.
 - **Native Windows.** The daemon is POSIX to the bone — `pty.fork`, `tcgetpgrp`, `flock`, signals,
