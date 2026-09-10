@@ -2411,14 +2411,18 @@ function joinDir(parent, name) {
 }
 function makeNode(parentPath, e, depth) {
   return { path: joinDir(parentPath, e.name), name: e.name, branch: e.git_branch || null,
-           hasChildren: !!e.has_children, depth, expanded: false, children: null, loading: false };
+           hasChildren: !!e.has_children, depth, expanded: false, children: null, loading: false,
+           isHome: !!e.home };
 }
 async function loadRoots() {
   try {
     const d = await api('GET', '/api/dirs');
     tree.roots = (d.entries || []).map((e) => makeNode(d.path || '', e, 0));
-    home = tree.roots.length ? tree.roots[0].path : null;
-    if (!selectedDir && tree.roots.length) selectDir(tree.roots[0]);
+    // **home is the marked root, not the first one.** `/` leads the list so the tree can climb to
+    // the top (2026-09-11), and taking the first root as home turned `/` into `~`.
+    const homeNode = tree.roots.find((n) => n.isHome) || tree.roots.find((n) => n.path !== '/') || tree.roots[0];
+    home = homeNode ? homeNode.path : null;
+    if (!selectedDir && homeNode) selectDir(homeNode);   // start on home, not at /
     renderTree();
     renderList();        // the path display shortens to ~
     for (const t of tiles.values()) t.update(t.s);
@@ -2444,7 +2448,13 @@ function selectDir(n) {
   launchPath.textContent = '';
   launchPath.append(el('b', null, shortPath(n.path)));
   if (n.branch) launchPath.append(' · ' + n.branch);
-  launchBtn.disabled = false;
+  // **You can browse anywhere but open only under home** (2026-09-11). The daemon refuses a cwd
+  // outside the roots with a 400; saying so before the click beats a toast after it. `home` is the
+  // marked home root, so "under home" is a prefix test — the same shape the daemon checks.
+  const canOpen = !home || n.path === home || n.path.startsWith(home + '/');
+  launchBtn.disabled = !canOpen;
+  launchBtn.title = canOpen ? '' : 'A terminal can only open under your home folder';
+  if (!canOpen) launchPath.append(el('span', 'd', ' · outside home — browse only'));
   renderTree();
 }
 let findResults = null;      // { q, entries } — only while searching. null means the ordinary tree.

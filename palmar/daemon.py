@@ -1776,17 +1776,13 @@ def list_dirs(path: Path) -> list[dict]:
                     continue
             except OSError:
                 continue
-            # **A child must also be inside the roots before its metadata is read.** Check only the parent and
-            # just follow the child, and one link inside the home leaks the branch name and has-children flag of
-            # a folder **outside** the roots — even though asking that same path directly is 400 (measured
-            # 2026-09-09: the `git_branch` of a repo outside the roots showed up in the listing). It is not
-            # dropped from the row: the link stays visible, we just do not look inside; clicking in gets 400.
-            try:
-                inside = under_roots(Path(e.path).resolve())
-            except OSError:
-                inside = False
-            entries.append(dir_entry(e.name, e.path) if inside
-                           else {"name": e.name, "git_branch": None, "has_children": False})
+            # Metadata for every child. The 2026-09-09 rule read it only inside the roots — to keep a
+            # folder outside them from leaking its branch through a link — but that rested on "you
+            # cannot reach outside the roots", which the 2026-09-11 decision reversed: browsing is
+            # allowed anywhere, opening is not. Once you can list `/etc` directly, hiding the branch
+            # of one folder under it is inconsistent, not protective. The daemon-freeze guard that
+            # matters (a FIFO at .git/HEAD) lives in read_meta and is untouched by this.
+            entries.append(dir_entry(e.name, e.path))
     entries.sort(key=lambda x: x["name"].casefold())
     return entries
 
@@ -1886,8 +1882,14 @@ async def find_dirs(qs: str) -> list:
     return hits
 
 
-def resolve_under_roots(raw) -> Path | None:
-    """Absolute path string → resolve() → a directory under a root. Otherwise None."""
+def resolve_dir(raw) -> Path | None:
+    """Absolute path string → resolve() → an existing directory, or None. **No root check.**
+
+    This is for *browsing* (`GET /api/dirs?path=`), which the user asked to reach anywhere on the
+    machine (2026-09-11): the tree opens from `/`, not just from home. Reading a folder's names is
+    not the same as being able to work there — opening a terminal still goes through
+    `resolve_under_roots` below, which keeps the cwd inside the roots. So the rule is: look anywhere,
+    open only under a root."""
     if not isinstance(raw, str) or not raw or "\x00" in raw:
         return None
     p = Path(raw)
@@ -1899,7 +1901,14 @@ def resolve_under_roots(raw) -> Path | None:
             return None
     except OSError:
         return None
-    return p if under_roots(p) else None
+    return p
+
+
+def resolve_under_roots(raw) -> Path | None:
+    """Like resolve_dir, but the result must be under a root — the check that gates **opening** a
+    terminal (`POST /api/sessions`). Roots are the floor of the cwd check; browsing is looser."""
+    p = resolve_dir(raw)
+    return p if (p is not None and under_roots(p)) else None
 
 
 # ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -2395,12 +2404,28 @@ async def handle_request(reader, writer) -> None:
             raw = qget(q, "path")
             if not raw:
                 # The root list. path is null and name is an absolute path — the browser uses it as the next path.
-                entries = [dir_entry(str(r), str(r)) for r in roots()]
+                # **`/` leads the list** so the tree can climb to the top of the machine (2026-09-11): it is a
+                # place to *browse from*, not a root you can open a terminal in — roots() stays the opening floor.
+                # The owned homes still come first-class after it, so the common case is one click, not a climb.
+                rs = roots()
+                # **Mark which one is home.** The browser used to take the first root as home (to
+                # shorten paths to `~`); now that `/` leads the list, home has to be named outright
+                # or `/` would render as `~`.
+                entries = [dir_entry("/", "/")]
+                for r in rs:
+                    if str(r) == "/":
+                        continue
+                    e = dir_entry(str(r), str(r))
+                    if r == HOME:
+                        e["home"] = True
+                    entries.append(e)
                 writer.write(http_json(200, {"path": None, "entries": entries}))
                 return
-            p = resolve_under_roots(raw)
+            # **Browsing is not opening.** Reach any directory on the machine (the user asked for the
+            # tree to climb to the top, 2026-09-11); the root check stays on opening a terminal.
+            p = resolve_dir(raw)
             if p is None:
-                writer.write(http_error(400, "path must be an absolute directory under a root"))
+                writer.write(http_error(400, "path must be an absolute directory"))
                 return
             try:
                 entries = list_dirs(p)

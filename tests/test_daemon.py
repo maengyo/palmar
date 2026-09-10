@@ -230,23 +230,50 @@ class Directories(unittest.TestCase):
         # and the daemon is still answering
         self.assertIsInstance(self.d.panes(), list)
 
-    def test_no_metadata_is_read_through_a_link_out_of_the_roots(self):
-        """The parent was checked and the children were followed wherever they pointed, so a link
-        in the home directory reported the branch of a repository outside the roots — while asking
-        for that same path directly was a 400."""
-        outside = os.path.realpath(os.path.join(self.d.home, "..", "palmar-test-outside"))
-        os.makedirs(os.path.join(outside, ".git"), exist_ok=True)
-        with open(os.path.join(outside, ".git", "HEAD"), "w") as fh:
-            fh.write("ref: refs/heads/secret-branch\n")
-        link = os.path.join(self.d.home, "link-out")
-        if not os.path.lexists(link):
-            os.symlink(outside, link)
-        got = self.d.get("/api/dirs?path=" + self.d.home)
-        row = [e for e in got["entries"] if e["name"] == "link-out"]
-        self.assertTrue(row, "the link should still be listed — hiding it would be its own lie")
-        self.assertIsNone(row[0]["git_branch"], "a branch from outside the roots leaked")
-        st, _ = self.d.raw("GET", "/api/dirs?path=" + outside)
+    def test_browse_anywhere_but_open_only_under_roots(self):
+        """The user asked to see the whole tree from `/`, but a terminal still opens only under a
+        root (2026-09-11). Two different checks: resolve_dir for browsing, resolve_under_roots for
+        opening."""
+        # browse: reachable outside home
+        for p in ("/", "/usr", "/etc"):
+            st, _ = self.d.raw("GET", "/api/dirs?path=" + p)
+            self.assertEqual(st, 200, "browsing %s was refused" % p)
+        # open: refused outside home
+        for p in ("/usr", "/etc", "/"):
+            st, _ = self.d.raw("POST", "/api/sessions", {"cwd": p})
+            self.assertEqual(st, 400, "a terminal opened at %s" % p)
+        # open: allowed under home
+        st, _ = self.d.raw("POST", "/api/sessions", {"cwd": self.d.home})
+        self.assertEqual(st, 201)
+
+    def test_the_root_list_leads_with_slash_and_names_home(self):
+        r = self.d.get("/api/dirs")
+        names = [e["name"] for e in r["entries"]]
+        self.assertEqual(names[0], "/", "the tree does not start at /")
+        homes = [e for e in r["entries"] if e.get("home")]
+        self.assertEqual(len(homes), 1, "home is not marked exactly once")
+        # The daemon marks the resolved home; on macOS the temp home is a /var -> /private/var link.
+        self.assertEqual(os.path.realpath(homes[0]["name"]), os.path.realpath(self.d.home))
+
+    def test_a_file_or_missing_path_is_refused_for_browsing_too(self):
+        st, _ = self.d.raw("GET", "/api/dirs?path=/etc/hosts")
         self.assertEqual(st, 400)
+        st, _ = self.d.raw("GET", "/api/dirs?path=/no-such-dir-xyz")
+        self.assertEqual(st, 400)
+
+    def test_a_fifo_at_head_still_does_not_freeze_the_daemon_anywhere(self):
+        """The 2026-09-11 decision opened browsing to any folder, so the freeze guard has to hold
+        outside the roots too — read_meta is where it lives, and it did not change with the policy."""
+        outside = os.path.realpath(os.path.join(self.d.home, "..", "palmar-test-fifo-out"))
+        os.makedirs(os.path.join(outside, "proj", ".git"), exist_ok=True)
+        fifo = os.path.join(outside, "proj", ".git", "HEAD")
+        if not os.path.exists(fifo):
+            os.mkfifo(fifo)
+        t = time.time()
+        got = self.d.get("/api/dirs?path=" + os.path.join(outside))
+        self.assertLess(time.time() - t, 5.0, "a FIFO outside the roots blocked the listing")
+        row = [e for e in got["entries"] if e["name"] == "proj"]
+        self.assertEqual(row[0]["git_branch"], None)
 
 
 class Restore(unittest.TestCase):
