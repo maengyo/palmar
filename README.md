@@ -79,11 +79,30 @@ the same box, larger text makes one pane easy to read across the room. The size 
 title bar turns into the reset. `Ctrl −` still zooms everything at once, since that is the
 browser's own.
 
-## Quick start
+## Install
+
+palmar is the Python standard library and a vendored copy of xterm.js — there is nothing to build
+and no dependency to fetch. So installing it is mostly a matter of putting it where your shell can
+find it, and Python is the only thing you need already (macOS ships `/usr/bin/python3`; most Linux
+has one). Either way is one line:
+
+```
+git clone https://github.com/maengyo/palmar && sh palmar/install.sh   # from a checkout
+```
+
+`install.sh` checks your Python, drops a `palmar` launcher in `~/.local/bin`, and changes nothing
+else — no root, no `~/.palmar` touched, the daemon never started. Prefer to read it first? `curl`
+it to a file and run it by hand; it is short. Or skip it entirely and run the checkout directly:
 
 ```
 python3 -m palmar
 ```
+
+> A public one-line `curl … | sh` and a PyPI package (`uvx palmar`) are coming — the repository is
+> private for now. When they land, `install.sh` already knows how to fetch from them: set
+> `PALMAR_PYPI` or `PALMAR_TARBALL` and it will.
+
+## Running it
 
 It prints a URL on its last line — `http://127.0.0.1:8801/?k=…`. Open that, and bookmark it if
 you like: the key stays the same across restarts, so the bookmark keeps working. Lost the URL?
