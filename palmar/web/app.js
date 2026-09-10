@@ -2234,6 +2234,10 @@ function pushAct(e) {
 // ── session updates ─────────────────────────────────────
 function upsert(s) {
   const old = sessions.get(s.id);
+  // A pane exists, so any restore offer is stale (the daemon stops offering the moment one does —
+  // see restore_offer). The card is shown from a hello frame and would otherwise sit there while a
+  // pane you opened another way already fills the canvas; pressing it would then double the panes.
+  if (!old && restoreEl && !restoreEl.hidden) renderRestore(null);
   if (!old) changedAt.set(s.id, (s.created || Date.now() / 1000) * 1000);
   // Only on the transition in. Moving between waiting ↔ done inside WANTS_YOU is not a new call.
   let wants = false;

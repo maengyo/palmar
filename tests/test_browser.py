@@ -194,6 +194,28 @@ class RestoreCard(unittest.TestCase):
                 self.assertGreater(r["cols"], 1, "six panes came back in one column")
                 self.assertEqual(b.errors(), [])
 
+    def test_opening_a_pane_another_way_retires_the_offer(self):
+        """The card comes from a hello frame. If a pane appears by any other route — you opened one,
+        a second browser did — the offer is stale: the daemon already stopped offering, and pressing
+        the card now would double the panes. It must retire itself the moment a pane exists."""
+        with Daemon() as d:
+            for n in ("a", "b", "c"):
+                d.open_pane(name=n)
+            time.sleep(1.2)
+            d.restart()
+            with Browser() as b:
+                b.open(d.url)
+                self.assertFalse(b.ev("document.getElementById('restore').hidden"),
+                                 "the offer should be showing")
+                b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+                  await fetch('/api/sessions?token='+T,{method:'POST',
+                    headers:{'content-type':'application/json'},
+                    body:JSON.stringify({cwd:%s,name:'fresh'})});})()""" % json.dumps(d.home))
+                time.sleep(2.5)
+                self.assertTrue(b.ev("document.getElementById('restore').hidden"),
+                                "the stale offer stayed up after a pane appeared")
+                self.assertEqual(b.ev("window.palmar.tiles.size"), 1, "the panes doubled")
+
     def test_dismiss_puts_it_away(self):
         with Daemon() as d:
             d.open_pane(name="only")
