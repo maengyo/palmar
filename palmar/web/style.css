@@ -298,9 +298,32 @@ kbd {
 .rz.l::after { left: 0; }
 .rz.r::after { left: auto; right: 0; }
 body.rz-drag { cursor: col-resize; user-select: none; }
-.rail { background: var(--rail); display: flex; flex-direction: column; min-height: 0; }
+.rail { background: var(--rail); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .rail.left  { border-right: 1px solid var(--line); }
 .rail.right { border-left:  1px solid var(--line); }
+
+/* Folding a rail (2026-09-11): its grid column --rail-l/--rail-r is set to 0. The rail is **not**
+   removed from the DOM — pulling it out would leave the grid with two children for three columns
+   and the canvas would take a rail's slot (measured: cv width went to 0). It stays in place at 0
+   width; overflow:hidden on .rail keeps its contents from spilling. Only the grip and the now-
+   pointless fold button are hidden, and a slim tab is put in the gap to bring it back. */
+body.fold-l .rz.l,   body.fold-r .rz.r   { display: none; }
+body.fold-l .rail.left  .rail-fold,
+body.fold-r .rail.right .rail-fold       { display: none; }
+.rail-fold {
+  border: 0; background: none; color: var(--ink-3); cursor: pointer; font-size: 14px; line-height: 1;
+  padding: 0 2px; -webkit-app-region: no-drag; flex: none;
+}
+.rail-fold:hover { color: var(--ink); }
+.rail-open {
+  position: absolute; top: 50%; transform: translateY(-50%); z-index: 16;
+  width: 15px; height: 46px; border: 1px solid var(--line-2); border-radius: 0 7px 7px 0;
+  background: var(--rail); color: var(--ink-3); cursor: pointer; display: grid; place-items: center;
+  font-size: 12px; -webkit-app-region: no-drag;
+}
+.rail-open.r { left: auto; right: 0; border-radius: 7px 0 0 7px; }
+.rail-open.l { left: 0; }
+.rail-open:hover { color: var(--ink); border-color: var(--accent); }
 .rh {
   display: flex; align-items: center; gap: 8px; padding: 14px 14px 8px;
   font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); font-weight: 500;

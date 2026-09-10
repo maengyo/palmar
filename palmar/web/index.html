@@ -86,6 +86,7 @@
       <dt><kbd class="mod">Ctrl</kbd><kbd>⏎</kbd></dt><dd>new terminal, in the folder of the one you are on</dd>
       <dt><kbd class="mod">Ctrl</kbd><kbd>Shift</kbd><kbd>⏎</kbd></dt><dd>new canvas</dd>
       <dt><kbd class="mod">Ctrl</kbd><kbd>K</kbd></dt><dd>search sessions and folders</dd>
+      <dt><kbd class="mod">Ctrl</kbd><kbd>\</kbd></dt><dd>fold the left rail — <kbd class="mod">Ctrl</kbd><kbd>Shift</kbd><kbd>\</kbd> the right</dd>
       <!-- data-mac-drops-shift: on a Mac these two are ⌘C and ⌘V, with no Shift. Only these two.
            New canvas below is Ctrl/⌘ + Shift + Enter on **every** platform — Shift is what separates
            it from new terminal (app.js: `if (e.shiftKey) newCanvas(); else newTerminal()`), so
@@ -113,6 +114,10 @@
   </div>
 
   <div class="body">
+    <!-- Re-open tabs, shown only when a rail is collapsed. A collapsed rail is 0 wide, so without
+         these there is nothing left to click to bring it back. -->
+    <button class="rail-open l" id="open-l" type="button" hidden title="show the terminal list" aria-label="show the terminal list">›</button>
+    <button class="rail-open r" id="open-r" type="button" hidden title="show the right rail" aria-label="show the right rail">‹</button>
     <!-- The rail-edge grips (#19). Laid on the boundary, not in a grid cell — see `.rz` in style.css. -->
     <div class="rz l" id="rz-l" role="separator" aria-orientation="vertical" tabindex="0"
          aria-label="resize the terminal list — arrow keys, or double-click to reset"></div>
@@ -120,7 +125,7 @@
          aria-label="resize the directory rail — arrow keys, or double-click to reset"></div>
     <!-- ── left: sessions ─────────────────────── -->
     <aside class="rail left">
-      <div class="rh">Terminals <span class="n" id="count">0</span><span class="sp"></span></div>
+      <div class="rh">Terminals <span class="n" id="count">0</span><span class="sp"></span><button class="rail-fold" id="fold-l" type="button" title="collapse (⌘\)" aria-label="collapse the terminal list">‹</button></div>
       <div class="scroll" id="list"></div>
       <!-- The line that says where status comes from. Not a value asked of the daemon — a stated fact.
            **No listing of agent names** — reading by title (protocol.md "제목으로 읽기") works with
@@ -166,7 +171,7 @@
            processes, so opening eight of them is a thing a person presses once. Hidden unless there
            is something to offer, and gone once anything has been opened. -->
       <div class="restore" id="restore" hidden></div>
-      <div class="rh">Attention<span class="sp"></span><span class="n" id="act-new"></span></div>
+      <div class="rh"><button class="rail-fold r" id="fold-r" type="button" title="collapse (⌘\)" aria-label="collapse the right rail">›</button>Attention<span class="sp"></span><span class="n" id="act-new"></span></div>
       <div class="acts" id="acts"></div>
       <div class="rh">Directories<span class="sp"></span><span class="ib" id="mkdir" title="new folder">＋</span><span class="ib" id="refresh" title="refresh">↻</span></div>
       <div class="scroll">

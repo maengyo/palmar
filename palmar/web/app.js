@@ -1094,6 +1094,44 @@ function setRail(side, px, save) {
 function saveRails() {
   try { localStorage.setItem(LS_RAILS, JSON.stringify({ l: railW('l'), r: railW('r') })); } catch (e) {}
 }
+
+// ── collapsing a rail to reclaim the canvas ────────────────────────────────────────────────
+// A collapsed rail is 0 wide (the grid column vanishes) with the body marked so the grip and the
+// header hide; a small tab in its place brings it back. The width it had is kept, so expanding
+// returns to it rather than the default.
+const LS_FOLD = 'palmar.railfold';
+const railFolded = { l: false, r: false };
+const preFold = { l: RAIL_DEF.l, r: RAIL_DEF.r };
+
+function applyFold(side) {
+  const folded = railFolded[side];
+  document.body.classList.toggle('fold-' + side, folded);
+  // **0, past the clamp.** railPut runs railClamp, which floors the width at RAIL_MIN (~180px), so
+  // folding through it would leave a 180px empty strip. A folded rail is genuinely 0 — set it directly.
+  if (folded) document.documentElement.style.setProperty('--rail-' + side, '0px');
+  else railPut(side, preFold[side]);
+  const fold = $('#fold-' + side), open = $('#open-' + side);
+  if (open) open.hidden = !folded;
+  if (fold) fold.setAttribute('aria-expanded', String(!folded));
+  if (maxed) maxed.refit();
+  renderMinimap();
+  refreshOff();
+}
+
+function setFold(side, folded) {
+  if (railFolded[side] === folded) return;
+  if (folded) preFold[side] = railW(side) || RAIL_DEF[side];   // remember the width to come back to
+  railFolded[side] = folded;
+  applyFold(side);
+  try { localStorage.setItem(LS_FOLD, JSON.stringify(railFolded)); } catch (e) {}
+}
+
+function loadFold() {
+  let v = null;
+  try { v = JSON.parse(localStorage.getItem(LS_FOLD) || 'null'); } catch (e) {}
+  if (!v) return;
+  for (const side of ['l', 'r']) if (v[side]) { railFolded[side] = true; applyFold(side); }
+}
 function loadRails() {
   let v = null;
   try { v = JSON.parse(localStorage.getItem(LS_RAILS) || 'null'); } catch (e) {}
@@ -1854,6 +1892,13 @@ addEventListener('keydown', (e) => {
   if (mod && e.key === 'Enter' && !e.altKey) {
     e.preventDefault();
     if (e.shiftKey) newCanvas(); else newTerminal();
+  }
+  // Fold a rail to widen the canvas. \\ (backslash) toggles the left, Shift+\\ the right —
+  // a key the browser does not already claim, unlike ⌘W/⌘T. Toggles: press again to bring it back.
+  if (mod && (e.key === '\\' || e.code === 'Backslash') && !e.altKey) {
+    e.preventDefault();
+    const side = e.shiftKey ? 'r' : 'l';
+    setFold(side, !railFolded[side]);
   }
   if (e.key === 'Escape' && e.target === searchEl) { searchEl.value = ''; onSearch(); searchEl.blur(); }
 });
@@ -2753,6 +2798,13 @@ function boot() {
   loadRails();
   rzGrip(document.getElementById('rz-l'), 'l');
   rzGrip(document.getElementById('rz-r'), 'r');
+  // Fold controls: the header buttons collapse, the tabs left behind bring the rail back.
+  for (const side of ['l', 'r']) {
+    const f = $('#fold-' + side), o = $('#open-' + side);
+    if (f) f.addEventListener('click', () => setFold(side, true));
+    if (o) o.addEventListener('click', () => setFold(side, false));
+  }
+  loadFold();
   // When the window comes back to the front, **show it as new for a moment** and then mark it seen. Clearing it
   // the instant it returns leaves no time to see what happened while you were away.
   addEventListener('focus', () => setTimeout(() => { markSeen(); renderActs(); }, 4000));

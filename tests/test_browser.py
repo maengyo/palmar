@@ -154,6 +154,66 @@ class Theme(unittest.TestCase):
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class RailFold(unittest.TestCase):
+    """Fold a rail to widen the canvas (2026-09-11). A folded rail is a true 0, not clamped to its
+    minimum, and the state persists so it survives a reload."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def cv(self):
+        return self.b.ev("document.getElementById('cv').offsetWidth")
+
+    def railvar(self, side):
+        return self.b.ev("getComputedStyle(document.documentElement).getPropertyValue('--rail-%s').trim()" % side)
+
+    def test_folding_a_rail_widens_the_canvas_to_a_true_zero(self):
+        # start from a known state
+        self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
+        time.sleep(0.3)
+        wide0 = self.cv()
+        self.b.ev("document.getElementById('fold-l').click()")
+        time.sleep(0.3)
+        self.assertEqual(self.railvar("l"), "0px", "a folded rail was clamped, not zeroed")
+        self.assertGreater(self.cv(), wide0, "the canvas did not widen")
+        # reopen restores the width, not zero
+        self.b.ev("document.getElementById('open-l').click()")
+        time.sleep(0.3)
+        self.assertNotEqual(self.railvar("l"), "0px")
+        self.assertAlmostEqual(self.cv(), wide0, delta=2)
+
+    def test_the_shortcut_toggles(self):
+        self.b.ev("document.getElementById('open-r').click()")   # ensure open
+        time.sleep(0.2)
+        self.b.ev("document.dispatchEvent(new KeyboardEvent('keydown',"
+                  "{key:'\\\\',code:'Backslash',metaKey:true,shiftKey:true,bubbles:true}))")
+        time.sleep(0.3)
+        self.assertEqual(self.railvar("r"), "0px", "Cmd+Shift+\\ did not fold the right rail")
+        self.b.ev("document.dispatchEvent(new KeyboardEvent('keydown',"
+                  "{key:'\\\\',code:'Backslash',metaKey:true,shiftKey:true,bubbles:true}))")
+        time.sleep(0.3)
+        self.assertNotEqual(self.railvar("r"), "0px", "it did not toggle back open")
+
+    def test_a_fold_survives_a_reload(self):
+        self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
+        time.sleep(0.2)
+        self.b.ev("document.getElementById('fold-r').click()")
+        time.sleep(0.3)
+        self.b.ws.call("Page.reload"); time.sleep(3.5)
+        self.assertTrue(self.b.ev("document.body.classList.contains('fold-r')"),
+                        "the right rail did not stay folded across a reload")
+        self.assertFalse(self.b.ev("document.body.classList.contains('fold-l')"))
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
 class RestoreCard(unittest.TestCase):
     """A daemon stopped and came back. The canvases are already there; the terminals are offered."""
 
