@@ -2379,6 +2379,38 @@ async def handle_request(reader, writer) -> None:
         writer.write(http_json(200, s.to_json()))
         return
 
+    # ── the address, for moving between the window and a browser ──────────────────────────
+    # The window (app/) and the page are two views of one daemon, and someone in one of them
+    # reasonably wants the other. The page cannot build the address itself: **it is never given the
+    # key** (#14 — the key's job ends when index.html is served), only the token.
+    #
+    # Handing the key back to a token holder gives away nothing: the token already opens shells, and
+    # anything that could take it runs as this user and can read run/key (0600) directly. It is the
+    # longer-lived of the two, though, so it goes out only when asked for and the page is told to
+    # use it and drop it rather than keep it.
+    if path == "/api/address":
+        if not token_ok:
+            writer.write(http(403))
+            return
+        if method == "GET":
+            writer.write(http_json(200, {"url": f"http://127.0.0.1:{PORT[0]}/?k={KEY[0]}"}))
+            return
+        writer.write(http(405))
+        return
+    if path == "/api/address/open":
+        if not token_ok:
+            writer.write(http(403))
+            return
+        if method != "POST":
+            writer.write(http(405))
+            return
+        # **The daemon opens it, not the page.** A webview cannot reach the system browser, and on
+        # WSL the browser that matters is on the Windows side — which is exactly the walk
+        # browser_argv already knows how to make. This way the key never crosses into the page at all.
+        ok = open_browser(f"http://127.0.0.1:{PORT[0]}/?k={KEY[0]}")
+        writer.write(http(204) if ok else http_error(500, "found no way to open a browser here"))
+        return
+
     if path == "/api/restore":
         # **The daemon does it, so every open browser follows along** — the same rule as everything
         # else that changes state (protocol.md "/events"). Two browsers, one restore.

@@ -686,6 +686,31 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .grip::before {
   content: ""; position: absolute; left: -8px; top: -8px; right: -3px; bottom: -3px; cursor: nwse-resize;
 }
+/* The way across to a browser. Same body as the `?` button beside it — one rule, so the two cannot
+   drift apart — and a word rather than a glyph, because chrome must not need a font the machine may
+   not have. */
+.toweb {
+  height: 22px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line-2);
+  background: var(--btn); color: var(--ink-2); cursor: pointer;
+  font: 500 11px var(--mono); letter-spacing: .02em;
+}
+.toweb:hover { border-color: var(--accent); color: var(--ink); }
+.toweb[aria-expanded="true"] { border-color: var(--accent); color: var(--ink); }
+/* The panel it opens. Sized to the address rather than to the screen. */
+.webbox {
+  position: absolute; right: 12px; top: 44px; z-index: 1200; width: min(440px, calc(100vw - 24px));
+  background: var(--rail); border: 1px solid var(--line-2); border-radius: 10px;
+  box-shadow: var(--shadow-2); padding: 0 0 10px;
+}
+.web-url {
+  display: block; width: calc(100% - 28px); margin: 2px 14px 10px; padding: 7px 9px;
+  border: 1px solid var(--line-2); border-radius: 6px; background: var(--tile);
+  color: var(--ink); font: 11.5px var(--mono);
+}
+/* Two buttons of the same weight. .keys-act elsewhere is a button beside a run of explaining text,
+   so its grid is `auto 1fr` and the second child takes the slack — here both are buttons. */
+.webbox .keys-act { padding: 0 14px; grid-template-columns: 1fr 1fr; gap: 8px; }
+
 .toast {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
   background: var(--float); border: 1px solid var(--line-2); border-radius: 7px;

@@ -67,12 +67,31 @@
       <span class="theme" id="theme" role="button" tabindex="0" title="theme: system"><i></i><b>auto</b></span>
       <!-- The gear that was a placeholder is now a button with real work. Shortcuts had piled up with none
            of them written anywhere, so nobody found the ones pressing does not reveal (copy is not Ctrl+C). -->
+      <!-- The window and the page are two views of one daemon, so moving between them should be a
+           button and not a hunt through ~/.palmar. Plain text, no glyph: chrome must not depend on
+           a character the machine may not have (AGENTS.md; the add-canvas button was a box on WSL). -->
+      <button class="toweb" id="toweb" type="button" title="open this in a browser"
+              aria-haspopup="dialog" aria-expanded="false">web</button>
       <button class="help" id="help" type="button" title="keyboard shortcuts" aria-label="keyboard shortcuts"
               aria-haspopup="dialog" aria-expanded="false">?</button>
     </div>
   </div>
 
-  <!-- The typing report. Put on screen so it can be copied without the developer tools. -->
+  <!-- The address of this daemon, for moving to a browser. Asked for when opened and not kept:
+       the page is never given the key otherwise (#14). -->
+  <div class="webbox" id="webbox" hidden role="dialog" aria-label="open in a browser">
+    <div class="keys-h">Open in a browser <button class="keys-x" id="web-x" type="button" aria-label="close">×</button></div>
+    <div class="diag-hint">The same daemon, the same terminals — a browser is just another window on
+      them. This address carries the key that opens it, so treat it like a password.</div>
+    <input class="web-url" id="web-url" readonly spellcheck="false" aria-label="address">
+    <div class="keys-act">
+      <button class="keys-btn" id="web-open" type="button">Open it</button>
+      <button class="keys-btn" id="web-copy" type="button">Copy</button>
+    </div>
+  </div>
+
+  <!-- The typing report. Not offered on screen (the user asked for it not to be, 2026-09-11) —
+       `palmar.recordTyping(15)` from the console still brings it up, which is what it is for. -->
   <div class="diagbox" id="diagbox" hidden role="dialog" aria-label="typing report">
     <div class="keys-h">Typing report <button class="keys-x" id="diag-x" type="button" aria-label="close">×</button></div>
     <div class="diag-hint" id="diag-hint"></div>
@@ -105,9 +124,6 @@
       <dt><kbd>Ctrl</kbd><kbd>−</kbd> <kbd>Ctrl</kbd><kbd>+</kbd></dt><dd>the browser's own zoom — every terminal at once</dd>
     </dl>
     <div class="keys-act">
-      <button class="keys-btn" id="diag" type="button">Record typing (15s)</button>
-      <span>if typing behaves oddly — Korean, Japanese, Chinese — press this, type into a
-            terminal for fifteen seconds, and a report appears that you can copy.</span>
       <label class="keys-sw"><input type="checkbox" id="autotidy"> Tidy automatically</label>
       <span>when a terminal closes, pull the rest back to the corner on their own.
             Off by default: it moves windows you can see, and a window should not

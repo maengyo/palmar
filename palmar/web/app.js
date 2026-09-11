@@ -2615,7 +2615,9 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   tidyCanvas,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
-                  lastOutAt, renderList };
+                  lastOutAt, renderList,
+                  // No longer a button; this is how it is reached now.
+                  recordTyping };
 
 // `palmar.watchInput()` from the console. **A real IME cannot be measured headless** — CDP's imitation of
 // composition passes while reports say it fails on a real machine, so let that machine print what actually arrives.
@@ -2775,8 +2777,71 @@ function boot() {
     keysEl.addEventListener('click', (e) => e.stopPropagation());
     addEventListener('click', () => { if (!keysEl.hidden) showKeys(false); });
     addEventListener('keydown', (e) => { if (e.key === 'Escape' && !keysEl.hidden) showKeys(false); });
-    const dg = document.getElementById('diag');
-    if (dg) dg.addEventListener('click', () => { showKeys(false); recordTyping(15); });
+    // The typing report is no longer offered on screen — it is a tool for chasing an input bug, not
+    // a feature (asked for 2026-09-11). `palmar.recordTyping(15)` still brings it up.
+    // ── across to a browser ──────────────────────────────────────────
+    // **The address is fetched when the panel opens and not kept.** The page is otherwise never
+    // given the key (#14), and there is no reason for it to hold one longer than the moment it is
+    // being shown. Opening is done by the daemon, so the key never has to cross over at all — which
+    // also means it works on WSL, where the browser worth opening is on the Windows side.
+    const webBox = document.getElementById('webbox');
+    const webUrl = document.getElementById('web-url');
+    const showWeb = (on) => {
+      if (!webBox) return;
+      webBox.hidden = !on;
+      const b = document.getElementById('toweb');
+      if (b) b.setAttribute('aria-expanded', on ? 'true' : 'false');
+      if (!on && webUrl) webUrl.value = '';      // do not leave it lying about
+    };
+    const towebEl = document.getElementById('toweb');
+    if (towebEl) towebEl.addEventListener('click', async () => {
+      showKeys(false);
+      showWeb(true);
+      if (webUrl) webUrl.value = 'asking the daemon…';
+      try {
+        const r = await api('GET', '/api/address');
+        if (webUrl) {
+          webUrl.value = r.url;
+          webUrl.focus(); webUrl.select();
+          webUrl.scrollLeft = 0;      // select() leaves it scrolled to the end, hiding the host
+        }
+      } catch (e) {
+        if (webUrl) webUrl.value = '';
+        toast(['could not get the address — ', { d: String(e.message || e) }]);
+      }
+    });
+    const webX = document.getElementById('web-x');
+    if (webX) webX.addEventListener('click', () => showWeb(false));
+    const webOpen = document.getElementById('web-open');
+    if (webOpen) webOpen.addEventListener('click', async () => {
+      webOpen.disabled = true;
+      try {
+        await api('POST', '/api/address/open');
+        toast(['opening a browser…']);
+        showWeb(false);
+      } catch (e) {
+        // On a machine with no browser to open this is the ordinary answer, not a fault — the
+        // address is right there to copy instead.
+        toast(['could not open a browser — copy the address instead']);
+      }
+      webOpen.disabled = false;
+    });
+    const webCopy = document.getElementById('web-copy');
+    if (webCopy) webCopy.addEventListener('click', async () => {
+      if (!webUrl || !webUrl.value) return;
+      try {
+        await navigator.clipboard.writeText(webUrl.value);
+        toast(['address copied']);
+      } catch (e) {
+        // Clipboard permission is refused often enough that the selection is the real fallback.
+        webUrl.focus(); webUrl.select();
+        toast(['could not copy — it is selected, press ' + (IS_MAC ? '⌘C' : 'Ctrl+C')]);
+      }
+    });
+    addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && webBox && !webBox.hidden) showWeb(false);
+    });
+
     const dgx = document.getElementById('diag-x');
     if (dgx) dgx.addEventListener('click', () => { document.getElementById('diagbox').hidden = true; });
     const dgc = document.getElementById('diag-copy');

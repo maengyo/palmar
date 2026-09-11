@@ -89,7 +89,36 @@ cd app && cargo build --release
 
 ## 4. 한글
 
-**표시와 입력은 다른 문제다.** 따로 고쳐야 한다.
+**표시와 입력은 다른 문제다.** 따로 고쳐야 한다. 급하면 이 한 덩어리를 그대로 붙여 넣어라 —
+아래 두 절이 각각 무엇이고 왜 필요한지 설명한다.
+
+```sh
+# 표시 — 폰트. 기본 WSL 이미지에는 한글 폰트가 하나도 없다.
+sudo apt install -y fonts-naver-d2coding        # 터미널용 고정폭, 약 8MB (universe)
+# 또는, 일본어·중국어까지:  sudo apt install -y fonts-noto-cjk     # 약 89MB (main)
+
+# 입력 — 리눅스 IME. 윈도우 IME 는 WSLg 에서 쓸 수 없다(아래 참고).
+sudo apt install -y ibus ibus-hangul ibus-gtk3 dbus-x11
+
+# 있으면 좋은 것
+sudo apt install -y x11-xkb-utils               # `execute setxkbmap failed` 경고를 없앤다
+sudo apt install -y fontconfig                  # fc-list 로 폰트를 확인하려면 (보통 이미 있다)
+sudo apt install -y x11-apps                    # xeyes — WSLg 자체가 되는지 보는 용도
+```
+
+`fonts-naver-d2coding` 이 없다고 하면 universe 가 꺼진 것이다:
+
+```sh
+sudo add-apt-repository -y universe && sudo apt update
+```
+
+그리고 **WSL 세션마다 한 번, 창을 띄우기 전에**:
+
+```sh
+eval "$(dbus-launch --sh-syntax)"    # WSLg 는 세션 버스를 안 준다
+ibus-daemon -drx
+ibus engine hangul
+```
 
 ### 표시 — 폰트
 
@@ -149,7 +178,17 @@ ibus engine hangul
 맞바꾸는 셈이다. 그 경고들은 EGL 초기화가 재시도 사다리를 걷는 소리이고 마지막 시도는 조용히
 성공한다. palmar 가 알아서 입을 막아 둔다.
 
-## 6. 끄기
+## 6. 브라우저로 건너가기
+
+창을 쓰다가 브라우저로 옮기고 싶으면 오른쪽 위 **`web`** 버튼을 눌러라. 이 데몬의 주소가 나오고,
+**Copy** 로 복사하거나 **Open it** 으로 바로 열 수 있다. 여는 것은 데몬이 하므로, 리눅스 쪽에
+브라우저가 없어도 **윈도우 브라우저**가 열린다.
+
+같은 데몬이므로 터미널도 캔버스도 그대로다. 창을 닫아도 브라우저 쪽은 계속 쓸 수 있다.
+
+> 그 주소에는 **키가 붙어 있다.** 그것만 있으면 이 데몬의 페이지를 열 수 있으니 비밀번호처럼 다뤄라.
+
+## 7. 끄기
 
 **창을 닫아도 데몬은 안 죽는다.** 데몬이 살아 있는 셸을 쥐고 있고, 그래서 창을 닫아도 작업이
 안 죽는다. 정말로 멈추려면:

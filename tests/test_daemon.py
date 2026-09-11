@@ -685,5 +685,55 @@ class Stopping(unittest.TestCase):
         self.assertIn("없다", r.stdout, "it treated a stale lock as a running daemon")
 
 
+class TheAddress(unittest.TestCase):
+    """`/api/address` — how someone in the window gets to a browser.
+
+    The page is never handed the key (#14): the daemon injects only the token when it serves
+    index.html. So the address has to be asked for, and the asking is token-gated like everything
+    else. That gives a token holder nothing new — the token already opens shells, and anything that
+    could take it runs as this user and can read run/key (0600) outright."""
+
+    def test_it_is_the_daemon_s_own_address(self):
+        with Daemon() as d:
+            self.assertEqual(d.get("/api/address")["url"], d.url)
+
+    def test_it_needs_the_token(self):
+        with Daemon() as d:
+            self.assertEqual(d.raw("GET", "/api/address", token=False)[0], 403)
+            self.assertEqual(d.raw("POST", "/api/address/open", token=False)[0], 403)
+
+    def test_the_page_is_still_not_given_the_key(self):
+        """The endpoint exists so the page does not have to hold it. If index.html ever started
+        carrying the key again, this endpoint would be pointless and #14 would be back."""
+        with Daemon() as d:
+            st, text = d.page()
+            self.assertEqual(st, 200)
+            self.assertNotIn(d.key, text, "index.html carries the key again")
+
+    def test_opening_is_done_by_the_daemon(self):
+        """**The key never crosses into the page for this.** The daemon opens it, which is also why
+        it works on WSL, where the browser worth opening is on the Windows side."""
+        box = tempfile.mkdtemp(prefix="palmar-browser-")
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        note = os.path.join(box, "argv")
+        opener = os.path.join(box, "opener.sh")
+        with open(opener, "w") as fh:
+            fh.write('#!/bin/sh\nprintf "%s\\n" "$@" > ' + note + '\n')
+        os.chmod(opener, 0o755)
+        with Daemon(env={"BROWSER": opener}) as d:
+            self.assertEqual(d.raw("POST", "/api/address/open")[0], 204)
+            end = time.time() + 10
+            while time.time() < end and not os.path.exists(note):
+                time.sleep(0.1)
+            self.assertTrue(os.path.exists(note), "nothing was opened")
+            with open(note) as fh:
+                self.assertIn(d.url, fh.read())
+
+    def test_it_refuses_the_wrong_methods(self):
+        with Daemon() as d:
+            self.assertEqual(d.raw("POST", "/api/address")[0], 405)
+            self.assertEqual(d.raw("GET", "/api/address/open")[0], 405)
+
+
 if __name__ == "__main__":
     unittest.main()

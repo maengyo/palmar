@@ -468,5 +468,48 @@ class KoreanUnderWslg(unittest.TestCase):
         self.assertEqual(r["joined"], "abc")
 
 
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class AcrossToABrowser(unittest.TestCase):
+    """The `web` button: the window and the page are two views of one daemon, so getting from one to
+    the other should not mean hunting through ~/.palmar for a file."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def open_panel(self):
+        self.b.ev("document.getElementById('toweb').click()")
+        time.sleep(1.2)
+
+    def test_it_shows_this_daemon_s_address(self):
+        self.open_panel()
+        self.assertFalse(self.b.ev("document.getElementById('webbox').hidden"))
+        self.assertEqual(self.b.ev("document.getElementById('web-url').value"), self.d.url)
+        # select() leaves the field scrolled to its end, which hides the part that says where it is
+        self.assertEqual(self.b.ev("document.getElementById('web-url').scrollLeft"), 0)
+
+    def test_closing_it_does_not_leave_the_address_lying_about(self):
+        """The page is not given the key at all normally (#14); having asked for it to show once,
+        it should not go on holding it."""
+        self.open_panel()
+        self.b.ev("document.getElementById('web-x').click()")
+        time.sleep(0.4)
+        self.assertTrue(self.b.ev("document.getElementById('webbox').hidden"))
+        self.assertEqual(self.b.ev("document.getElementById('web-url').value"), "")
+
+    def test_the_typing_report_is_not_offered(self):
+        """It is a tool for chasing an input bug, not a feature (2026-09-11). Still reachable from
+        the console, which is what it is for."""
+        self.assertFalse(self.b.ev("!!document.getElementById('diag')"))
+        self.assertEqual(self.b.ev("typeof window.palmar.recordTyping"), "function")
+
+
 if __name__ == "__main__":
     unittest.main()
