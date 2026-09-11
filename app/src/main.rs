@@ -16,6 +16,8 @@
 
 use std::io::{BufRead, BufReader, Read};
 use std::net::{Shutdown, SocketAddr, TcpStream};
+#[cfg(target_os = "linux")]
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
@@ -225,7 +227,27 @@ fn find_or_start() -> Result<String, String> {
     spawn_daemon()
 }
 
+/// WebKitGTK 2.42 and newer render through DMABUF by default, and that path does not survive a
+/// virtualised GPU — under WSLg it is the difference between the page and a blank window. Turning
+/// it off costs a little compositing speed on a machine that has no real GPU to lose it on.
+///
+/// **Only under WSL, and never over a choice already made**: set the variable yourself, to anything
+/// including an empty value, and this leaves it alone.
+#[cfg(target_os = "linux")]
+fn soften_rendering_for_wslg() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some() {
+        return;
+    }
+    let wsl = std::env::var_os("WSL_DISTRO_NAME").is_some() || Path::new("/mnt/wslg").is_dir();
+    if wsl {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "linux")]
+    soften_rendering_for_wslg();
+
     let url = match find_or_start() {
         Ok(u) => u,
         Err(e) => {
@@ -250,7 +272,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The page is served from 127.0.0.1 by the daemon we just found, so there is nothing to bundle
     // and nothing to keep in sync — the window shows whatever version of the UI that daemon has.
+    //
+    // **The way in differs by platform, and getting it wrong is silent until it is not.**
+    // `WebViewBuilder::new(&window)` takes a raw window handle; on Linux wry then goes down its X11
+    // path and accepts nothing but `RawWindowHandle::Xlib`. Under WSLg the session is Wayland, so
+    // that is `UnsupportedWindowHandle` and no window ever appears (reported 2026-09-11). The GTK
+    // widget is the portable answer there — it works under X11 and Wayland alike.
+    #[cfg(not(target_os = "linux"))]
     let _webview = WebViewBuilder::new(&window).with_url(&url).build()?;
+
+    #[cfg(target_os = "linux")]
+    let _webview = {
+        use tao::platform::unix::WindowExtUnix;
+        use wry::WebViewBuilderExtUnix;
+        // tao puts a vertical gtk::Box in the window as its only child; wry packs the webview into
+        // it with `pack_start(.., true, true, 0)`, so it fills whatever the window is given.
+        let vbox = window
+            .default_vbox()
+            .ok_or("this window has no GTK container to put a webview in")?;
+        WebViewBuilder::new_gtk(vbox).with_url(&url).build()?
+    };
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;

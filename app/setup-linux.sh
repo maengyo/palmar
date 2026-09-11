@@ -1,8 +1,9 @@
 #!/bin/sh
 # Installs what building palmar's window needs on a Debian/Ubuntu machine — WSL included.
 #
-#     sh app/setup-linux.sh          # says what it will do, then asks
-#     sh app/setup-linux.sh -y       # no question
+#     sh app/setup-linux.sh              # says what it will do, then asks
+#     sh app/setup-linux.sh -y           # no question
+#     sh app/setup-linux.sh --contained  # keep Rust inside app/.rust, not in your home
 #
 # **This one changes your machine**, which is why it is not part of dev/wslg-probe.sh. That probe
 # installs nothing and changes nothing, so it stays safe to run and safe to paste; a diagnostic that
@@ -13,14 +14,29 @@
 #
 # It installs two things:
 #   - libwebkit2gtk-4.1-dev (+ build-essential, pkg-config, curl) via apt, with sudo
-#   - rustup, from https://sh.rustup.rs, into $HOME — only if cargo is not already here
+#   - rustup, from https://sh.rustup.rs, into $HOME — only if cargo is not already here.
+#     With --contained it goes into app/.rust instead: your home directory and your shell rc are
+#     left alone, and `rm -rf app/.rust` is the whole uninstall. Rust is a **build** dependency —
+#     the binary runs with no toolchain present — so keeping it next to the build and deleting it
+#     afterwards is a reasonable thing to want.
 #
 # It refuses rather than half-finishes: on a distribution with no WebKitGTK 4.1 it stops and says so.
 
 set -eu
 
 YES=0
-if [ "${1:-}" = "-y" ]; then YES=1; fi
+CONTAINED=0
+for arg in "$@"; do
+  case "$arg" in
+    -y) YES=1 ;;
+    --contained) CONTAINED=1 ;;
+    *) printf 'setup-linux: unknown option %s\n' "$arg" >&2; exit 2 ;;
+  esac
+done
+
+# Where the toolchain goes when it is not going into $HOME. Next to the thing it builds.
+HERE=$(unset CDPATH; cd -- "$(dirname -- "$0")" && pwd)
+RUSTDIR="$HERE/.rust"
 
 say()  { printf '%s\n' "$*"; }
 die()  { printf 'setup-linux: %s\n' "$*" >&2; exit 1; }
@@ -56,7 +72,10 @@ elif ! apt_candidate libwebkit2gtk-4.1-dev; then
 fi
 
 NEED_RUST=1
-if command -v cargo >/dev/null 2>&1 || [ -x "$HOME/.cargo/bin/cargo" ]; then
+if [ "$CONTAINED" = 1 ]; then
+  # A cargo in $HOME is not this one — contained means contained.
+  if [ -x "$RUSTDIR/cargo/bin/cargo" ]; then NEED_RUST=0; fi
+elif command -v cargo >/dev/null 2>&1 || [ -x "$HOME/.cargo/bin/cargo" ]; then
   NEED_RUST=0
 fi
 
@@ -69,7 +88,13 @@ else
   say "  (webkit2gtk-4.1 is already here)"
 fi
 if [ "$NEED_RUST" = 1 ]; then
-  say "  curl https://sh.rustup.rs | sh   -> installs rustup into $HOME/.cargo"
+  if [ "$CONTAINED" = 1 ]; then
+    say "  curl https://sh.rustup.rs | sh   -> installs rustup into $RUSTDIR"
+    say "                                      (not \$HOME, and your shell rc is not touched)"
+  else
+    say "  curl https://sh.rustup.rs | sh   -> installs rustup into \$HOME/.cargo and \$HOME/.rustup"
+    say "                                      (--contained puts it in $RUSTDIR instead)"
+  fi
 else
   say "  (cargo is already here)"
 fi
@@ -88,22 +113,46 @@ else
     sudo apt-get install -y $APT_PKGS
   fi
   if [ "$NEED_RUST" = 1 ]; then
-    # rustup's own -y. Without it the installer is interactive and this would look hung.
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    # -y because the installer is otherwise interactive and this would look hung. `minimal` skips
+    # rust-docs, which unpacks to the better part of a gigabyte and is of no use to a build.
+    # --no-modify-path leaves your shell rc alone; the env file below is how you opt in instead.
+    if [ "$CONTAINED" = 1 ]; then
+      mkdir -p "$RUSTDIR"
+      RUSTUP_HOME="$RUSTDIR/rustup" CARGO_HOME="$RUSTDIR/cargo" \
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | RUSTUP_HOME="$RUSTDIR/rustup" CARGO_HOME="$RUSTDIR/cargo" \
+          sh -s -- -y --profile minimal --no-modify-path
+    else
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+    fi
   fi
 fi
 
 # ── what is still left for the person to do ────────────────────────────────────────────────
 say ""
-if ! command -v cargo >/dev/null 2>&1; then
-  # rustup writes the PATH into your shell profile, which does not affect the shell you are in.
-  say "cargo is installed but not on this shell's PATH yet. Run:"
+if [ "$CONTAINED" = 1 ]; then
+  say "Rust lives in $RUSTDIR and nowhere else. To use it:"
   say ""
-  say '    . "$HOME/.cargo/env"'
+  say "    . \"$RUSTDIR/cargo/env\""
+  say "    cd \"$HERE\" && cargo build --release && ./target/release/palmar-app"
   say ""
+  say "When you are done with it, that is the whole uninstall:"
+  say ""
+  say "    rm -rf \"$RUSTDIR\" \"$HERE/target\""
+  say ""
+  say "The binary keeps working after that — it needs no toolchain to run, only"
+  say "libwebkit2gtk-4.1-0, which is already installed by now."
+else
+  if ! command -v cargo >/dev/null 2>&1; then
+    # rustup writes the PATH into your shell profile, which does not affect the shell you are in.
+    say "cargo is installed but not on this shell's PATH yet. Run:"
+    say ""
+    say '    . "$HOME/.cargo/env"'
+    say ""
+  fi
+  say "then build and run the window:"
+  say ""
+  say "    cd app && cargo build --release && ./target/release/palmar-app"
 fi
-say "then build and run the window:"
-say ""
-say "    cd app && cargo build --release && ./target/release/palmar-app"
 say ""
 say "(check everything first with:  sh dev/wslg-probe.sh )"

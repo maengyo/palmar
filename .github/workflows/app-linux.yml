@@ -1,0 +1,78 @@
+# Builds the window for Linux so that nobody has to install Rust to use it.
+#
+# Rust is a **build**-time dependency: the binary links only the system webview and libc, and runs
+# with no toolchain present (measured on macOS 2026-09-11 with cargo and rustc off PATH). The only
+# reason anyone was installing Rust was that there was nowhere to get a built one. This is that
+# place.
+#
+# **Manual only.** The repository is private, so Actions minutes are metered — 2,000 a month on the
+# free plan, Linux at the baseline rate. A release build is a few of them. Start it from the Actions
+# tab, or:
+#
+#     gh workflow run app-linux.yml
+#     gh run watch
+#
+# Then, on the machine that wants it:
+#
+#     gh run download -n palmar-app-linux-x86_64
+#     chmod +x palmar-app            # upload-artifact does not keep the executable bit
+#     sudo apt install -y libwebkit2gtk-4.1-0
+#     ./palmar-app
+name: app (linux)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    # **The container is the glibc floor, not the runner.** glibc is backward compatible and not
+    # forward compatible, so a binary built against 24.04's 2.39 dies on 22.04 with
+    # "GLIBC_2.39 not found"; built against 22.04's 2.35 it runs on both. Pinning `runs-on:
+    # ubuntu-22.04` would do the same thing today, but that label begins deprecation on 2026-09-17
+    # and retires 2027-04-17 — this way the floor is an image we choose rather than a label GitHub
+    # is taking away. (The image's own support ends 2027-06-01; this is a lease, not a freehold.)
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    timeout-minutes: 30
+
+    steps:
+      # Before checkout: actions/checkout needs git, and a bare ubuntu image has none.
+      # libwebkit2gtk-4.1-dev is the build half; users need only the -0 runtime package.
+      # No libxdo and no appindicator — those are Tauri's prerequisites, and this is bare wry+tao.
+      - name: what the build needs
+        run: |
+          set -eux
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git curl ca-certificates build-essential pkg-config libwebkit2gtk-4.1-dev
+          echo "glibc: $(ldd --version | head -1)"
+
+      - uses: actions/checkout@v4
+
+      # Rust is fetched here and thrown away with the runner. minimal profile: no docs, no clippy.
+      - name: rust
+        run: |
+          set -eux
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --no-modify-path
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: build
+        working-directory: app
+        run: cargo build --release
+
+      # What it actually links is worth printing: it is the list a user has to be able to satisfy,
+      # and if it ever grows something outside the webkit dependency closure we want to see it here.
+      - name: what it links
+        working-directory: app
+        run: |
+          set -eux
+          ls -l target/release/palmar-app
+          ldd target/release/palmar-app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: palmar-app-linux-x86_64
+          path: app/target/release/palmar-app
+          if-no-files-found: error
+          retention-days: 90

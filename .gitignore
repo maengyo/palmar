@@ -14,3 +14,4 @@ palmar-probe-*.txt
 
 # 앱(app/)이 짓는 것. Cargo.lock 은 넣는다 — 실행파일을 내는 크레이트라 빌드가 재현돼야 한다.
 /app/target/
+/app/.rust/
