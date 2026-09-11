@@ -42,6 +42,8 @@ def head(t):
 
 def guarded(name):
     def deco(fn):
+        if not wanted(name):
+            return fn
         head(name)
         try:
             fn()
@@ -54,12 +56,38 @@ def guarded(name):
     return deco
 
 
+#: **A hang must cost a minute, not a job.** Every round of this so far ended with the runner's
+#: timeout killing a check that was blocked in ReadFile — fourteen minutes to learn nothing. The
+#: watchdog turns that into a printed line and an exit code.
+WATCHDOG_S = float(os.environ.get("CONPTY_WATCHDOG", "150"))
+#: `python dev\conpty-check.py steps attached` runs only those sections. One question per run is
+#: what made this expensive; picking the question makes it cheap.
+WANT = [a.lower() for a in sys.argv[1:] if not a.startswith("-")]
+
+
+def wanted(name):
+    return not WANT or any(w in name.lower() for w in WANT)
+
+
 if sys.platform != "win32":
     raise SystemExit("conpty-check runs on Windows. This is " + sys.platform +
                      ".\n  gh workflow run windows-probe.yml")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BOX = tempfile.mkdtemp(prefix="palmar-conpty-")
+
+# os._exit, not sys.exit: a blocked thread would keep a normal exit waiting, which is the thing
+# being escaped from.
+def _bite():
+    print(NO + " WATCHDOG: %.0fs elapsed and still running — something is blocked" % WATCHDOG_S,
+          flush=True)
+    os._exit(3)
+
+
+import threading as _t
+_w = _t.Timer(WATCHDOG_S, _bite)
+_w.daemon = True
+_w.start()
 
 
 def script(name, lines):

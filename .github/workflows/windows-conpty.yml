@@ -1,0 +1,46 @@
+# palmar/conpty.py, on the only machine that can run it.
+#
+# **Split out of windows-probe.yml so a round costs a minute.** That workflow installs pywinpty and
+# runs the eleven-section probe first, which is 84 seconds of answers this file does not need; this
+# one needs nothing but a checkout and the Python already on the image. Set-up is about 18 seconds.
+#
+# `sections` picks which parts run — one question per round is what made this expensive, so ask for
+# the question you want:
+#
+#     gh workflow run windows-conpty.yml -f sections="steps attached"
+#     gh run watch
+#
+# The check carries its own watchdog, so a blocked ReadFile prints a line and exits instead of
+# sitting until the job's timeout. Every earlier round died that way.
+name: conpty (windows)
+
+on:
+  workflow_dispatch:
+    inputs:
+      sections:
+        description: "Which sections to run (blank = all). e.g. steps attached"
+        type: string
+        default: ""
+  push:
+    paths:
+      - "palmar/conpty.py"
+      - "dev/conpty-check.py"
+      - ".github/workflows/windows-conpty.yml"
+
+jobs:
+  conpty:
+    runs-on: windows-latest
+    timeout-minutes: 6          # the check's own watchdog fires long before this
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: what python is here
+        run: python --version
+
+      # No pip install of anything: this half of the port is ctypes against kernel32, which is the
+      # whole point of writing it.
+      - name: conpty
+        env:
+          CONPTY_WATCHDOG: "120"
+        run: python -u dev\conpty-check.py ${{ inputs.sections }}

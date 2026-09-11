@@ -153,6 +153,8 @@ kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 kernel32.CloseHandle.restype = wintypes.BOOL
 kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, _P(wintypes.DWORD)]
 kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+kernel32.CancelIoEx.argtypes = [wintypes.HANDLE, LPVOID]
+kernel32.CancelIoEx.restype = wintypes.BOOL
 
 # Absent before Windows 10 1809, so `available()` below can still answer instead of crashing here.
 if hasattr(kernel32, "CreatePseudoConsole"):
@@ -323,6 +325,12 @@ class ConPty:
             return
         self.closed = True
         self.kill()
+        # **Unblock the reader first.** A thread sitting in ReadFile on the output pipe keeps the
+        # console busy, and ClosePseudoConsole waits for the console to drain — so closing in the
+        # obvious order deadlocks. Measured: a check that should take seconds took thirteen minutes
+        # and was killed by its timeout (2026-09-11).
+        if self._out_r:
+            kernel32.CancelIoEx(self._out_r, None)
         for h in ("_in_w", "_out_r"):
             v = getattr(self, h)
             if v:
