@@ -2603,17 +2603,26 @@ function recordTyping(secs) {
     on(ta, 'keydown', (e) => put('keydown  ', 'key=' + JSON.stringify(e.key),
         'code=' + e.code, 'keyCode=' + e.keyCode, 'isComposing=' + e.isComposing));
     for (const type of ['compositionstart', 'compositionupdate', 'compositionend'])
-      on(ta, type, (e) => put(type.padEnd(9), 'data=' + JSON.stringify(e.data)));
-    on(ta, 'input', (e) => put('input    ', 'data=' + JSON.stringify(e.data),
-        'type=' + e.inputType, 'value=' + JSON.stringify(e.target.value)));
+      on(ta, type, (e) => { comps.push(type); put(type.padEnd(9), 'data=' + JSON.stringify(e.data)); });
+    on(ta, 'input', (e) => {
+      inputs.push({ type: e.inputType, data: e.data, value: e.target.value });
+      put('input    ', 'data=' + JSON.stringify(e.data),
+          'type=' + e.inputType, 'value=' + JSON.stringify(e.target.value));
+    });
   }
-  const d = t.term.onData((x) => put('→ 데몬   ', JSON.stringify(x)));
+  // Kept as data as well as text: the verdict below is computed from these, so a report can be
+  // **read out loud** instead of pasted. Someone on a locked-down machine cannot copy anything off
+  // it, and a one-line answer crosses that gap where a 200-line log does not.
+  const sent = [];            // {via: 'xterm'|'ime', text}
+  const inputs = [];          // {type, data, value}
+  const comps = [];           // composition event names, in order
+  const d = t.term.onData((x) => { sent.push({ via: 'xterm', text: x }); put('→ 데몬   ', JSON.stringify(x)); });
   // **There are two ways to the socket and this has to see both.** xterm's onData is one; the IME
   // path for browsers that emit no composition events writes straight through sendText and never
   // touches onData. A report that showed only the first would say nothing was sent while characters
   // were appearing on screen — which is exactly the shape of the bug this gets used for.
   const sendWas = t.sendText;
-  t.sendText = (x) => { put('→ 데몬(ime)', JSON.stringify(x)); return sendWas(x); };
+  t.sendText = (x) => { sent.push({ via: 'ime', text: x }); put('→ 데몬(ime)', JSON.stringify(x)); return sendWas(x); };
   off.push(() => { t.sendText = sendWas; });
   box.hidden = false;
   out.value = '';
@@ -2621,11 +2630,51 @@ function recordTyping(secs) {
   const tick = setInterval(() => { out.value = L.join('\n'); out.scrollTop = out.scrollHeight; }, 400);
   setTimeout(() => {
     clearInterval(tick); off.forEach((f) => f()); d.dispose();
-    out.value = L.join('\n');
-    hint.textContent = 'done — press Copy and paste it back.';
+    const v = verdictOf({ sent: sent, inputs: inputs, comps: comps });
+    out.value = v + '\n' + '─'.repeat(60) + '\n' + L.join('\n');
+    hint.textContent = 'done — read the VERDICT line back, or press Copy for the whole thing.';
     // Once diagnostics start, a person has to click the terminal right away. Move focus onto the pane for them.
   }, (secs || 15) * 1000);
   setTimeout(() => { if (t.term) t.term.focus(); }, 60);
+}
+
+//: **One line somebody can read aloud.** A long log is the right thing when it can be pasted; on a
+//: machine where nothing can leave, what is needed is a verdict, and the report can work that out
+//: itself. It names which of the two senders fired and whether what it sent was growing — which is
+//: exactly the fork that decides where an input bug gets fixed.
+function verdictOf(r) {
+  const bits = [];
+  const xterm = r.sent.filter((x) => x.via === 'xterm');
+  const ime = r.sent.filter((x) => x.via === 'ime');
+  if (!r.sent.length && !r.inputs.length) return 'VERDICT: nothing was typed — try again and type into the terminal';
+  bits.push('sent ' + r.sent.length + ' (xterm ' + xterm.length + ' · ime ' + ime.length + ')');
+
+  // Growing means each send starts with the one before it: "하" then "하이" then "하이하". That is the
+  // signature of a whole buffer going out again rather than the new piece of it.
+  const growth = (list) => {
+    let n = 0;
+    for (let i = 1; i < list.length; i++) {
+      const a = list[i - 1].text, b = list[i].text;
+      if (b.length > a.length && b.indexOf(a) === 0) n++;
+    }
+    return n;
+  };
+  const gx = growth(xterm), gi = growth(ime);
+  if (gx || gi) bits.push('GROWING: ' + (gx >= gi ? 'xterm ×' + gx : 'ime ×' + gi));
+  else bits.push('no growth');
+
+  bits.push('composition ' + (r.comps.length ? r.comps.join('/') : 'none'));
+
+  // A textarea that never gets emptied is the other classic shape of this bug.
+  const vals = r.inputs.map((i) => (i.value || '').length);
+  if (vals.length > 1 && vals[vals.length - 1] > vals[0] && vals[vals.length - 1] > 4) {
+    bits.push('TEXTAREA GREW to ' + vals[vals.length - 1]);
+  }
+  const types = [...new Set(r.inputs.map((i) => i.type))];
+  if (types.length) bits.push('inputType ' + types.join('+'));
+  const longest = r.sent.reduce((m, x) => Math.max(m, x.text.length), 0);
+  bits.push('longest send ' + longest);
+  return 'VERDICT: ' + bits.join(' · ');
 }
 
 function watchInput(secs) {
