@@ -65,8 +65,10 @@ jobs:
       # **A green run that skipped everything is the failure this workflow exists to prevent**, so
       # the count is asserted rather than trusted. Read from the run above rather than run again —
       # the suite takes about four minutes and there is no reason to pay for it twice.
-      # test_app's `cargo check` is the one expected skip: no Rust in this job, and
-      # .github/workflows/app-linux.yml builds that half.
+      # Four skips are expected on a test-only Linux runner, and no more:
+      #   Builds.test_it_compiles          — cargo is on the image, WebKitGTK's headers are not
+      #   FindingTheDaemon (3)             — the window has not been built here
+      # app-linux.yml is what compiles that half. Anything past six means something else went quiet.
       - name: how many actually ran
         run: |
           python - <<'PY'
@@ -80,6 +82,6 @@ jobs:
           print("ran %d, skipped %d" % (ran, skipped))
           if ran < 130:
               sys.exit("only %d tests ran; the suite is about 137" % ran)
-          if skipped > 2:
-              sys.exit("%d tests skipped; only cargo's should be" % skipped)
+          if skipped > 6:
+              sys.exit("%d tests skipped; four are expected here" % skipped)
           PY

@@ -92,7 +92,11 @@ class Install(unittest.TestCase):
         with open(py, "w") as fh:
             fh.write('#!/bin/sh\ncase "$1" in\n  --version) echo "Python 3.8.0";;\n  *) exit 1;;\nesac\n')
         os.chmod(py, 0o755)
-        r = self.run_install(extra_env={"PATH": fake + ":/bin"})
+        # **The fake directory and nothing else.** /bin was on this PATH, which on a Mac holds no
+        # python at all and on Linux is a symlink to /usr/bin — so install.sh's walk through
+        # python3.13, python3.12 … found a real one and the test passed for the wrong reason (CI,
+        # 2026-09-11). install.sh needs no external program before it gives up, so this is enough.
+        r = self.run_install(extra_env={"PATH": fake})
         self.assertNotEqual(r.returncode, 0, "it accepted Python 3.8")
         self.assertIn("3.9", r.stdout + r.stderr)
         self.assertFalse(os.path.exists(os.path.join(self.prefix, "bin", "palmar")),

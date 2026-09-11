@@ -21,7 +21,23 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(REPO, "app")
 
 
-@unittest.skipUnless(shutil.which("cargo"), "no Rust toolchain")
+def can_build_app():
+    """Whether this machine could compile the window, not merely whether it has cargo.
+
+    **A GitHub runner has cargo and no WebKitGTK**, so "cargo is here" let the test try and fail on
+    a pkg-config error that says nothing about palmar (CI, 2026-09-11). On Linux the build needs
+    webkit2gtk-4.1's development files; on macOS the webview is in the OS."""
+    if not shutil.which("cargo"):
+        return False
+    if sys.platform.startswith("linux"):
+        if not shutil.which("pkg-config"):
+            return False
+        return subprocess.run(["pkg-config", "--exists", "webkit2gtk-4.1"],
+                              capture_output=True).returncode == 0
+    return True
+
+
+@unittest.skipUnless(can_build_app(), "nothing here can build the window")
 @unittest.skipUnless(os.path.isdir(APP), "no app/ in this tree")
 class Builds(unittest.TestCase):
     def test_it_compiles(self):
