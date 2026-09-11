@@ -21,7 +21,17 @@
 name: app (linux)
 
 on:
+  # Manual, once this file is on the default branch — `workflow_dispatch` is only dispatchable from
+  # there, which is a GitHub rule and not a choice.
   workflow_dispatch:
+  # Until then, and afterwards too: on any push that actually touches the window. **That is the
+  # moment the answer matters** — this is the only machine in the project that compiles the Linux
+  # half, so a change to app/ is unverified until this has run. Scoped by path so the ordinary
+  # Python-side commits, which are most of them, spend no minutes at all.
+  push:
+    paths:
+      - "app/**"
+      - ".github/workflows/app-linux.yml"
 
 jobs:
   build:
