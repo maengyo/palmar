@@ -150,9 +150,10 @@ that is a decision to make once it is known which machines need it.
 Check WSLg itself before palmar: `sudo apt install -y x11-apps && xeyes`. If that draws nothing,
 nothing here can. `wsl --update` then `wsl --shutdown` from Windows, and open the distro again.
 
-> **Not yet measured.** Everything in this section is what the code is written to do; it has not
-> been run on a real WSLg machine. The macOS path in this file *has* been. See `docs/decisions.md`
-> for what is measured and what is not.
+> **Measured on 2026-09-11**, on one WSLg machine. Korean display and input, the compositing lag,
+> rail folding and the title bar were all found and fixed there that day. One machine is one machine
+> — see `docs/wslg.md` for the walkthrough and `docs/decisions.md` for what is still only written
+> down rather than run.
 
 ## No title bar
 
