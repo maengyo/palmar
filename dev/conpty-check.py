@@ -160,7 +160,7 @@ def _variants():
     import threading
     k = C.kernel32
 
-    def attempt(label, lp_value, inherit, use_std):
+    def attempt(label, lp_value, inherit, use_std, job=False, uni_env=False):
         sa = C.SECURITY_ATTRIBUTES(ctypes.sizeof(C.SECURITY_ATTRIBUTES), None, True)
         in_r, in_w = wintypes.HANDLE(), wintypes.HANDLE()
         out_r, out_w = wintypes.HANDLE(), wintypes.HANDLE()
@@ -199,10 +199,23 @@ def _variants():
             "f.flush()",
         ])
         pi = C.PROCESS_INFORMATION()
+        # the two things ConPty.spawn does that the plain variants do not
+        hjob = None
+        if job:
+            hjob = k.CreateJobObjectW(None, None)
+            ji = C.JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+            ji.BasicLimitInformation.LimitFlags = C.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            k.SetInformationJobObject(hjob, C.JobObjectExtendedLimitInformation,
+                                      byref(ji), ctypes.sizeof(ji))
+        flags = C.EXTENDED_STARTUPINFO_PRESENT
+        if uni_env:
+            flags |= C.CREATE_UNICODE_ENVIRONMENT
         ok_c = k.CreateProcessW(None,
                                 ctypes.create_unicode_buffer('"%s" -u "%s"' % (sys.executable, path)),
-                                None, None, bool(inherit), C.EXTENDED_STARTUPINFO_PRESENT,
+                                None, None, bool(inherit), flags,
                                 None, None, byref(si), byref(pi))
+        if hjob and ok_c:
+            k.AssignProcessToJobObject(hjob, pi.hProcess)
         k.CloseHandle(out_w)
         k.CloseHandle(in_r)
         out, hit = [], threading.Event()
@@ -233,19 +246,21 @@ def _variants():
         k.CloseHandle(in_w)
         k.CloseHandle(out_r)
         k.ClosePseudoConsole(hpc)
-        k.CloseHandle(pi.hProcess) if ok_c else None
+        if ok_c:
+            k.CloseHandle(pi.hProcess)
+        if hjob:
+            k.CloseHandle(hjob)
         return won
 
     wins = []
-    for label, lp, inherit, use_std in (
-            ("handle, inherit=0", "handle", False, False),
-            ("handle, inherit=1", "handle", True, False),
-            ("byref, inherit=0", "byref", False, False),
-            ("c_void_p, inherit=0", "value", False, False),
-            ("handle + stdhandles", "handle", True, True),
+    for label, lp, inherit, use_std, job, uni in (
+            ("plain (known good)", "handle", False, False, False, False),
+            ("+ job object", "handle", False, False, True, False),
+            ("+ unicode env flag", "handle", False, False, False, True),
+            ("+ both (= spawn)", "handle", False, False, True, True),
     ):
         try:
-            if attempt(label, lp, inherit, use_std):
+            if attempt(label, lp, inherit, use_std, job, uni):
                 wins.append(label)
         except Exception as e:
             say(NO, "%-22s raised %s: %s" % (label, type(e).__name__, str(e)[:50]))
