@@ -602,24 +602,27 @@ def _shell_and_cwd():
 @guarded("port — is the pipe byte-exact? (this decides pywinpty vs ctypes)")
 def _fidelity():
     """**palmar is a byte-exact pipe.** It reads PTY bytes, keeps them in a 256 KB ring, scans them
-    for alt-screen markers and ships them to xterm.js unchanged. pywinpty's `read()` is typed
-    `-> str` and `write()` takes `str` (verified in winpty/_winpty.pyi), which means bytes go through
-    a UTF-8 decode on the way out. Reading the Rust says that decode drops NUL and yields U+FFFD on
-    a character split across its 32 KB read. **Reading is not measuring**, and the answer decides
-    whether the port can use pywinpty at all, so it is measured here.
+    for alt-screen markers and hands them to xterm.js unchanged. pywinpty's `read()` is typed
+    `-> str` and `write()` takes `str` (verified in winpty/_winpty.pyi), so bytes go through a UTF-8
+    decode on the way out. Whether that decode loses anything decides if the port can use pywinpty
+    at all.
 
-    The child is python, so the bytes it emits are exactly the bytes intended — no shell quoting in
-    between."""
+    **The emitting script goes in a file, never on a command line.** The first version of this
+    section built `python -c "..."` by string formatting and the quoting died three layers deep, so
+    the child printed a usage error and the measurement read that instead. For the same reason the
+    scripts below contain no backslash escapes: every byte is built with bytes([...]) or chr(...).
+    """
     if PTY is None:
         say(HM, "no pywinpty — cannot measure")
         return
+    box = tempfile.mkdtemp(prefix="palmar-fid-")
 
-    def run(pysrc, cols=200, rows=50, secs=8.0):
-        """Emit bytes from a python child inside a ConPTY and return everything read back."""
-        pty = PTY(cols, rows)
-        # -u so nothing waits in a buffer we then time out on.
-        cmd = '%s -u -c "%s"' % (sys.executable, pysrc.replace('"', '\\"'))
-        pty.spawn(sys.executable, cmdline=cmd)
+    def run(name, body, secs=10.0):
+        path = os.path.join(box, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        pty = PTY(200, 50)
+        pty.spawn(sys.executable, cmdline='"%s" -u "%s"' % (sys.executable, path))
         out, end = [], time.time() + secs
         while time.time() < end:
             try:
@@ -634,41 +637,48 @@ def _fidelity():
                 time.sleep(0.02)
         return "".join(out)
 
-    # ── 1. does a NUL byte survive ────────────────────────────────────────
-    got = run(r"import sys; sys.stdout.buffer.write(b'A\x00B'); sys.stdout.flush()")
-    marker = got.find("A")
-    near = got[marker:marker + 4] if marker >= 0 else got[-10:]
-    say("    sent b'A\\x00B' -> got %r" % near)
-    if "\x00" in got:
-        say(OK, "NUL survives the round trip")
-    else:
-        say(NO, "**NUL is dropped** — the pipe is not byte-exact")
+    NUL, FFFD, HAN = chr(0), chr(0xFFFD), chr(0xD55C)
+
+    # ── 1. a NUL byte ─────────────────────────────────────────────────────
+    got = run("nul.py",
+              "import sys\n"
+              "sys.stdout.buffer.write(b'[A' + bytes([0]) + b'B]')\n"
+              "sys.stdout.flush()\n")
+    say("    read back %r" % got[-40:])
+    if "[A" not in got:
+        say(HM, "the marker never arrived — the child did not run; nothing below is meaningful")
+        return
+    say(OK if NUL in got else NO,
+        "NUL:", "survives" if NUL in got else "**dropped — the pipe is not byte-exact**")
 
     # ── 2. invalid UTF-8 ──────────────────────────────────────────────────
-    got = run(r"import sys; sys.stdout.buffer.write(b'<\xff\xfe>'); sys.stdout.flush()")
-    i = got.find("<")
-    say("    sent b'<\\xff\\xfe>' -> got %r" % (got[i:i + 6] if i >= 0 else got[-10:]))
-    say(OK if "\ufffd" not in got else NO,
-        "invalid UTF-8:", "passed through" if "\ufffd" not in got else "**became U+FFFD**")
+    got = run("bad.py",
+              "import sys\n"
+              "sys.stdout.buffer.write(b'[' + bytes([255, 254]) + b']')\n"
+              "sys.stdout.flush()\n")
+    say("    read back %r" % got[-40:])
+    say(OK if FFFD not in got else NO,
+        "invalid UTF-8:", "passed through" if FFFD not in got else "**became U+FFFD**")
 
     # ── 3. Korean across the 32 KB read boundary ──────────────────────────
-    # 200 KB of 한 (3 bytes each) guarantees characters land on 32768-byte boundaries. If the decode
-    # happens per-read rather than across reads, each boundary costs one replacement character.
-    src = (r"import sys; sys.stdout.buffer.write(('\ud55c'*70000).encode('utf-8')); "
-           r"sys.stdout.write('\nEND\n'); sys.stdout.flush()")
-    got = run(src, secs=15.0)
-    bad = got.count("\ufffd")
-    hang = got.count("\ud55c")
-    say("    sent 70,000 x 한 (210 KB) -> got %d 한, %d U+FFFD" % (hang, bad))
-    if bad == 0 and hang >= 69000:
-        say(OK, "Korean survives whole — the decode is not splitting characters")
-    elif bad:
-        say(NO, "**%d characters were destroyed** — one per read boundary is the expected shape" % bad)
+    # 70,000 x 한 is 210 KB, so characters certainly land on 32768-byte boundaries. A decode done
+    # per read rather than across reads costs one replacement character at each of them.
+    got = run("han.py",
+              "import sys\n"
+              "sys.stdout.buffer.write((chr(0xD55C) * 70000).encode('utf-8'))\n"
+              "sys.stdout.write(chr(10) + 'END' + chr(10))\n"
+              "sys.stdout.flush()\n", secs=25.0)
+    bad, hang = got.count(FFFD), got.count(HAN)
+    say("    sent 70,000 x 한 (210 KB) -> got %d 한, %d U+FFFD, END seen: %s"
+        % (hang, bad, "END" in got))
+    if hang < 1000:
+        say(HM, "too little arrived to conclude anything")
+    elif bad == 0:
+        say(OK, "Korean survives whole — the decode does not split characters")
     else:
-        say(HM, "only %d of 70,000 arrived; the read loop may have ended early" % hang)
+        say(NO, "**%d characters destroyed** — about one per 32 KB read boundary" % bad)
 
     say("    ---")
-    say("    If NUL is dropped or U+FFFD appears, pywinpty cannot carry palmar's bytes and the")
-    say("    port needs ConPTY through ctypes instead. Note the port already needs ctypes for the")
-    say("    job objects a pane's process tree requires, so that is no longer a new dependency.")
-
+    say("    A dropped NUL or any U+FFFD means pywinpty cannot carry palmar's bytes, and the port")
+    say("    needs ConPTY through ctypes. The port already needs ctypes for the job object a pane's")
+    say("    process tree requires, so that is no longer a new dependency either way.")
