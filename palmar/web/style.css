@@ -13,6 +13,13 @@
  * --st-* above as-is (⑥ is still undecided).
  */
 
+/* **`hidden` must actually hide.** Any author rule that sets `display` beats the UA stylesheet's
+   `[hidden] { display: none }`, so an element given `display: grid` or `flex` stays on screen no
+   matter what the attribute says. This project has been caught by it three times — .tabs, .mm, and
+   the rail's reopen tabs, which were never once hidden after a rail was unfolded and left people
+   reading the state backwards (2026-09-11). Stated once, here, rather than patched per component. */
+[hidden] { display: none !important; }
+
 /* **Banned from the dark theme** (the user, 2026-09-08):
  *   · purple gradients
  *   · the loud tech-company blue
@@ -499,8 +506,6 @@ body.fold-r .rail.right .rail-fold       { display: none; }
   overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
 }
 .tabs::-webkit-scrollbar { height: 0; }
-/* display:flex beats [hidden]'s display:none, so it is put back down here (a daemon that knows no canvases) */
-.tabs[hidden] { display: none; }
 .tab {
   flex: none; display: flex; align-items: center; gap: 6px; max-width: 190px;
   height: 25px; padding: 0 9px; margin-bottom: -1px;
@@ -731,7 +736,6 @@ body.fold-r .rail.right .rail-fold       { display: none; }
   background: var(--float); border: 1px solid var(--line-2); border-radius: 8px;
   box-shadow: var(--shadow-2); overflow: hidden; cursor: crosshair;
 }
-.mm[hidden] { display: none; }
 .mm-w { position: absolute; inset: 0; }
 .mm-t { position: absolute; border-radius: 1px; background: var(--st-idle); }
 .mm-t.work { background: var(--st-work); }

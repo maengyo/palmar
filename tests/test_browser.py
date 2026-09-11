@@ -240,6 +240,41 @@ class RailFold(unittest.TestCase):
         time.sleep(0.3)
         self.assertNotEqual(self.railvar("r"), "0px", "it did not toggle back open")
 
+    def test_the_reopen_tab_is_there_only_while_folded(self):
+        """**It is the only thing on screen that says which state a rail is in**, so it being wrong
+        is worse than it being absent. It never hid at all: the JS set `hidden` correctly, and
+        `.rail-open { display: grid }` beat the UA stylesheet's `[hidden] { display: none }`, so the
+        tab sat there after unfolding and people read the state backwards (2026-09-11).
+
+        Asserted on what is painted, not on the attribute — the attribute was always right."""
+        def painted(which):
+            return self.b.ev("""(()=>{const e=document.getElementById('open-%s');
+              const r=e.getBoundingClientRect();
+              return r.width>0 && r.height>0 && getComputedStyle(e).display!=='none';})()""" % which)
+
+        self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
+        time.sleep(0.3)
+        self.assertFalse(painted("l"), "the reopen tab is showing while the rail is open")
+        self.assertFalse(painted("r"))
+
+        self.b.ev("document.getElementById('fold-l').click()")
+        time.sleep(0.3)
+        self.assertTrue(painted("l"), "nothing offers to bring a folded rail back")
+        self.assertFalse(painted("r"), "folding one rail showed the other one's tab")
+
+        self.b.ev("document.getElementById('open-l').click()")
+        time.sleep(0.3)
+        self.assertFalse(painted("l"), "the tab stayed after the rail came back")
+
+    def test_hidden_hides_everywhere(self):
+        """The same trap caught .tabs and .mm before this, each patched on its own. One rule now
+        covers them; this is what says it still does."""
+        for which in ("mm", "keys", "webbox", "diagbox", "restore"):
+            shown = self.b.ev("""(()=>{const e=document.getElementById('%s');
+              if(!e) return null;
+              return e.hidden && getComputedStyle(e).display!=='none';})()""" % which)
+            self.assertNotEqual(shown, True, "#%s is marked hidden and still displayed" % which)
+
     def test_a_fold_survives_a_reload(self):
         self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
         time.sleep(0.2)
