@@ -476,6 +476,19 @@ def _loop():
     loop.close()
 
 
+# **Defined above its caller on purpose**: @guarded runs the section the moment it decorates it,
+# so anything the section calls has to exist by then. It did not, and the section died with a
+# NameError while every other one ran (2026-09-11).
+def _python_sleepers():
+    """How many python processes are sitting in that sleep. tasklist is on every Windows."""
+    try:
+        out = subprocess.run(["tasklist", "/fi", "imagename eq python.exe"],
+                             capture_output=True, text=True, timeout=15).stdout
+        return out.lower().count("python.exe")
+    except Exception:
+        return -1
+
+
 @guarded("port — killing a shell: do its children die with it?")
 def _tree():
     """palmar closes a pane by killing the shell. On POSIX the agent inside dies with it. If it does
@@ -507,16 +520,6 @@ def _tree():
             k32.CloseHandle(h)
     except Exception as e:
         say(NO, "CreateJobObjectW:", type(e).__name__, str(e)[:70])
-
-
-def _python_sleepers():
-    """How many python processes are sitting in that sleep. tasklist is on every Windows."""
-    try:
-        out = subprocess.run(["tasklist", "/fi", "imagename eq python.exe"],
-                             capture_output=True, text=True, timeout=15).stdout
-        return out.lower().count("python.exe")
-    except Exception:
-        return -1
 
 
 @guarded("port — the single-instance lock, and whether it survives a kill")
