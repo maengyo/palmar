@@ -154,8 +154,58 @@ def _steps():
     say("    UpdateProcThreadAttribute ->", bool(ok), "err", ctypes.get_last_error())
     say("    sizeof(STARTUPINFOEXW) =", ctypes.sizeof(C.STARTUPINFOEXW),
         "· sizeof(STARTUPINFOW) =", ctypes.sizeof(C.STARTUPINFOW))
+
+    # **Do the whole thing here, inline.** Every call above returns True and the child still lands
+    # outside the console, so the question is whether ConPty.spawn is wrong or the API is being
+    # understood wrongly. Running CreateProcess right here, with these exact handles, separates them.
+    path = script("who.py", [
+        "import ctypes, shutil, sys",
+        "k = ctypes.WinDLL('kernel32')",
+        "sz = shutil.get_terminal_size((0, 0))",
+        "msg = 'INLINE size=%dx%d hwnd=%s' % (sz.columns, sz.lines, k.GetConsoleWindow())",
+        "sys.stdout.write(msg + chr(10))",
+        "sys.stdout.flush()",
+    ])
+    pi = C.PROCESS_INFORMATION()
+    cmd = '"%s" -u "%s"' % (sys.executable, path)
+    ok = k.CreateProcessW(None, ctypes.create_unicode_buffer(cmd), None, None, False,
+                          C.EXTENDED_STARTUPINFO_PRESENT, None, None, byref(si), byref(pi))
+    say("    CreateProcessW ->", bool(ok), "err", ctypes.get_last_error(), "pid", pi.dwProcessId)
+    k.CloseHandle(out_w)          # let the console own the far end, or out_r never sees EOF
+    k.CloseHandle(in_r)
+    out, end = [], time.time() + 6
+    import threading
+    hit = threading.Event()
+
+    def pump():
+        try:
+            while True:
+                b = (ctypes.c_char * 4096)()
+                got = wintypes.DWORD(0)
+                if not k.ReadFile(out_r, b, 4096, byref(got), None):
+                    break
+                if not got.value:
+                    break
+                out.append(bytes(b[:got.value]))
+                if b"INLINE" in b"".join(out):
+                    break
+        except Exception:
+            pass
+        finally:
+            hit.set()
+
+    threading.Thread(target=pump, daemon=True).start()
+    hit.wait(6)
+    blob = b"".join(out)
+    say("    inline pipe got %r" % blob[-90:])
+    if b"INLINE size=133x37" in blob:
+        say(OK, "**the inline spawn works** — the bug is in ConPty.spawn, not in the API")
+    elif b"INLINE" in blob:
+        say(NO, "the child is in a console, but not ours:", blob[-60:])
+    else:
+        say(NO, "**the inline spawn fails the same way** — the API use itself is wrong")
     k.ClosePseudoConsole(hpc)
-    for h in (in_r, in_w, out_r, out_w):
+    for h in (in_w, out_r):
         k.CloseHandle(h)
 
 
