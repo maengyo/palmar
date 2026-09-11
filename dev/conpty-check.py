@@ -198,6 +198,58 @@ def _steps():
     hit.wait(6)
     blob = b"".join(out)
     say("    inline pipe got %r" % blob[-90:])
+    # **Is that console ours?** The child has one (hwnd was not zero) but its stdout is the pipe it
+    # inherited, so stdout says nothing about which console it joined. CONOUT$ does: it is whatever
+    # console the process is attached to, and if that is our pseudo-console the bytes come out of
+    # out_r. This is the fact that decides what the fix has to be.
+    path2 = script("conout.py", [
+        "import sys",
+        "f = open('CONOUT$', 'w')",
+        "f.write('VIACONOUT' + chr(10))",
+        "f.flush()",
+        "import ctypes",
+        "k = ctypes.WinDLL('kernel32')",
+        "class CSBI(ctypes.Structure):",
+        "    _fields_ = [('size', ctypes.c_short * 2), ('cur', ctypes.c_short * 2),",
+        "                ('attr', ctypes.c_ushort), ('win', ctypes.c_short * 4),",
+        "                ('maxw', ctypes.c_short * 2)]",
+        "b = CSBI()",
+        "h = k.GetStdHandle(-11)",
+        "ok = k.GetConsoleScreenBufferInfo(k.CreateFileW('CONOUT$', 0xC0000000, 3, None, 3, 0, None), ctypes.byref(b))",
+        "f.write('CSBI ok=%s w=%d h=%d' % (bool(ok), b.size[0], b.size[1]) + chr(10))",
+        "f.flush()",
+    ])
+    pi2 = C.PROCESS_INFORMATION()
+    cmd2 = '"%s" -u "%s"' % (sys.executable, path2)
+    ok2 = k.CreateProcessW(None, ctypes.create_unicode_buffer(cmd2), None, None, False,
+                           C.EXTENDED_STARTUPINFO_PRESENT, None, None, byref(si), byref(pi2))
+    say("    second child (writes to CONOUT$) ->", bool(ok2), "pid", pi2.dwProcessId)
+    out2, hit2 = [], threading.Event()
+
+    def pump2():
+        try:
+            while True:
+                bb = (ctypes.c_char * 4096)()
+                g = wintypes.DWORD(0)
+                if not k.ReadFile(out_r, bb, 4096, byref(g), None) or not g.value:
+                    break
+                out2.append(bytes(bb[:g.value]))
+                if b"CSBI" in b"".join(out2):
+                    break
+        except Exception:
+            pass
+        finally:
+            hit2.set()
+
+    threading.Thread(target=pump2, daemon=True).start()
+    hit2.wait(8)
+    blob2 = b"".join(out2)
+    say("    CONOUT$ pipe got %r" % blob2[-120:])
+    if b"VIACONOUT" in blob2:
+        say(OK, "**the child IS in our pseudo-console** — only its stdout was the inherited pipe")
+    else:
+        say(NO, "CONOUT$ did not reach our pipe either — the console is not ours")
+
     if b"INLINE size=133x37" in blob:
         say(OK, "**the inline spawn works** — the bug is in ConPty.spawn, not in the API")
     elif b"INLINE" in blob:
