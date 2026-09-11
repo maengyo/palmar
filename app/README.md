@@ -51,11 +51,28 @@ It installs nothing and changes nothing; it prints a report and names the first 
 missing. Paste that report when something is wrong — it is the fastest way to tell "WSLg is not
 working" apart from "palmar is not working". No key or token appears in it.
 
-Then, if it is all clear:
+Then install what the build needs. Either by hand:
 
 ```sh
 sudo apt install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # if rustup is not there yet
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+. "$HOME/.cargo/env"      # rustup does not change the shell you are in
+```
+
+or let a script do both:
+
+```sh
+sh app/setup-linux.sh     # prints what it will run, then asks
+```
+
+**That script is the only thing here that changes your machine**, which is why it is separate from
+the probe: a diagnostic that edits the system is a worse diagnostic. It stops with one sentence on
+a distribution that has no WebKitGTK 4.1, rather than failing halfway through an apt run. Nothing
+in it is needed for the web version — `python3 -m palmar` needs no toolchain and no packages.
+
+Then:
+
+```sh
 cd app && cargo build --release
 ./target/release/palmar-app
 ```

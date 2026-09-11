@@ -108,7 +108,8 @@ elif [ -x "$HOME/.cargo/bin/cargo" ]; then
   note 'run:  . "$HOME/.cargo/env"      (or just open a new shell) and try again'
 else
   bad "no Rust"
-  note "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+  note "sh app/setup-linux.sh    <- installs this and the webview headers, asking first"
+  note "or by hand: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
   note 'then:  . "$HOME/.cargo/env"     <- rustup does not change this shell by itself'
 fi
 
@@ -130,7 +131,11 @@ if command -v pkg-config >/dev/null 2>&1; then
       bad "no webkit2gtk dev package"
     fi
     if apt_has libwebkit2gtk-4.1-dev; then
-      note "it is available here — sudo apt install -y libwebkit2gtk-4.1-dev build-essential pkg-config"
+      note "it is available here. Either by hand:"
+      note "    sudo apt install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl"
+      note "or let a script do this one and Rust together (it asks first, and only that script"
+      note "changes anything — this probe never does):"
+      note "    sh app/setup-linux.sh"
     elif command -v apt-cache >/dev/null 2>&1; then
       note "**this distribution has no libwebkit2gtk-4.1-dev at all** ($DISTRO)."
       note "Ubuntu 22.04+ and Debian 12+ have it; 20.04 and Debian 11 do not."
