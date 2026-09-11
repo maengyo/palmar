@@ -638,12 +638,14 @@ def _fidelity():
         return "".join(out)
 
     NUL, FFFD, HAN = chr(0), chr(0xFFFD), chr(0xD55C)
+    NL = chr(10)
 
     # ── 1. a NUL byte ─────────────────────────────────────────────────────
-    got = run("nul.py",
-              "import sys\n"
-              "sys.stdout.buffer.write(b'[A' + bytes([0]) + b'B]')\n"
-              "sys.stdout.flush()\n")
+    got = run("nul.py", NL.join([
+        "import sys",
+        "sys.stdout.buffer.write(b'[A' + bytes([0]) + b'B]')",
+        "sys.stdout.flush()",
+    ]) + NL)
     say("    read back %r" % got[-40:])
     if "[A" not in got:
         say(HM, "the marker never arrived — the child did not run; nothing below is meaningful")
@@ -652,10 +654,11 @@ def _fidelity():
         "NUL:", "survives" if NUL in got else "**dropped — the pipe is not byte-exact**")
 
     # ── 2. invalid UTF-8 ──────────────────────────────────────────────────
-    got = run("bad.py",
-              "import sys\n"
-              "sys.stdout.buffer.write(b'[' + bytes([255, 254]) + b']')\n"
-              "sys.stdout.flush()\n")
+    got = run("bad.py", NL.join([
+        "import sys",
+        "sys.stdout.buffer.write(b'[' + bytes([255, 254]) + b']')",
+        "sys.stdout.flush()",
+    ]) + NL)
     say("    read back %r" % got[-40:])
     say(OK if FFFD not in got else NO,
         "invalid UTF-8:", "passed through" if FFFD not in got else "**became U+FFFD**")
@@ -663,11 +666,12 @@ def _fidelity():
     # ── 3. Korean across the 32 KB read boundary ──────────────────────────
     # 70,000 x 한 is 210 KB, so characters certainly land on 32768-byte boundaries. A decode done
     # per read rather than across reads costs one replacement character at each of them.
-    got = run("han.py",
-              "import sys\n"
-              "sys.stdout.buffer.write((chr(0xD55C) * 70000).encode('utf-8'))\n"
-              "sys.stdout.write(chr(10) + 'END' + chr(10))\n"
-              "sys.stdout.flush()\n", secs=25.0)
+    got = run("han.py", NL.join([
+        "import sys",
+        "sys.stdout.buffer.write((chr(0xD55C) * 70000).encode('utf-8'))",
+        "sys.stdout.write(chr(10) + 'END' + chr(10))",
+        "sys.stdout.flush()",
+    ]) + NL, secs=25.0)
     bad, hang = got.count(FFFD), got.count(HAN)
     say("    sent 70,000 x 한 (210 KB) -> got %d 한, %d U+FFFD, END seen: %s"
         % (hang, bad, "END" in got))
