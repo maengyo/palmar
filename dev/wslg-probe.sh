@@ -155,36 +155,51 @@ fi
 # no Hangul font, no input method, and no working GL.
 head2 "5. Korean, and speed"
 
-# **Fonts.** The terminal font is vendored (JetBrains Mono) and has no Hangul; the page falls back
-# per glyph to whatever the system has. With no CJK font anywhere, Korean is tofu.
+# **Fonts.** A stock Ubuntu WSL rootfs ships fonts-dejavu and fonts-ubuntu and nothing else — no
+# Hangul anywhere. The terminal falls back per glyph to whatever the system has, so with no CJK font
+# Korean is empty boxes. This is a missing font, not a palmar bug.
 if command -v fc-list >/dev/null 2>&1; then
   HANGUL=$(fc-list :lang=ko 2>/dev/null | wc -l | tr -d ' ')
   if [ "$HANGUL" -gt 0 ]; then
     ok "$HANGUL font(s) with Korean glyphs"
   else
-    bad "no font on this machine has Hangul — Korean will be empty boxes"
-    note "sudo apt install -y fonts-noto-cjk"
+    bad "no font here has Hangul — Korean shows as empty boxes"
+    note "for a terminal (small, fixed-width, built for code):"
+    note "    sudo apt install -y fonts-naver-d2coding        # ~8 MB, needs universe"
+    note "or, if you also want Japanese and Chinese:"
+    note "    sudo apt install -y fonts-noto-cjk              # ~89 MB"
+    note "No fc-cache needed — the packages trigger it. **Restart the window afterwards**:"
+    note "fontconfig is cached per process, so a running one will not see the new font."
   fi
 else
-  note "fontconfig is not installed, so this cannot be checked here:"
+  note "fontconfig is not installed, so this cannot be checked:"
   note "    sudo apt install -y fontconfig   (then run this again)"
-  note "If Korean shows as boxes, the fix is: sudo apt install -y fonts-noto-cjk"
 fi
 
-# **Input method.** Showing Hangul and typing it are different problems with different fixes.
+# **Input.** Showing Hangul and typing it are different problems with different fixes, and the second
+# one is not a configuration mistake: WSLg's compositor throws away RDP unicode keyboard events, so
+# **the Windows IME cannot reach a Linux window at all** (microsoft/wslg#9, open since 2021). An IME
+# has to run on the Linux side. Do not chase Windows-side settings for this.
 say "  \$GTK_IM_MODULE               ${GTK_IM_MODULE:-(unset)}"
 say "  \$XMODIFIERS                  ${XMODIFIERS:-(unset)}"
+say "  \$DBUS_SESSION_BUS_ADDRESS    ${DBUS_SESSION_BUS_ADDRESS:-(unset)}"
 if command -v ibus >/dev/null 2>&1; then
   ok "ibus is installed"
-elif command -v fcitx5 >/dev/null 2>&1; then
-  ok "fcitx5 is installed"
+  if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+    note "...but there is no session bus. WSLg does not start one. Before the window:"
+    note "    eval \"\$(dbus-launch --sh-syntax)\" && ibus-daemon -drx && ibus engine hangul"
+  fi
 else
-  note "no input method installed. That is only a problem if you cannot TYPE Korean —"
-  note "showing it is the font above, and the two fail separately."
+  note "no Linux IME installed. Only matters if you cannot TYPE Korean — showing it is the"
+  note "font above, and the two fail separately. To type it:"
+  note "    sudo apt install -y ibus ibus-hangul ibus-gtk3 dbus-x11"
+  note "    eval \"\$(dbus-launch --sh-syntax)\" && ibus-daemon -drx && ibus engine hangul"
+  note "palmar-app points GTK at ibus by itself once im-ibus.so is installed."
 fi
 
-# **GL.** The terminal draws through WebGL when it can and falls back to a DOM renderer when it
-# cannot, and that fallback is the slow one. Under WSLg this is where the Mesa noise comes from.
+# **GL.** The terminal draws through WebGL when it can and through the DOM when it cannot, and the
+# DOM renderer is the slow one. The Mesa lines on start-up are one EGL init walking its retry ladder
+# (hardware, then Zink, then software) — the software attempt then succeeds quietly.
 if [ -d /usr/lib/wsl/lib ]; then
   ok "/usr/lib/wsl/lib present (WSLg's own GPU libraries)"
 else
@@ -192,13 +207,20 @@ else
 fi
 if command -v glxinfo >/dev/null 2>&1; then
   REND=$(glxinfo -B 2>/dev/null | grep -i "OpenGL renderer" | cut -d: -f2- | sed 's/^ *//')
-  if [ -n "$REND" ]; then ok "OpenGL renderer: $REND"; else bad "glxinfo could not get a GL context"; fi
+  case "$REND" in
+    *D3D12*|*d3d12*) ok "OpenGL renderer: $REND   <- the WSLg GPU path is alive" ;;
+    *llvmpipe*|*softpipe*) bad "OpenGL renderer: $REND   <- software only, so the terminal will be slow" ;;
+    "") bad "glxinfo could not get a GL context at all" ;;
+    *) ok "OpenGL renderer: $REND" ;;
+  esac
 else
   note "mesa-utils is not installed, so GL cannot be checked here:"
   note "    sudo apt install -y mesa-utils   (then: glxinfo -B)"
 fi
-note "In the window, the status bar (bottom right) says 'webgl N · dom N'."
-note "**dom means the slow renderer** — that is what laggy typing looks like."
+note "**Do not set LIBGL_ALWAYS_SOFTWARE=1 or GALLIUM_DRIVER=llvmpipe.** They look like the fix"
+note "for the Mesa warnings and they remove WSLg's own d3d12 driver — the GPU traded for quiet."
+note "In the window, the status bar (bottom right) reads 'webgl N · dom N', taken from the page's"
+note "own DOM. **dom is the slow renderer** — that is what laggy typing looks like."
 
 head2 "result"
 if [ "$FAILED" -eq 0 ]; then

@@ -2332,9 +2332,19 @@ function setConnected(on) {
   $('#sb-daemon').classList.toggle('down', !on);
   updateStatusBar(on ? null : 'reconnecting…');
 }
+//: **Which renderer is actually live**, read off the DOM rather than off our own intent. The WebGL
+//: addon puts two canvases under .xterm-screen; the DOM renderer builds .xterm-rows and no canvas.
+//: `t.gl` only says the addon was constructed without throwing, and on WSLg the difference between
+//: that and a working renderer is the whole question — a status line that reports what we hoped for
+//: is worse than none.
+function rendererOf(t) {
+  const el = t && t.el;
+  if (!el) return 'dom';
+  return el.querySelectorAll('.xterm-screen canvas').length >= 2 ? 'webgl' : 'dom';
+}
 function updateStatusBar(note) {
   let gl = 0, dom = 0;
-  for (const t of tiles.values()) (t.gl ? gl++ : dom++);
+  for (const t of tiles.values()) (rendererOf(t) === 'webgl' ? gl++ : dom++);
   const parts = [];
   if (note) parts.push(note);
   if (tiles.size) parts.push('webgl ' + gl + ' · dom ' + dom);

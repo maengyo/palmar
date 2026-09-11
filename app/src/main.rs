@@ -227,26 +227,68 @@ fn find_or_start() -> Result<String, String> {
     spawn_daemon()
 }
 
-/// WebKitGTK 2.42 and newer render through DMABUF by default, and that path does not survive a
-/// virtualised GPU — under WSLg it is the difference between the page and a blank window. Turning
-/// it off costs a little compositing speed on a machine that has no real GPU to lose it on.
+/// Set a variable only if the person has not already set one. Returns whether it did.
 ///
-/// **Only under WSL, and never over a choice already made**: set the variable yourself, to anything
-/// including an empty value, and this leaves it alone.
+/// The rule everything below follows: **never override a choice already made.** Setting the
+/// variable yourself, to anything at all including an empty value, wins.
 #[cfg(target_os = "linux")]
-fn soften_rendering_for_wslg() {
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some() {
+fn set_if_unset(key: &str, value: &str) -> bool {
+    if std::env::var_os(key).is_some() {
+        return false;
+    }
+    std::env::set_var(key, value);
+    true
+}
+
+/// Defaults that only make sense inside WSL. Must run **before the event loop**, because GTK reads
+/// the input-method variable when it builds its first context and Mesa reads the rest at EGL init.
+///
+/// What each one is for:
+///
+/// - `WEBKIT_DMABUF_RENDERER_FORCE_SHM` — WSLg has no real DRM device, so WebKit's dmabuf transport
+///   has nothing to hand buffers through and the window can come up blank. This keeps the renderer
+///   but moves the buffers to shared memory. **It replaces `WEBKIT_DISABLE_DMABUF_RENDERER=1`,
+///   which was set here first and was a mistake**: that one turns off hardware acceleration and
+///   accelerated compositing wholesale, so every frame reaches the screen by readback and CPU
+///   compositing — it made typing lag, and the lag was ours, not WSLg's.
+/// - `EGL_LOG_LEVEL` / `MESA_LOG` — Mesa prints four lines on start-up ("failed to get driver name
+///   for fd -1", "ZINK: failed to choose pdev", …). They are one EGL initialisation walking its
+///   retry ladder — hardware, then Zink, then software — and the software attempt then succeeds
+///   silently. Nothing is wrong, so nothing should be printed. **Not `LIBGL_ALWAYS_SOFTWARE`**,
+///   which looks like the fix for those lines and actually removes WSLg's own d3d12 driver from
+///   the list, trading the GPU away for quiet.
+/// - `GTK_IM_MODULE` / `XMODIFIERS` — Korean, Japanese and Chinese cannot be typed under WSLg with
+///   the Windows IME at all: WSLg's compositor discards RDP unicode keyboard events, so composed
+///   text never crosses into Linux (microsoft/wslg#9, open since 2021). An IME has to run on the
+///   Linux side, and GTK only looks for one if it is told to. Set **only when ibus is actually
+///   installed** — pointing GTK at a module that is not there is worse than leaving it alone.
+///   This belongs here rather than in a shell file because the Start Menu launch path does not
+///   read one.
+#[cfg(target_os = "linux")]
+fn tune_for_wslg() {
+    let wsl = std::env::var_os("WSL_DISTRO_NAME").is_some() || Path::new("/mnt/wslg").is_dir();
+    if !wsl {
         return;
     }
-    let wsl = std::env::var_os("WSL_DISTRO_NAME").is_some() || Path::new("/mnt/wslg").is_dir();
-    if wsl {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    set_if_unset("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1");
+    set_if_unset("EGL_LOG_LEVEL", "fatal");
+    set_if_unset("MESA_LOG", "null");
+    for dir in [
+        "/usr/lib/x86_64-linux-gnu/gtk-3.0/3.0.0/immodules",
+        "/usr/lib/aarch64-linux-gnu/gtk-3.0/3.0.0/immodules",
+        "/usr/lib/gtk-3.0/3.0.0/immodules",
+    ] {
+        if Path::new(dir).join("im-ibus.so").is_file() {
+            set_if_unset("GTK_IM_MODULE", "ibus");
+            set_if_unset("XMODIFIERS", "@im=ibus");
+            break;
+        }
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "linux")]
-    soften_rendering_for_wslg();
+    tune_for_wslg();
 
     let url = match find_or_start() {
         Ok(u) => u,

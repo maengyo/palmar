@@ -63,11 +63,20 @@
      Hangul**: ui-monospace/SFMono/Menlo/Consolas do not exist on Linux and generic monospace lands
      on DejaVu Sans Mono, which has none either, so Korean came out as tofu in the window on WSLg
      (user report 2026-09-11). The CJK families below are named before the generic fallback so a
-     machine that has one is not left depending on fontconfig guessing well. A machine with none
-     still needs one installed — on Debian/Ubuntu that is fonts-noto-cjk. */
+     machine that has one is not left depending on fontconfig guessing well — left to itself
+     fontconfig may pick a proportional face, which in a terminal is the wrong shape.
+
+     **The fixed-width Korean faces come first** (D2Coding, NanumGothicCoding): they are built for
+     code, where Noto Sans CJK is a text face. Columns stay aligned either way — xterm.js sizes
+     cells from the first family, which is always present, and lays Hangul across two of them — so
+     the worst a fallback costs is a syllable sitting narrow in its pair, not a broken grid.
+
+     A machine with none still needs one installed. On Debian/Ubuntu the small right answer for a
+     terminal is fonts-naver-d2coding (~8 MB); fonts-noto-cjk (~89 MB) covers four languages you
+     probably do not need. */
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
-          "Noto Sans Mono CJK KR", "Noto Sans CJK KR", "Noto Sans KR", "D2Coding",
-          "NanumGothicCoding", "Malgun Gothic", "Apple SD Gothic Neo", monospace;
+          "D2Coding", "NanumGothicCoding", "Noto Sans Mono CJK KR", "Noto Sans CJK KR",
+          "Malgun Gothic", "Apple SD Gothic Neo", monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {

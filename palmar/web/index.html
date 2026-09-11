@@ -11,7 +11,9 @@
 <!-- Nothing calls an external service at runtime (AGENTS principle 7 · autopilot bans "external service
      calls" · vendor/VERSIONS "no network at runtime"), so the Google Fonts link is gone (#14). JetBrains
      Mono still sits first in --mono in style.css: used if it is installed locally, otherwise falling
-     through to the rest of the list (ui-monospace, Menlo…). To self-host it, put JetBrains Mono woff2
+     through to the rest of the list (ui-monospace, Menlo…). **On Linux that is what happens**: none of
+     ui-monospace/SFMono/Menlo/Consolas exist there either, so the terminal runs on whatever generic
+     monospace resolves to — DejaVu Sans Mono on a stock Ubuntu. To self-host it, put JetBrains Mono woff2
      (OFL) in palmar/web/vendor/ behind an @font-face — the design source of truth (decisions.md:121)
      fixed the typeface, not where it comes from; a person picks that step. -->
 
