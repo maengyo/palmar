@@ -154,6 +154,20 @@ nothing here can. `wsl --update` then `wsl --shutdown` from Windows, and open th
 > been run on a real WSLg machine. The macOS path in this file *has* been. See `docs/decisions.md`
 > for what is measured and what is not.
 
+## No title bar
+
+```sh
+./target/release/palmar-app --no-titlebar
+```
+
+The system draws none and palmar's own top bar becomes it: drag it to move the window, double-click
+to maximise, and it grows minimise/maximise/close buttons at its right. Under WSLg the title bar is
+drawn by Windows and cannot be restyled from here, and it sits on top of the 44px bar palmar draws
+anyway — this gives that height back to the canvas.
+
+**Opt-in on purpose.** A window with no title bar cannot be moved unless the page asks for it, so
+if something goes wrong there the way out is to leave the flag off.
+
 ## What it does, in order
 
 1. reads `~/.palmar/run/url` and checks the port actually answers — a `kill -9` leaves that file

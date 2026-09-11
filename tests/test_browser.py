@@ -617,5 +617,66 @@ class AcrossToABrowser(unittest.TestCase):
         self.assertEqual(self.b.ev("typeof window.palmar.recordTyping"), "function")
 
 
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class NoTitleBar(unittest.TestCase):
+    """`palmar-app --no-titlebar`: the system draws no title bar and palmar's own top bar is it.
+
+    Under WSLg that bar is drawn by Windows and cannot be restyled from here, and it sits on top of
+    the 44px one palmar draws anyway — two bars off the canvas (asked about 2026-09-11).
+
+    The window half cannot be reached from here, so what is driven is the seam: the flag wry injects
+    (`window.PALMAR_NATIVE`) and the messages the page posts back. **Which parts drag is read from
+    the CSS**, where `-webkit-app-region` was already marked on every piece of the bar — the property
+    does nothing in WebKitGTK, but it is an exact statement of intent, so it is obeyed rather than
+    guessed at."""
+
+    BARE = ("window.PALMAR_NATIVE={titlebar:false};"
+            "window.__sent=[];window.ipc={postMessage:m=>window.__sent.push(m)};")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.d.stop()
+
+    def test_a_browser_tab_grows_no_window_buttons(self):
+        """There is nothing to drag or close in a tab, and nothing is attached to it."""
+        with Browser() as b:
+            b.open(self.d.url)
+            self.assertFalse(b.ev("document.body.classList.contains('bare')"))
+            self.assertEqual(b.ev("document.querySelectorAll('.wctl').length"), 0)
+
+    def test_the_bare_window_gets_them(self):
+        with Browser() as b:
+            b.open(self.d.url, script=self.BARE)
+            self.assertTrue(b.ev("document.body.classList.contains('bare')"))
+            self.assertEqual(b.ev("document.querySelectorAll('.wctl').length"), 3)
+
+    def test_the_bar_drags_and_the_buttons_in_it_do_not(self):
+        """Pressing the bar has to move the window; pressing something you meant to press must not.
+        Both answers come from the app-region marks already in the stylesheet."""
+        with Browser() as b:
+            b.open(self.d.url, script=self.BARE)
+            b.ev("""(()=>{document.querySelector('.top')
+                 .dispatchEvent(new PointerEvent('pointerdown',{button:0,bubbles:true})); return 1;})()""")
+            time.sleep(0.2)
+            self.assertEqual(b.ev("window.__sent"), ["drag"])
+            # a control inside the bar is marked no-drag, so it must not start a move
+            b.ev("""(()=>{document.getElementById('help')
+                 .dispatchEvent(new PointerEvent('pointerdown',{button:0,bubbles:true})); return 1;})()""")
+            time.sleep(0.2)
+            self.assertEqual(b.ev("window.__sent"), ["drag"], "pressing a button dragged the window")
+
+    def test_the_buttons_say_what_they_are_for(self):
+        with Browser() as b:
+            b.open(self.d.url, script=self.BARE)
+            for cls, msg in (("min", "minimize"), ("max", "maximize"), ("cls", "close")):
+                b.ev("window.__sent=[]; document.querySelector('.wctl.%s').click()" % cls)
+                time.sleep(0.15)
+                self.assertEqual(b.ev("window.__sent"), [msg])
+
+
 if __name__ == "__main__":
     unittest.main()

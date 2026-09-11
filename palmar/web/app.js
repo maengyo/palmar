@@ -2885,6 +2885,54 @@ function boot() {
     if (o) o.addEventListener('click', () => setFold(side, false));
   }
   loadFold();
+
+  // ── when the window has no title bar of its own ─────────────────
+  // palmar's own top bar becomes it. **The regions were already marked**: style.css says
+  // `-webkit-app-region: drag` on .top and `no-drag` on everything in it you can press. That property
+  // does nothing in WebKitGTK — it is a Chromium and WebView2 feature — but it is an exact statement
+  // of which parts should move the window, so it is read here and acted on instead of guessed at.
+  //
+  // Only the window (app/, started with --no-titlebar) sets this. In a browser tab there is nothing
+  // to drag and nothing is attached.
+  const native = window.PALMAR_NATIVE;
+  if (native && native.titlebar === false && window.ipc && window.ipc.postMessage) {
+    document.body.classList.add('bare');
+    const draggable = (el) => {
+      for (let n = el; n && n !== document.body; n = n.parentElement) {
+        const region = getComputedStyle(n).getPropertyValue('-webkit-app-region').trim();
+        if (region === 'no-drag') return false;
+        if (region === 'drag') return true;
+      }
+      return false;
+    };
+    const top = $('.top');
+    if (top) {
+      top.addEventListener('pointerdown', (ev) => {
+        if (ev.button !== 0 || !draggable(ev.target)) return;
+        // The window manager takes the pointer from here; the page never sees the move.
+        window.ipc.postMessage('drag');
+      });
+      top.addEventListener('dblclick', (ev) => {
+        if (!draggable(ev.target)) return;
+        window.ipc.postMessage('maximize');
+      });
+    }
+    // Without a title bar there are no window buttons either, so the top bar grows a set.
+    const r = $('.top .r');
+    if (r) {
+      const mk = (cls, label, msg) => {
+        const b = el('button', 'wctl ' + cls, '');
+        b.type = 'button';
+        b.title = label;
+        b.setAttribute('aria-label', label);
+        b.addEventListener('click', (ev) => { ev.stopPropagation(); window.ipc.postMessage(msg); });
+        return b;
+      };
+      r.append(mk('min', 'minimise', 'minimize'),
+               mk('max', 'maximise', 'maximize'),
+               mk('cls', 'close', 'close'));
+    }
+  }
   setNotify(notifyOn && 'Notification' in window && Notification.permission === 'granted');
   applyTheme(storedTheme());
   renderBadge(true);

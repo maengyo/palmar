@@ -294,6 +294,19 @@ fn tune_for_wslg() {
     }
 }
 
+/// `--no-titlebar`: draw no system title bar and let palmar's own top bar be it.
+///
+/// Under WSLg the title bar is drawn by Windows and cannot be restyled from here, and it sits on top
+/// of a 44px bar palmar draws anyway — two bars' worth of height off the canvas, on a screen that is
+/// usually a laptop's. Turning it off gives that back.
+///
+/// **Opt-in, on purpose.** A window with no title bar cannot be moved unless the page asks for it,
+/// and a person who ends up in that state with no way out has been given a worse problem than the
+/// one they started with. Leaving the flag off is the way back.
+fn wants_bare_window() -> bool {
+    std::env::args().any(|a| a == "--no-titlebar")
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "linux")]
     tune_for_wslg();
@@ -314,11 +327,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new()
+    let bare = wants_bare_window();
+    // Rc because the IPC handler outlives this scope and has to reach the window to move it.
+    let window = std::rc::Rc::new(WindowBuilder::new()
+        .with_decorations(!bare)
         .with_title("palmar")
         .with_inner_size(tao::dpi::LogicalSize::new(1280.0, 820.0))
         .with_min_inner_size(tao::dpi::LogicalSize::new(640.0, 420.0))
-        .build(&event_loop)?;
+        .build(&event_loop)?);
 
     // The page is served from 127.0.0.1 by the daemon we just found, so there is nothing to bundle
     // and nothing to keep in sync — the window shows whatever version of the UI that daemon has.
@@ -340,7 +356,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let vbox = window
             .default_vbox()
             .ok_or("this window has no GTK container to put a webview in")?;
-        WebViewBuilder::new_gtk(vbox).with_url(&url).build()?
+        // The page cannot see whether it has a title bar, and without one it has to provide the
+        // things a title bar does. It is told, and given a way to ask.
+        let mut b = WebViewBuilder::new_gtk(vbox).with_url(&url);
+        b = b.with_initialization_script(if bare {
+            "window.PALMAR_NATIVE={titlebar:false};"
+        } else {
+            "window.PALMAR_NATIVE={titlebar:true};"
+        });
+        if bare {
+            let w = std::rc::Rc::clone(&window);
+            b = b.with_ipc_handler(move |req| match req.body().as_str() {
+                // Dragging has to be handed to the window manager at the moment the button goes
+                // down; there is no way to do it from the page alone.
+                "drag" => { let _ = w.drag_window(); }
+                "maximize" => w.set_maximized(!w.is_maximized()),
+                "minimize" => w.set_minimized(true),
+                // Exiting here rather than routing a user event back through the event loop: there
+                // is nothing to unwind. The daemon is a separate process and is meant to outlive
+                // this one — the same as pressing the title bar's X, which is what this replaces.
+                "close" => std::process::exit(0),
+                _ => {}
+            });
+        }
+        b.build()?
     };
 
     // **Put the composing syllable back on screen.** wry turns the IME preedit off for every

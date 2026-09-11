@@ -711,6 +711,32 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .grip::before {
   content: ""; position: absolute; left: -8px; top: -8px; right: -3px; bottom: -3px; cursor: nwse-resize;
 }
+/* Window buttons, and **only when there is no title bar to hold them** (app/ started with
+   --no-titlebar). Drawn rather than set as glyphs: ✕ and ─ are drawn differently by every font and
+   are missing from some, which is the same rule that keeps the tile's close button in CSS. */
+.wctl {
+  width: 22px; height: 22px; border-radius: 6px; border: 1px solid transparent;
+  background: transparent; color: var(--ink-3); cursor: pointer; position: relative;
+  -webkit-app-region: no-drag; flex: none;
+}
+.wctl:hover { color: var(--ink); border-color: var(--line-2); background: var(--btn); }
+.wctl.cls:hover { border-color: var(--st-done); color: var(--st-done); }
+.wctl::before, .wctl::after {
+  content: ""; position: absolute; left: 50%; top: 50%; background: currentColor;
+}
+/* minimise — one horizontal line */
+.wctl.min::before { width: 9px; height: 1px; transform: translate(-50%, -50%); }
+/* maximise — an outline square */
+.wctl.max::before {
+  width: 8px; height: 8px; background: none; border: 1px solid currentColor; border-radius: 1px;
+  transform: translate(-50%, -50%);
+}
+/* close — two strokes */
+.wctl.cls::before, .wctl.cls::after {
+  width: 10px; height: 1px; transform: translate(-50%, -50%) rotate(45deg);
+}
+.wctl.cls::after { transform: translate(-50%, -50%) rotate(-45deg); }
+
 /* The way across to a browser. Same body as the `?` button beside it — one rule, so the two cannot
    drift apart — and a word rather than a glyph, because chrome must not need a font the machine may
    not have. */
