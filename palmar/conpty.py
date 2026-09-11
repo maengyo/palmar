@@ -107,6 +107,64 @@ class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
                 ("PeakJobMemoryUsed", ctypes.c_size_t)]
 
 
+# ── prototypes ─────────────────────────────────────────────────────────────────────────────
+# **Declared, not guessed.** Without argtypes, ctypes passes a Python int as a C int, so a 64-bit
+# pointer overflows — InitializeProcThreadAttributeList died with "int too long to convert" on the
+# first real run (2026-09-11). Every call below is spelled out once, here.
+_P = ctypes.POINTER
+LPVOID = ctypes.c_void_p
+SIZE_T = ctypes.c_size_t
+
+kernel32.CreatePipe.argtypes = [_P(wintypes.HANDLE), _P(wintypes.HANDLE),
+                                _P(SECURITY_ATTRIBUTES), wintypes.DWORD]
+kernel32.CreatePipe.restype = wintypes.BOOL
+
+kernel32.InitializeProcThreadAttributeList.argtypes = [LPVOID, wintypes.DWORD, wintypes.DWORD,
+                                                       _P(SIZE_T)]
+kernel32.InitializeProcThreadAttributeList.restype = wintypes.BOOL
+
+kernel32.UpdateProcThreadAttribute.argtypes = [LPVOID, wintypes.DWORD, SIZE_T, LPVOID, SIZE_T,
+                                               LPVOID, _P(SIZE_T)]
+kernel32.UpdateProcThreadAttribute.restype = wintypes.BOOL
+
+kernel32.DeleteProcThreadAttributeList.argtypes = [LPVOID]
+kernel32.DeleteProcThreadAttributeList.restype = None
+
+kernel32.CreateProcessW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, _P(SECURITY_ATTRIBUTES),
+                                    _P(SECURITY_ATTRIBUTES), wintypes.BOOL, wintypes.DWORD,
+                                    LPVOID, wintypes.LPCWSTR, _P(STARTUPINFOEXW),
+                                    _P(PROCESS_INFORMATION)]
+kernel32.CreateProcessW.restype = wintypes.BOOL
+
+kernel32.CreateJobObjectW.argtypes = [_P(SECURITY_ATTRIBUTES), wintypes.LPCWSTR]
+kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+kernel32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, LPVOID, wintypes.DWORD]
+kernel32.SetInformationJobObject.restype = wintypes.BOOL
+kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+kernel32.TerminateJobObject.restype = wintypes.BOOL
+
+kernel32.ReadFile.argtypes = [wintypes.HANDLE, LPVOID, wintypes.DWORD, _P(wintypes.DWORD), LPVOID]
+kernel32.ReadFile.restype = wintypes.BOOL
+kernel32.WriteFile.argtypes = [wintypes.HANDLE, LPVOID, wintypes.DWORD, _P(wintypes.DWORD), LPVOID]
+kernel32.WriteFile.restype = wintypes.BOOL
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
+kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, _P(wintypes.DWORD)]
+kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+
+# Absent before Windows 10 1809, so `available()` below can still answer instead of crashing here.
+if hasattr(kernel32, "CreatePseudoConsole"):
+    kernel32.CreatePseudoConsole.argtypes = [COORD, wintypes.HANDLE, wintypes.HANDLE,
+                                             wintypes.DWORD, _P(wintypes.HANDLE)]
+    kernel32.CreatePseudoConsole.restype = ctypes.HRESULT
+    kernel32.ResizePseudoConsole.argtypes = [wintypes.HANDLE, COORD]
+    kernel32.ResizePseudoConsole.restype = ctypes.HRESULT
+    kernel32.ClosePseudoConsole.argtypes = [wintypes.HANDLE]
+    kernel32.ClosePseudoConsole.restype = None
+
+
 def _err(name):
     raise OSError(ctypes.get_last_error(), "%s failed" % name)
 
@@ -151,9 +209,6 @@ class ConPty:
         # read out of out_r; we must let go of the two it owns or the pipes never see EOF.
         size = COORD(max(1, int(cols)), max(1, int(rows)))
         hpc = wintypes.HANDLE()
-        kernel32.CreatePseudoConsole.argtypes = [COORD, wintypes.HANDLE, wintypes.HANDLE,
-                                                 wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
-        kernel32.CreatePseudoConsole.restype = ctypes.HRESULT
         kernel32.CreatePseudoConsole(size, in_r, out_w, 0, byref(hpc))
         self._hpc = hpc
 
@@ -233,8 +288,6 @@ class ConPty:
     def resize(self, rows: int, cols: int) -> None:
         if self._hpc is None:
             return
-        kernel32.ResizePseudoConsole.argtypes = [wintypes.HANDLE, COORD]
-        kernel32.ResizePseudoConsole.restype = ctypes.HRESULT
         kernel32.ResizePseudoConsole(self._hpc, COORD(max(1, int(cols)), max(1, int(rows))))
 
     # ── life and death ─────────────────────────────────────────────────
@@ -276,8 +329,6 @@ class ConPty:
                 kernel32.CloseHandle(v)
                 setattr(self, h, None)
         if self._hpc is not None:
-            kernel32.ClosePseudoConsole.argtypes = [wintypes.HANDLE]
-            kernel32.ClosePseudoConsole.restype = None
             kernel32.ClosePseudoConsole(self._hpc)
             self._hpc = None
         for h in ("_proc", "_job"):
