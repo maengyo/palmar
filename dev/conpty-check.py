@@ -187,11 +187,19 @@ def _variants():
                                            ctypes.c_size_t(C.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE),
                                            val, ctypes.c_size_t(ctypes.sizeof(wintypes.HANDLE)),
                                            None, None)
-        if use_std:
+        if use_std == "pipes":
             si.StartupInfo.dwFlags |= 0x00000100          # STARTF_USESTDHANDLES
             si.StartupInfo.hStdInput = in_r
             si.StartupInfo.hStdOutput = out_w
             si.StartupInfo.hStdError = out_w
+        elif use_std == "null":
+            # **Nothing to inherit, so the runtime opens CONIN$/CONOUT$ itself** — which is the
+            # console the attribute gave it. The parent cannot open the child's console to hand it
+            # over, so this is the way to say "use your own".
+            si.StartupInfo.dwFlags |= 0x00000100
+            si.StartupInfo.hStdInput = None
+            si.StartupInfo.hStdOutput = None
+            si.StartupInfo.hStdError = None
         marker = "MARK" + "".join(c for c in label.upper() if c.isalnum())[:10]
         path = script(marker + ".py", (
             ["import sys", "sys.stdout.write('%s' + chr(10))" % marker, "sys.stdout.flush()"]
@@ -261,9 +269,10 @@ def _variants():
 
     wins = []
     for label, lp, inherit, use_std, job, uni, via, hide in (
-            ("conout (known good)", "handle", False, False, True, True, False, False),
-            ("stdout, as is", "handle", False, False, True, True, True, False),
-            ("stdout, std not inherit", "handle", False, False, True, True, True, True),
+            ("conout (known good)", "handle", False, None, True, True, False, False),
+            ("stdout + NULL handles", "handle", False, "null", True, True, True, False),
+            ("stdout + pipe handles", "handle", True, "pipes", True, True, True, False),
+            ("stdout + NULL + inherit", "handle", True, "null", True, True, True, False),
     ):
         try:
             if attempt(label, lp, inherit, use_std, job, uni, via, hide):
