@@ -94,25 +94,55 @@ fi
 
 # ── 4. what the window needs to build ──────────────────────────────────────────────────────
 head2 "4. the window (app/)"
+DISTRO="(unknown)"
+if [ -r /etc/os-release ]; then
+  DISTRO=$(. /etc/os-release 2>/dev/null; printf '%s' "${PRETTY_NAME:-$NAME $VERSION_ID}")
+fi
+say "  distribution                 $DISTRO"
+
 if command -v cargo >/dev/null 2>&1; then
   ok "$(cargo --version 2>&1)"
+elif [ -x "$HOME/.cargo/bin/cargo" ]; then
+  # The most common stumble: rustup installed it but this shell's PATH predates that.
+  bad "rustup is installed but cargo is not on PATH in this shell"
+  note 'run:  . "$HOME/.cargo/env"      (or just open a new shell) and try again'
 else
-  bad "no Rust — curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+  bad "no Rust"
+  note "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+  note 'then:  . "$HOME/.cargo/env"     <- rustup does not change this shell by itself'
 fi
+
+# **Is it installed, and failing that, can this machine even get it?** Those are different
+# answers: 4.1 does not exist on Ubuntu 20.04 or Debian 11 at all, and "apt install" there fails
+# with a message about no installation candidate, which looks like a broken command.
+apt_has() {
+  command -v apt-cache >/dev/null 2>&1 || return 1
+  apt-cache policy "$1" 2>/dev/null | grep -q 'Candidate: [^(]' 
+}
 if command -v pkg-config >/dev/null 2>&1; then
   # 4.1, not 4.0: this wry links webkit2gtk 2.0 / soup3, and 4.0 is the libsoup2 API.
   if pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
     ok "webkit2gtk-4.1 $(pkg-config --modversion webkit2gtk-4.1 2>/dev/null)"
-  elif pkg-config --exists webkit2gtk-4.0 2>/dev/null; then
-    bad "only webkit2gtk-4.0 is here; this build needs 4.1"
-    note "Ubuntu 22.04+/Debian 12+ have it: sudo apt install -y libwebkit2gtk-4.1-dev"
-    note "On Ubuntu 20.04 there is no 4.1 — upgrade the distro, or use the web version."
   else
-    bad "no webkit2gtk dev package"
-    note "sudo apt install -y libwebkit2gtk-4.1-dev build-essential pkg-config curl"
+    if pkg-config --exists webkit2gtk-4.0 2>/dev/null; then
+      bad "webkit2gtk-4.0 is here but this build needs 4.1"
+    else
+      bad "no webkit2gtk dev package"
+    fi
+    if apt_has libwebkit2gtk-4.1-dev; then
+      note "it is available here — sudo apt install -y libwebkit2gtk-4.1-dev build-essential pkg-config"
+    elif command -v apt-cache >/dev/null 2>&1; then
+      note "**this distribution has no libwebkit2gtk-4.1-dev at all** ($DISTRO)."
+      note "Ubuntu 22.04+ and Debian 12+ have it; 20.04 and Debian 11 do not."
+      note "Either move to a newer distro (wsl --install -d Ubuntu-24.04 on Windows),"
+      note "or skip the window and use the web version: python3 -m palmar"
+    else
+      note "not a Debian/Ubuntu apt system — install the WebKitGTK 4.1 development package"
+    fi
   fi
 else
-  bad "no pkg-config — sudo apt install -y pkg-config build-essential"
+  bad "no pkg-config"
+  note "sudo apt install -y pkg-config build-essential"
 fi
 
 head2 "result"
