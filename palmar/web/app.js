@@ -2608,6 +2608,13 @@ function recordTyping(secs) {
         'type=' + e.inputType, 'value=' + JSON.stringify(e.target.value)));
   }
   const d = t.term.onData((x) => put('→ 데몬   ', JSON.stringify(x)));
+  // **There are two ways to the socket and this has to see both.** xterm's onData is one; the IME
+  // path for browsers that emit no composition events writes straight through sendText and never
+  // touches onData. A report that showed only the first would say nothing was sent while characters
+  // were appearing on screen — which is exactly the shape of the bug this gets used for.
+  const sendWas = t.sendText;
+  t.sendText = (x) => { put('→ 데몬(ime)', JSON.stringify(x)); return sendWas(x); };
+  off.push(() => { t.sendText = sendWas; });
   box.hidden = false;
   out.value = '';
   hint.textContent = 'recording — click the terminal and type 안녕하십니까 …';
