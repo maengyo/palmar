@@ -432,3 +432,167 @@ def _idle():
 print("\n" + "=" * 72)
 print("Paste everything above into https://github.com/maengyo/palmar/issues/29")
 print("=" * 72)
+
+# ══ the port's own questions (added 2026-09-11) ═════════════════════════════════════════════
+# Everything above was about whether ConPTY carries what palmar reads. These are about whether the
+# daemon's *shape* survives: its event loop, how a pane dies, its lock, and its file permissions.
+# Each one decides a design choice that cannot be decided from a Mac.
+
+@guarded("port — which asyncio loop, and does add_reader work at all")
+def _loop():
+    import asyncio
+    say("    default policy:", type(asyncio.get_event_loop_policy()).__name__)
+    loop = asyncio.new_event_loop()
+    say("    loop:", type(loop).__name__)
+    # **This is the one that decides the read path.** If add_reader refuses, every pane needs a
+    # reader thread instead of a callback on the loop.
+    import socket
+    a, b = socket.socketpair()
+    try:
+        loop.add_reader(a.fileno(), lambda: None)
+        loop.remove_reader(a.fileno())
+        say(OK, "add_reader on a socket: works")
+    except Exception as e:
+        say(NO, "add_reader on a socket:", type(e).__name__, str(e)[:70])
+    finally:
+        a.close(); b.close()
+    # A ConPTY handle is not a socket. Try a plain pipe, which is the closest stand-in.
+    r, w = os.pipe()
+    try:
+        loop.add_reader(r, lambda: None)
+        loop.remove_reader(r)
+        say(OK, "add_reader on a pipe: works")
+    except Exception as e:
+        say(NO, "add_reader on a pipe:", type(e).__name__, str(e)[:70],
+            "<- panes would need a reader thread")
+    finally:
+        os.close(r); os.close(w)
+    try:
+        import signal as sig
+        loop.add_signal_handler(sig.SIGINT, lambda: None)
+        say(OK, "add_signal_handler: works")
+    except Exception as e:
+        say(NO, "add_signal_handler:", type(e).__name__, "<- Ctrl-C needs signal.signal instead")
+    loop.close()
+
+
+@guarded("port — killing a shell: do its children die with it?")
+def _tree():
+    """palmar closes a pane by killing the shell. On POSIX the agent inside dies with it. If it does
+    not here, every pane needs a Job Object and that has to be decided before the port, not after."""
+    import ctypes
+    # a shell that starts a long-lived child, so there is something to orphan
+    parent = subprocess.Popen(["cmd.exe", "/c", "start", "/b", sys.executable, "-c",
+                               "import time; time.sleep(60)"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.5)
+    before = _python_sleepers()
+    say("    sleeping python processes after spawn:", before)
+    parent.kill(); parent.wait(timeout=10)
+    time.sleep(1.5)
+    after = _python_sleepers()
+    say("    after killing the parent:", after)
+    if after >= before and before > 0:
+        say(NO, "the child outlived its parent — a pane needs a Job Object to take its tree with it")
+    elif before > 0:
+        say(OK, "the child died with the parent")
+    else:
+        say(HM, "could not create a child to orphan; inconclusive")
+    # Can we even make a Job Object from the standard library + ctypes?
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        h = k32.CreateJobObjectW(None, None)
+        say(OK if h else NO, "CreateJobObjectW ->", h, "(ctypes alone, no pywin32)")
+        if h:
+            k32.CloseHandle(h)
+    except Exception as e:
+        say(NO, "CreateJobObjectW:", type(e).__name__, str(e)[:70])
+
+
+def _python_sleepers():
+    """How many python processes are sitting in that sleep. tasklist is on every Windows."""
+    try:
+        out = subprocess.run(["tasklist", "/fi", "imagename eq python.exe"],
+                             capture_output=True, text=True, timeout=15).stdout
+        return out.lower().count("python.exe")
+    except Exception:
+        return -1
+
+
+@guarded("port — the single-instance lock, and whether it survives a kill")
+def _lock():
+    """flock releases when the holder dies, however it dies. Whatever replaces it must do the same,
+    or a crashed daemon locks its own home out forever."""
+    import msvcrt
+    box = tempfile.mkdtemp(prefix="palmar-lock-")
+    path = os.path.join(box, "lock")
+    open(path, "wb").close()
+    f = open(path, "r+b")
+    try:
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        say(OK, "msvcrt.locking took an exclusive lock")
+    except OSError as e:
+        say(NO, "msvcrt.locking:", e)
+        return
+    # a second process must fail to take it
+    code = ("import msvcrt,sys\n"
+            "f=open(sys.argv[1],'r+b')\n"
+            "try:\n"
+            "    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1); print('TOOK')\n"
+            "except OSError: print('REFUSED')\n")
+    r = subprocess.run([sys.executable, "-c", code, path], capture_output=True, text=True, timeout=20)
+    say(OK if "REFUSED" in r.stdout else NO, "a second process ->", r.stdout.strip() or r.stderr.strip()[:60])
+    # and it must come back when the holder is killed outright
+    holder = subprocess.Popen([sys.executable, "-c",
+                               "import msvcrt,sys,time\n"
+                               "f=open(sys.argv[1],'r+b')\n"
+                               "msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)\n"
+                               "print('HELD', flush=True); time.sleep(60)\n", path],
+                              stdout=subprocess.PIPE, text=True)
+    f.close()                                  # let go so the child can take it
+    time.sleep(1.0)
+    holder.kill(); holder.wait(timeout=10)
+    time.sleep(0.5)
+    g = open(path, "r+b")
+    try:
+        msvcrt.locking(g.fileno(), msvcrt.LK_NBLCK, 1)
+        say(OK, "the lock came back after the holder was killed")
+    except OSError as e:
+        say(NO, "the lock did NOT come back after a kill:", e, "<- a crash would wedge the home")
+    finally:
+        g.close()
+
+
+@guarded("port — what 0600 actually does to a file here")
+def _perms():
+    """palmar writes run/key and run/token 0600 and the threat model is 'another account on this
+    machine'. chmod is close to a no-op on Windows, so what protects them is the question."""
+    box = tempfile.mkdtemp(prefix="palmar-perm-")
+    path = os.path.join(box, "key")
+    with open(path, "w") as fh:
+        fh.write("secret")
+    os.chmod(path, 0o600)
+    say("    st_mode after chmod 0600: %s" % oct(os.stat(path).st_mode & 0o777))
+    r = subprocess.run(["icacls", path], capture_output=True, text=True, timeout=20)
+    for line in (r.stdout or "").strip().splitlines()[:6]:
+        say("    icacls:", line.strip()[:100])
+    prof = os.environ.get("USERPROFILE", "")
+    if prof:
+        r2 = subprocess.run(["icacls", prof], capture_output=True, text=True, timeout=20)
+        say("    %USERPROFILE% ACL (this is what really guards ~/.palmar):")
+        for line in (r2.stdout or "").strip().splitlines()[:5]:
+            say("      ", line.strip()[:100])
+
+
+@guarded("port — which shell would palmar launch, and can we read a child's cwd")
+def _shell_and_cwd():
+    say("    COMSPEC:", os.environ.get("COMSPEC", "(unset)"))
+    import shutil as sh
+    for name in ("powershell.exe", "pwsh.exe", "cmd.exe", "bash.exe", "wsl.exe"):
+        where = sh.which(name)
+        say("   ", ("%-16s" % name), where or "-")
+    # A pane's cwd feeds the restore file. If there is no cheap way, Windows returns None and the
+    # restore offer simply reopens at home — worth knowing before promising the feature.
+    say("    reading another process's cwd without pywin32 is NtQueryInformationProcess + PEB;")
+    say("    not attempted here — the question is whether it is worth it, not whether it is possible.")
+
