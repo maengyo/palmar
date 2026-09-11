@@ -104,9 +104,14 @@ python3 -m palmar
 
 ## Running it
 
-It prints a URL on its last line — `http://127.0.0.1:8801/?k=…`. Open that, and bookmark it if
-you like: the key stays the same across restarts, so the bookmark keeps working. Lost the URL?
-`cat ~/.palmar/run/url`.
+```
+palmar
+```
+
+It opens your browser and prints the address on its last line —
+`http://127.0.0.1:8801/?k=…`. Bookmark it if you like: the key stays the same across restarts, so
+the bookmark keeps working. Lost it? `cat ~/.palmar/run/url`. `--no-browser` prints and opens
+nothing.
 
 The key is what stops any other process on the machine from asking the daemon for the page and
 reading your session token out of it.
@@ -116,6 +121,26 @@ xterm.js is vendored in the repo, so no dependency is fetched — at install tim
 binds `127.0.0.1` and nothing else.
 
 Stop it with `Ctrl-C`.
+
+### In a window instead
+
+There is also a **741 KB** program that shows the same thing in its own window, with no browser
+around it — see [`app/`](app/README.md). It is the system's own webview (WKWebView on macOS,
+WebKitGTK on Linux and **WSLg**, WebView2 on Windows), so nothing is shipped twice, and it is not
+Electron: being heavy is the thing this project is avoiding.
+
+```
+cd app && cargo build --release && ./target/release/palmar-app
+```
+
+**Pick whichever you prefer — you are not meant to run both.** But if you do, it works:
+there is one daemon per home, whichever you start first brings it up, and the other attaches to it.
+Run `palmar` while the window is already open and it opens the page on that same daemon instead of
+refusing. A terminal opened in either shows up in the other, live. Closing either one leaves the
+daemon — and your shells — running.
+
+The window has been run on macOS. The WSLg side is written and **not yet measured** — see
+`docs/decisions.md`.
 
 ## Status lights, without configuring anything
 

@@ -1,0 +1,37 @@
+# palmar's window.
+#
+# **Not Electron** (decisions.md: cate ships a 496MB dmg and installs 1.1GB — being heavy is the
+# thing this project is avoiding) and not the Tauri CLI either: there is no JavaScript to build and
+# no frontend to bundle, because the UI is already served by the daemon. What is left is exactly two
+# things — a window (tao) and a webview (wry) — which is what Tauri itself is built on.
+#
+# The system webview does the rendering, so nothing is shipped twice:
+#   macOS   WKWebView            (in the OS)
+#   Linux   WebKitGTK 4.1        (libwebkit2gtk-4.1-0, and -dev to build) — this is the WSLg case
+#   Windows WebView2             (native port is #29; today, run the daemon in WSL)
+#
+# Licences: tao and wry are Apache-2.0/MIT, the same terms as palmar's MIT. Nothing is vendored here
+# — cargo fetches them — so there is no third-party notice to carry in-tree for this crate.
+[package]
+name = "palmar-app"
+version = "0.1.0"
+edition = "2021"
+description = "palmar in its own window"
+license = "MIT"
+
+[[bin]]
+name = "palmar-app"
+path = "src/main.rs"
+
+[dependencies]
+tao = "0.30"
+wry = "0.45"
+
+# A window is not a hot loop. Optimising for size keeps the binary in the same order of magnitude as
+# the thing it replaces a 1.1GB install with.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
