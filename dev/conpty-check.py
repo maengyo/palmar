@@ -117,12 +117,83 @@ def run(lines, secs=20.0, rows=50, cols=200, name="child.py", until=None):
         p.close()
 
 
+@guarded("spawn, step by step")
+def _steps():
+    """Every call's return and the error behind it. Cheaper than guessing from a Mac."""
+    import ctypes
+    import ctypes.wintypes as wintypes
+    from ctypes import byref
+    from palmar import conpty as C
+    k = C.kernel32
+    sa = C.SECURITY_ATTRIBUTES(ctypes.sizeof(C.SECURITY_ATTRIBUTES), None, True)
+    in_r, in_w = wintypes.HANDLE(), wintypes.HANDLE()
+    out_r, out_w = wintypes.HANDLE(), wintypes.HANDLE()
+    say("    CreatePipe(in) ->", bool(k.CreatePipe(byref(in_r), byref(in_w), byref(sa), 0)))
+    say("    CreatePipe(out)->", bool(k.CreatePipe(byref(out_r), byref(out_w), byref(sa), 0)))
+    hpc = wintypes.HANDLE()
+    try:
+        k.CreatePseudoConsole(C.COORD(133, 37), in_r, out_w, 0, byref(hpc))
+        say("    CreatePseudoConsole -> hpc =", hpc.value)
+    except OSError as e:
+        say(NO, "CreatePseudoConsole raised", e)
+        return
+    need = ctypes.c_size_t(0)
+    k.InitializeProcThreadAttributeList(None, 1, 0, byref(need))
+    say("    attribute list wants", need.value, "bytes")
+    buf = (ctypes.c_ubyte * need.value)()
+    si = C.STARTUPINFOEXW()
+    si.StartupInfo.cb = ctypes.sizeof(C.STARTUPINFOEXW)
+    si.lpAttributeList = ctypes.cast(buf, ctypes.c_void_p)
+    say("    si.lpAttributeList =", si.lpAttributeList, "· addressof(buf) =", ctypes.addressof(buf))
+    ok = k.InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, byref(need))
+    say("    InitializeProcThreadAttributeList ->", bool(ok), "err", ctypes.get_last_error())
+    ok = k.UpdateProcThreadAttribute(si.lpAttributeList, 0,
+                                     ctypes.c_size_t(C.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE),
+                                     hpc, ctypes.c_size_t(ctypes.sizeof(wintypes.HANDLE)),
+                                     None, None)
+    say("    UpdateProcThreadAttribute ->", bool(ok), "err", ctypes.get_last_error())
+    say("    sizeof(STARTUPINFOEXW) =", ctypes.sizeof(C.STARTUPINFOEXW),
+        "· sizeof(STARTUPINFOW) =", ctypes.sizeof(C.STARTUPINFOW))
+    k.ClosePseudoConsole(hpc)
+    for h in (in_r, in_w, out_r, out_w):
+        k.CloseHandle(h)
+
+
 @guarded("it imports, and this Windows has ConPTY")
 def _import():
     from palmar import conpty
     say(OK, "imported palmar.conpty")
     say(OK if conpty.available() else NO, "CreatePseudoConsole present:", conpty.available())
     say("    default shell here:", conpty.default_shell())
+
+
+@guarded("where is the child actually attached?")
+def _attached():
+    """**The one signal that settles it.** If the child is in our pseudo-console it sees the size we
+    asked for; if the attribute silently did not apply it inherits the runner's console and sees
+    that instead — which is what "its output shows up in the CI log and not in our pipe" looks like.
+
+    Printed by the child into whatever console it has, so the answer arrives even when our pipe
+    stays empty."""
+    from palmar import conpty
+    path = script("size.py", [
+        "import os, sys, shutil",
+        "sz = shutil.get_terminal_size((0, 0))",
+        "sys.stdout.write('SIZE=%d x %d' % (sz.columns, sz.lines) + chr(10))",
+        "sys.stdout.flush()",
+    ])
+    p = conpty.ConPty()
+    p.spawn('"%s" -u "%s"' % (sys.executable, path), rows=37, cols=133)
+    say("    asked for 133 x 37 · child pid", p.pid)
+    got = drain(p, 10.0, until=b"SIZE=")
+    p.close()
+    say("    our pipe got %r" % got[-70:])
+    if b"SIZE=133 x 37" in got:
+        say(OK, "the child is in OUR pseudo-console")
+    elif b"SIZE=" in got:
+        say(NO, "**the child is in some other console** — the attribute did not apply")
+    else:
+        say(HM, "nothing came through our pipe; look for SIZE= in the raw log above/below")
 
 
 @guarded("a child starts and its output comes back")
