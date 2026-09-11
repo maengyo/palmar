@@ -281,6 +281,14 @@ fn tune_for_wslg() {
         if Path::new(dir).join("im-ibus.so").is_file() {
             set_if_unset("GTK_IM_MODULE", "ibus");
             set_if_unset("XMODIFIERS", "@im=ibus");
+            // ibus talks over the session bus, and **WSLg does not start one**. Pointing GTK at
+            // ibus with no bus behind it fails silently — you get a window that simply will not
+            // take Korean, with nothing said. So say it.
+            if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+                eprintln!("palmar-app: ibus is installed but there is no session bus, so it cannot run.");
+                eprintln!("  Before starting this, once per WSL session:");
+                eprintln!("      eval \"$(dbus-launch --sh-syntax)\" && ibus-daemon -drx && ibus engine hangul");
+            }
             break;
         }
     }
