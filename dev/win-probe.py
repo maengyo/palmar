@@ -599,6 +599,83 @@ def _shell_and_cwd():
     say("    reading another process's cwd without pywin32 is NtQueryInformationProcess + PEB;")
     say("    not attempted here — the question is whether it is worth it, not whether it is possible.")
 
+SPAWN = None          # the form that actually starts a child, decided by the section below
+
+
+@guarded("port — how do you even start a child? (three spellings, one run)")
+def _spawn_form():
+    """**Nothing below this is worth reading until this is settled.** Two sections have been
+    reporting failures that turned out to be the probe's own spawn call, not Windows: the paste
+    section says every size is lost, and the fidelity section read back python's own PEP 263 error —
+    the shape of python being handed a binary to run as a script, which is what happens when argv
+    ends up with the interpreter in it twice.
+
+    So all three spellings are tried here, once, and the one that works is what the rest uses."""
+    global SPAWN
+    if PTY is None:
+        say(HM, "no pywinpty — cannot try")
+        return
+    import winpty
+    box = tempfile.mkdtemp(prefix="palmar-spawn-")
+    path = os.path.join(box, "hello.py")
+    NL = chr(10)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(NL.join(["import sys",
+                          "sys.stdout.write('MARKERyes')",
+                          "sys.stdout.flush()"]) + NL)
+
+    def drain(reader, alive, secs=8.0):
+        out, end = [], time.time() + secs
+        while time.time() < end:
+            try:
+                chunk = reader()
+            except Exception as e:
+                out.append("<read raised %s>" % type(e).__name__)
+                break
+            if chunk:
+                out.append(chunk)
+            elif not alive():
+                break
+            else:
+                time.sleep(0.02)
+        return "".join(out)
+
+    def try_low(cmdline, label):
+        try:
+            pty = PTY(200, 50)
+            pty.spawn(sys.executable, cmdline=cmdline)
+            got = drain(lambda: pty.read(False), pty.isalive)
+        except Exception as e:
+            say(NO, "%-34s raised %s: %s" % (label, type(e).__name__, str(e)[:60]))
+            return None
+        ok = "MARKERyes" in got
+        say(OK if ok else NO, "%-34s %s" % (label, "MARKER seen" if ok else repr(got[-60:])))
+        return ("low", cmdline) if ok else None
+
+    # 1) the high-level class, a list, the way its own README shows it
+    try:
+        pp = winpty.PtyProcess.spawn([sys.executable, path], dimensions=(50, 200))
+        got = drain(lambda: pp.read(), lambda: pp.isalive())
+        ok = "MARKERyes" in got
+        say(OK if ok else NO, "%-34s %s" % ("PtyProcess.spawn([exe, file])",
+                                            "MARKER seen" if ok else repr(got[-60:])))
+        if ok and SPAWN is None:
+            SPAWN = ("high", None)
+    except Exception as e:
+        say(NO, "%-34s raised %s: %s" % ("PtyProcess.spawn([exe, file])", type(e).__name__, str(e)[:60]))
+
+    # 2) low level, cmdline repeating the exe (what argv normally looks like)
+    got = try_low('"%s" -u "%s"' % (sys.executable, path), "PTY.spawn(exe, cmdline=exe+args)")
+    if got and SPAWN is None:
+        SPAWN = got
+    # 3) low level, cmdline holding only the arguments
+    got = try_low('-u "%s"' % path, "PTY.spawn(exe, cmdline=args only)")
+    if got and SPAWN is None:
+        SPAWN = got
+
+    say("    ->", "using %s" % (SPAWN,) if SPAWN else "**nothing started a child** — everything below is blocked")
+
+
 @guarded("port — is the pipe byte-exact? (this decides pywinpty vs ctypes)")
 def _fidelity():
     """**palmar is a byte-exact pipe.** It reads PTY bytes, keeps them in a 256 KB ring, scans them
@@ -621,8 +698,31 @@ def _fidelity():
         path = os.path.join(box, name)
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(body)
+        if SPAWN is None:
+            say(HM, "no working spawn form — see the section above")
+            return ""
+        kind, tmpl = SPAWN
+        if kind == "high":
+            import winpty
+            pp = winpty.PtyProcess.spawn([sys.executable, path], dimensions=(50, 200))
+            out, end = [], time.time() + secs
+            while time.time() < end:
+                try:
+                    chunk = pp.read()
+                except Exception:
+                    break
+                if chunk:
+                    out.append(chunk)
+                elif not pp.isalive():
+                    break
+                else:
+                    time.sleep(0.02)
+            return "".join(out)
+        # tmpl is whichever cmdline shape started a child above; only the file changes.
+        cmdline = ('"%s" -u "%s"' % (sys.executable, path)) if tmpl.startswith('"') \
+                  else ('-u "%s"' % path)
         pty = PTY(200, 50)
-        pty.spawn(sys.executable, cmdline='"%s" -u "%s"' % (sys.executable, path))
+        pty.spawn(sys.executable, cmdline=cmdline)
         out, end = [], time.time() + secs
         while time.time() < end:
             try:
