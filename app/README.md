@@ -30,10 +30,12 @@ The webview is the one the operating system already has, so nothing is shipped t
 Needs a Rust toolchain (`rustup`), nothing else.
 
 ```sh
-cd app
-cargo build --release
+cd app && cargo build --release
 ./target/release/palmar-app
 ```
+
+It works from any directory: it locates the checkout from its own path, so the `python3 -m palmar`
+fallback is run from somewhere the package can actually be imported.
 
 ### On WSL, for WSLg
 
@@ -76,6 +78,9 @@ Then:
 cd app && cargo build --release
 ./target/release/palmar-app
 ```
+
+It works from any directory: it locates the checkout from its own path, so the `python3 -m palmar`
+fallback is run from somewhere the package can actually be imported.
 
 **4.1, not 4.0.** This links `webkit2gtk` 2.0 / `soup3`, and `webkit2gtk-4.0` is the older libsoup2
 API. Ubuntu 22.04+ and Debian 12+ have 4.1; Ubuntu 20.04 has only 4.0 and cannot build this.

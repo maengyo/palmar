@@ -13,6 +13,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -104,6 +106,56 @@ class Scripts(unittest.TestCase):
         if sys.platform == "darwin":
             self.assertNotEqual(r.returncode, 0)
             self.assertIn("Linux", r.stdout + r.stderr)
+
+
+BINARY = os.path.join(APP, "target", "release", "palmar-app")
+
+
+@unittest.skipUnless(os.path.exists(BINARY), "the window is not built (cargo build --release in app/)")
+class FindingTheDaemon(unittest.TestCase):
+    """What the window does when it cannot reach a daemon.
+
+    **Both tests run the real binary and neither can open a window**: PATH is emptied, so no daemon
+    can be started and there is nothing to show. What is asserted is the sentence it comes back
+    with, because a wrong sentence here cost a real user twenty seconds of silence (2026-09-11):
+    `python3 -m palmar` was being run from `app/`, where the package is not importable, and the
+    reason went to /dev/null."""
+
+    def run_it(self, exe, cwd):
+        home = tempfile.mkdtemp(prefix="palmar-appfind-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        # PATH=/nonexistent: neither `palmar` nor `python3` can be spawned, so this returns at once
+        # and no daemon and no window can result. HOME is empty, so there is no run/url either.
+        return subprocess.run([exe], cwd=cwd, capture_output=True, text=True, timeout=60,
+                              env={"HOME": home, "PATH": "/nonexistent"})
+
+    def test_it_finds_the_checkout_from_inside_app(self):
+        """`app/` is where the build leaves you, so it is where people run it from. The python
+        fallback only imports the package with the checkout as its working directory."""
+        r = self.run_it(BINARY, APP)
+        out = r.stdout + r.stderr
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("run in " + REPO, out,
+                      "it did not find the checkout — the python fallback would fail to import")
+
+    def test_a_binary_outside_a_checkout_says_so(self):
+        """Copied somewhere else, there is no package to fall back to. It must say that, rather
+        than start something and wait out the timeout."""
+        box = tempfile.mkdtemp(prefix="palmar-appcopy-")
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        exe = os.path.join(box, "palmar-app")
+        shutil.copy2(BINARY, exe)
+        r = self.run_it(exe, box)
+        out = r.stdout + r.stderr
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not inside a palmar checkout", out)
+
+    def test_it_does_not_wait_out_the_timeout_to_say_nothing(self):
+        """START_TIMEOUT is 20s and is for a daemon that hangs. A daemon that cannot start at all
+        has already answered, and making someone wait for that is the bug this replaced."""
+        start = time.time()
+        self.run_it(BINARY, APP)
+        self.assertLess(time.time() - start, 10.0, "it sat on a failure that was immediate")
 
 
 if __name__ == "__main__":
