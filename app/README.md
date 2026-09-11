@@ -25,7 +25,39 @@ The webview is the one the operating system already has, so nothing is shipped t
 | Linux / **WSLg** | WebKitGTK 4.1 | `libwebkit2gtk-4.1-0`, plus `-dev` to build |
 | Windows | WebView2 | the native port is #29 — today, run the daemon in WSL |
 
-## Build
+## Getting one without building it
+
+**Rust is a build dependency, not a runtime one.** The binary links the system webview and libc and
+nothing else — it runs with no toolchain present (measured on macOS with `cargo` and `rustc` off
+PATH). The only reason to install Rust was that there was nowhere to get a built one.
+
+`.github/workflows/app-linux.yml` is that place. It builds on every push that touches `app/`, and
+can be started by hand once it is on the default branch:
+
+```sh
+gh workflow run app-linux.yml && gh run watch
+```
+
+On the machine that wants it — one package, not a toolchain:
+
+```sh
+sudo apt install -y libwebkit2gtk-4.1-0     # pulls GTK3, libsoup3 and JavaScriptCore itself
+gh run download -n palmar-app-linux-x86_64  # gh carries your auth, so a private repo is fine
+chmod +x palmar-app                         # upload-artifact does not keep the executable bit
+./palmar-app
+```
+
+It is built inside an `ubuntu:22.04` container against **glibc 2.35**, so it runs on Ubuntu 22.04
+and 24.04 alike — glibc is backward compatible but not forward compatible, so the floor has to be
+the oldest release you want to support. Artifacts expire after 90 days; a release asset would not,
+and that is the change to make once there is something to call a release.
+
+Measured from the build log, not assumed: 694 KB, and it links `libwebkit2gtk-4.1.so.0`,
+`libgtk-3.so.0`, `libsoup-3.0.so.0` and `libjavascriptcoregtk-4.1.so.0` — every one of them inside
+`libwebkit2gtk-4.1-0`'s dependency closure. **No `libxdo` and no appindicator**: those are Tauri's
+prerequisites, and this is bare wry+tao.
+
+## Build it yourself
 
 Needs a Rust toolchain (`rustup`), nothing else.
 
@@ -64,8 +96,13 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 or let a script do both:
 
 ```sh
-sh app/setup-linux.sh     # prints what it will run, then asks
+sh app/setup-linux.sh                 # prints what it will run, then asks
+sh app/setup-linux.sh --contained     # ...with Rust in app/.rust, not your home
 ```
+
+`--contained` puts rustup under `app/.rust` with a minimal profile and no PATH edits, so
+`rm -rf app/.rust` is the whole uninstall. Note that the distribution's own Rust cannot stand in:
+Ubuntu ships 1.75 and this lockfile needs 1.88.
 
 **That script is the only thing here that changes your machine**, which is why it is separate from
 the probe: a diagnostic that edits the system is a worse diagnostic. It stops with one sentence on
