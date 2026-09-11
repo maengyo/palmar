@@ -356,7 +356,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let im = std::env::var("GTK_IM_MODULE").unwrap_or_default();
         if im.contains("ibus") {
-            use webkit2gtk::prelude::*;
+            // Both traits, by name: this crate has no prelude, and the methods live on the
+            // extension traits rather than on the types (checked against webkit2gtk 2.0.1, and by
+            // a CI build on Linux — a Mac cannot compile this branch at all).
+            use webkit2gtk::{InputMethodContextExt, WebViewExt};
             use wry::WebViewExtUnix;
             if let Some(ctx) = webview.webview().input_method_context() {
                 ctx.set_enable_preedit(true);
