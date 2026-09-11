@@ -6,6 +6,9 @@ It is not a second copy of palmar. The daemon still owns every terminal; this pr
 (or starts one), and points a webview at the address it prints. Closing the window leaves the
 daemon — and your shells — running, exactly as closing a browser tab always did.
 
+To stop the daemon too — closing the window never does — `palmar --stop`, or `python3 -m palmar
+--stop` from the checkout.
+
 ## Why not Electron, and why not the Tauri CLI
 
 Being heavy is the thing this project is avoiding: `cate` ships a 496 MB dmg and installs 1.1 GB

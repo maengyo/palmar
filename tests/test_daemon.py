@@ -624,5 +624,66 @@ class TwoWaysIn(unittest.TestCase):
             self.assertFalse(os.path.exists(note), "--no-browser opened something anyway")
 
 
+class Stopping(unittest.TestCase):
+    """`palmar --stop`. Closing a window does not stop the daemon — it holds live shells, and that is
+    the point — so there has to be a way to say stop, and this is it (asked for 2026-09-11).
+
+    **The lock is the authority, not the pid.** A pid on its own can be stale, or reused by something
+    else entirely by the time it is read; the flock is held by a live daemon for exactly as long as
+    it lives."""
+
+    def palmar(self, home, *args):
+        from tests.helpers import PYTHON, REPO
+        env = dict(os.environ, HOME=home)
+        env.pop("LC_ALL", None)
+        return subprocess.run([PYTHON, "-m", "palmar", *args], cwd=REPO,
+                              capture_output=True, text=True, timeout=60, env=env)
+
+    def test_nothing_running_is_not_an_error(self):
+        """Asking a stopped thing to stop got what it asked for."""
+        home = tempfile.mkdtemp(prefix="palmar-stop-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        r = self.palmar(home, "--stop")
+        self.assertEqual(r.returncode, 0, r.stderr[-300:])
+        self.assertIn("없다", r.stdout)
+
+    def test_it_stops_a_running_daemon(self):
+        with Daemon() as d:
+            d.open_pane(name="goes with it")
+            r = self.palmar(d.home, "--stop")
+            self.assertEqual(r.returncode, 0, r.stderr[-300:])
+            self.assertIn("멈췄다", r.stdout)
+            # It really is gone: the process exited, and the port stops answering.
+            d.proc.wait(timeout=15)
+            with self.assertRaises(Exception):
+                d.raw("GET", "/api/sessions")
+
+    def test_it_goes_out_the_clean_way(self):
+        """SIGTERM, not SIGKILL — **the restore file is written on the way out** (protocol.md). A
+        stop that threw the workspace away would be a worse stop than Ctrl-C."""
+        with Daemon() as d:
+            d.open_pane(name="remember me")
+            time.sleep(1.2)                       # the cwd poll has to have seen it at least once
+            self.palmar(d.home, "--stop")
+            d.proc.wait(timeout=15)
+            saved = os.path.join(d.home, ".palmar", "restore.json")
+            self.assertTrue(os.path.exists(saved), "the workspace was not saved on the way out")
+            with open(saved) as fh:
+                self.assertIn("remember me", fh.read())
+
+    def test_a_stale_lock_is_not_a_daemon(self):
+        """A lock file left behind by a daemon that is gone holds no flock. Reading the pid out of it
+        and signalling that would, at best, do nothing and at worst hit whatever has the pid now."""
+        home = tempfile.mkdtemp(prefix="palmar-stale-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        run = os.path.join(home, ".palmar", "run")
+        os.makedirs(run, mode=0o700)
+        with open(os.path.join(run, "lock"), "w") as fh:
+            fh.write("pid 999999 http://127.0.0.1:8801\n")     # nothing holds a flock on this
+        r = self.palmar(home, "--stop")
+        self.assertEqual(r.returncode, 0, r.stderr[-300:])
+        self.assertIn("없다", r.stdout, "it treated a stale lock as a running daemon")
+
+
 if __name__ == "__main__":
     unittest.main()

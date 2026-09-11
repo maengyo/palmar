@@ -96,6 +96,8 @@ INPUT_MAX = 1024 * 1024
 REQUEST_TIMEOUT = 10
 #: When killing a session, SIGHUP then this long, then SIGKILL — no zombie or ghost shells in a long-lived daemon.
 KILL_GRACE_S = 2.0
+#: How long `--stop` waits for the daemon to let go of the lock before giving up on it.
+STOP_WAIT_S = 10.0
 
 ALT_ON = b"\x1b[?1049h"
 ALT_OFF = b"\x1b[?1049l"
@@ -1575,6 +1577,79 @@ def daemon_answers(url: str) -> bool:
         return False
 
 
+def stop_daemon() -> int:
+    """`palmar --stop` — stop the daemon that has this HOME, and its shells with it.
+
+    **The lock is the authority, not the pid file.** A pid alone can be stale or, worse, reused by
+    something else by the time we read it; the flock is held by a live daemon for exactly as long as
+    it lives. So: if we can take the lock, nothing is running and there is nothing to stop. If we
+    cannot, whatever holds it is a palmard and the pid written inside it is that daemon's.
+
+    SIGTERM, not SIGKILL — the daemon has a shutdown path and that is where the restore file gets
+    written (protocol.md). Killing it outright would throw away the workspace it is about to save."""
+    path = RUN_DIR / "lock"
+    try:
+        fd = os.open(str(path), os.O_RDWR | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        print("palmar: 도는 데몬이 없다")
+        return 0
+    except OSError as e:
+        print(f"palmar: run/lock 을 못 열었다 — {e}")
+        return 1
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            pass                                    # held — a daemon is alive, which is the point
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            print("palmar: 도는 데몬이 없다")
+            return 0
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            line = os.read(fd, 256).decode("utf-8", "replace").split()
+        except OSError as e:
+            print(f"palmar: run/lock 을 못 읽었다 — {e}")
+            return 1
+        # "pid 1234 http://127.0.0.1:8801" — the address is there for --doctor; only the pid matters here.
+        if len(line) < 2 or line[0] != "pid" or not line[1].isdigit():
+            print(f"palmar: run/lock 의 내용을 알아볼 수 없다 ({' '.join(line)[:60]})")
+            return 1
+        pid = int(line[1])
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            print("palmar: 그 데몬은 이미 없다")
+            return 0
+        except PermissionError:
+            print(f"palmar: pid {pid} 에 신호를 못 보낸다 — 다른 사용자의 것이다")
+            return 1
+        print(f"palmar: pid {pid} 에 멈추라고 했다. 기다린다…")
+    finally:
+        os.close(fd)
+    # Gone means the lock is free again. Poll rather than waitpid — it is not our child.
+    end = time.monotonic() + STOP_WAIT_S
+    while time.monotonic() < end:
+        time.sleep(0.1)
+        try:
+            fd = os.open(str(path), os.O_RDWR | os.O_NOFOLLOW)
+        except OSError:
+            print("palmar: 멈췄다")
+            return 0
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            continue
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            print("palmar: 멈췄다")
+            return 0
+        finally:
+            os.close(fd)
+    print(f"palmar: {STOP_WAIT_S:.0f}초 안에 안 멈췄다. 다시 해 보거나, 정 안 되면 `kill -9 {pid}`")
+    return 1
+
+
 def acquire_single_instance_lock() -> None:
     """An exclusive flock on ~/.palmar/run/lock. Failing to take it means another palmard already uses this HOME —
     a second start would write a new token below and delete every run/*.json, silently dropping the first one's pane
@@ -2963,7 +3038,13 @@ def cli() -> None:
     # passes --no-browser and loads the address itself.
     ap.add_argument("--no-browser", action="store_true",
                     help="주소만 찍고 브라우저는 열지 않는다 (앱이 쓰는 길)")
+    # Closing a window does not stop the daemon — it holds live shells, and that is the point. So
+    # there has to be a way to say stop, and it is this one (asked for 2026-09-11).
+    ap.add_argument("--stop", action="store_true",
+                    help="이 HOME 의 데몬을 멈춘다 (안의 셸도 같이 죽는다)")
     args = ap.parse_args()
+    if args.stop:
+        raise SystemExit(stop_daemon())
     if args.doctor:
         raise SystemExit(doctor(args.port))
     asyncio.run(main(args.port, open_page=not args.no_browser))

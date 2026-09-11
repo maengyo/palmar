@@ -120,7 +120,15 @@ There is nothing to install and nothing to build. palmar uses only the Python st
 xterm.js is vendored in the repo, so no dependency is fetched — at install time or at runtime. It
 binds `127.0.0.1` and nothing else.
 
-Stop it with `Ctrl-C`.
+Stop it with `Ctrl-C`, or from anywhere:
+
+```
+palmar --stop
+```
+
+That stops the daemon for your home **and the shells inside it**. It goes out the clean way, so the
+workspace is saved and offered back the next time you start. Closing a browser tab or the app window
+does not stop it — the daemon is what holds your terminals, which is why they survive.
 
 ### In a window instead
 
