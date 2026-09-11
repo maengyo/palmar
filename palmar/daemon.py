@@ -48,7 +48,9 @@ import os
 import pty
 import re
 import secrets
+import shutil
 import signal
+import socket
 import stat
 import struct
 import subprocess
@@ -1551,10 +1553,37 @@ def restore_offer():
     return {"saved": d.get("saved"), "sessions": ss}
 
 
+class AlreadyRunning(Exception):
+    """A palmard already has this HOME, and it answers. Carries its address (key and all).
+
+    **Not a failure.** The web page and the app (app/) are two views of one daemon, so "palmar is
+    already up" is the answer to `palmar`, not an error — show the person that one."""
+
+    def __init__(self, url: str):
+        super().__init__(url)
+        self.url = url
+
+
+def daemon_answers(url: str) -> bool:
+    """Is something listening at that address? The flock says a process is alive; this says the
+    address we are about to hand over actually reaches it."""
+    try:
+        host, _, port = url.split("//", 1)[1].split("/", 1)[0].rpartition(":")
+        with socket.create_connection((host, int(port)), timeout=0.5):
+            return True
+    except (OSError, ValueError, IndexError):
+        return False
+
+
 def acquire_single_instance_lock() -> None:
     """An exclusive flock on ~/.palmar/run/lock. Failing to take it means another palmard already uses this HOME —
     a second start would write a new token below and delete every run/*.json, silently dropping the first one's pane
-    hooks (#2, violating AGENTS principle 3 'notice it and say so'). So only the lock holder does that; without it, refuse."""
+    hooks (#2, violating AGENTS principle 3 'notice it and say so'). So only the lock holder does that.
+
+    **Without it we do not refuse any more** (2026-09-11): the daemon is one per HOME by design, and with
+    a web page *and* an app both in use, running into a daemon that is already up is the ordinary case, not
+    a mistake. If it answers, `AlreadyRunning` carries its address up and the caller opens that. The refusal
+    below is kept for the case where something holds the lock and cannot be reached — that really is wrong."""
     fd = os.open(str(RUN_DIR / "lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1564,10 +1593,18 @@ def acquire_single_instance_lock() -> None:
         except OSError:
             prev = ""
         os.close(fd)
+        # run/url is 0600 and holds the address with its key. Reaching it is the whole point here, so
+        # unlike the lock file — which never holds the key — this one is read and handed on.
+        try:
+            running = URL_FILE.read_text("utf-8").strip()
+        except OSError:
+            running = ""
+        if running.startswith("http://") and daemon_answers(running):
+            raise AlreadyRunning(running)
         # **The key is never written into the lock file** — `--doctor` prints this line as-is, and that
         # output exists to be pasted (#14). So we do not hand out the whole address here either, only where
         # to get it back. Otherwise we would point at a keyless address, and opening that gives 403 (measured).
-        raise SystemExit(f"palmard: 이미 다른 palmard 가 {PALMAR_DIR} 를 쓰고 있다"
+        raise SystemExit(f"palmard: 이미 다른 palmard 가 {PALMAR_DIR} 를 쓰고 있는데 닿지 않는다"
                          f"{' — ' + prev if prev else ''} (데몬은 HOME 당 하나)\n"
                          f"        그 데몬의 주소: cat {URL_FILE}")
     os.ftruncate(fd, 0)
@@ -2519,10 +2556,129 @@ def shutdown() -> None:
             pass
 
 
-async def main(port: int) -> None:
+# ── opening the page ───────────────────────────────────────────────────────────────────────
+# The address carries the key (#14), so "open it for me" is the difference between one command and
+# copy-pasting a secret by hand. **The window is not here** — palmar's own window is a separate
+# program (app/, wry+tao) that starts this daemon and loads the same address. This is only the
+# fallback for when you are running the daemon by hand: it hands the address to a browser.
+#
+# On WSL without a Linux browser there is no page to show inside Linux, so the address goes out to
+# the **Windows** browser (wslview, else powershell/cmd) and reaches back in over WSL2's localhost
+# forwarding. `BROWSER` beats everything — the Unix convention, and the seam the tests drive.
+
+#: Anything that can show a page. `xdg-open` is a router, not a browser — on WSL it commonly hands
+#: back out to Windows through wslu, which is already the fallback, so it is asked last.
+LINUX_BROWSERS = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+                  "microsoft-edge", "microsoft-edge-stable", "firefox")
+
+
+def wsl_kind(env=None, osrelease=None, wslg=None) -> str:
+    """`''` off WSL, `'wsl'` inside it, `'wslg'` when WSL's GUI layer can actually draw a window.
+
+    Every input is injectable on purpose: this is the one thing the Mac it was written on cannot try
+    for real, so what it decides still has to be measurable (tests/test_pure.py)."""
+    env = os.environ if env is None else env
+    if osrelease is None:
+        try:
+            osrelease = Path("/proc/sys/kernel/osrelease").read_text("utf-8", "replace")
+        except OSError:
+            osrelease = ""
+    low = osrelease.lower()
+    # WSL1 and WSL2 both carry "microsoft" in the kernel release. WSL_DISTRO_NAME is WSL's own and is
+    # checked as well, because a stripped-down distro can leave that /proc entry unreadable.
+    if "microsoft" not in low and "wsl" not in low and not env.get("WSL_DISTRO_NAME"):
+        return ""
+    if wslg is None:
+        wslg = Path("/mnt/wslg").is_dir()
+    # The mount alone is not enough. **A display has to be there too** — ssh into a WSL distro and
+    # /mnt/wslg is still mounted while there is no screen to put a window on.
+    if wslg and (env.get("WAYLAND_DISPLAY") or env.get("DISPLAY")):
+        return "wslg"
+    return "wsl"
+
+
+def browser_argv(url: str, *, platform=None, kind=None, env=None, which=None):
+    """The command that hands `url` to whatever opens links, or None if this machine offers no way.
+
+    Pure: the platform, the WSL kind, the environment and "is this program here" all arrive as
+    arguments, so the choice can be measured on a machine that is none of those things."""
+    platform = sys.platform if platform is None else platform
+    env = os.environ if env is None else env
+    which = shutil.which if which is None else which
+    chosen = (env.get("BROWSER") or "").strip()
+    if chosen:
+        return [chosen, url]
+    if platform == "darwin":
+        return ["open", url]
+    kind = wsl_kind(env=env) if kind is None else kind
+    if kind:
+        # A Linux browser is only worth it under WSLg, where there is a screen to draw it on.
+        if kind == "wslg":
+            for b in LINUX_BROWSERS:
+                if which(b):
+                    return [b, url]
+        if which("wslview"):                     # wslu — the blessed hand-off to the Windows browser
+            return ["wslview", url]
+        # No wslu. Both of these reach the Windows default browser. **The URL holds the key**, so it
+        # lands on a Windows command line where that user's own processes can read it — the same
+        # person, so the same boundary argv already is on this side (docs/decisions.md).
+        if which("powershell.exe"):
+            return ["powershell.exe", "-NoProfile", "-NonInteractive",
+                    "-Command", "Start-Process", url]
+        if which("cmd.exe"):
+            # The empty string is `start`'s title argument. Without it the quoted URL becomes the
+            # title and nothing opens — the classic `start "http://…"` bug.
+            return ["cmd.exe", "/c", "start", "", url]
+        return None
+    if platform.startswith("linux"):
+        for b in LINUX_BROWSERS:
+            if which(b):
+                return [b, url]
+        if which("xdg-open"):
+            return ["xdg-open", url]
+    return None
+
+
+def open_browser(url: str) -> bool:
+    """Hand the address to a browser and do not wait.
+
+    **Never raises.** Failing to open one is not a reason for the daemon not to run: the address is
+    on stdout and in run/url either way. Everything it says goes to stderr, because stdout's last
+    line is the address and that is a contract (docs/protocol.md)."""
+    argv = browser_argv(url)
+    if not argv:
+        log("브라우저를 열 방법을 못 찾았다 — 위 주소를 직접 열어라")
+        return False
+    try:
+        # start_new_session so the browser does not die with the daemon and never reaches for the
+        # terminal; the pipes are closed so it cannot write over the address that was just printed.
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
+        log(f"{Path(argv[0]).name} 로 브라우저를 못 열었다 ({e}) — 위 주소를 직접 열어라")
+        return False
+    # **Name the program, never the address** — the address carries the key.
+    log(f"{Path(argv[0]).name} 로 브라우저를 연다 (--no-browser 로 끈다)")
+    return True
+
+
+async def main(port: int, open_page: bool = True) -> None:
     PORT[0] = port
     UTF8_CTYPE[0] = pick_utf8_locale()
-    TOKEN[0] = setup_palmar_dir()
+    try:
+        TOKEN[0] = setup_palmar_dir()
+    except AlreadyRunning as e:
+        # **This is a success.** One daemon per HOME, and the page and the app (app/) are two views
+        # of it — so `palmar` while it is already up means "show me palmar", not "start a second
+        # one". The lock is taken before anything is rotated or deleted, so the running daemon's
+        # token and its panes' hooks are untouched by this path.
+        # The address still goes to stdout and only to stdout: "the last line is the address" is a
+        # contract the app reads on (docs/protocol.md), and this path has to keep it.
+        log("이미 도는 데몬이 있다 — 그것을 연다 (데몬은 HOME 당 하나)")
+        print(e.url, flush=True)
+        if open_page:
+            open_browser(e.url)
+        return
     # **Canvases come back on their own; terminals are offered.** A canvas is data — restoring it
     # surprises nobody. A terminal is a process, and starting eight of them is a thing a person
     # should press once (protocol.md "되살리기"). If there is nothing to restore this is the same
@@ -2558,6 +2714,10 @@ async def main(port: int) -> None:
     except OSError as e:
         log(f"run/url 을 못 남겼다 — {e}")
     print(url, flush=True)
+    # After the address, never before: if it cannot be shown the person still has it, and everything
+    # this says goes to stderr so stdout's last line stays the address (docs/protocol.md).
+    if open_page:
+        open_browser(url)
 
     # Polled rather than hooked into every broadcast: what it watches is the *directory* a pane sits
     # in, which changes with a `cd` that may print nothing and fire no event. Ten seconds is the most
@@ -2611,6 +2771,14 @@ def doctor(port: int) -> int:
     out("  platform  %s" % platform.platform())
     out("  $SHELL    %s%s" % (os.environ.get("SHELL") or "(none)",
                               "   <- with none set it falls back to /bin/sh" if not os.environ.get("SHELL") else ""))
+    # How the page gets opened, and from where. **On WSL that is the whole question** — the daemon is
+    # in Linux and the browser is usually on the Windows side. The program is named and the address
+    # never is: the address carries the key. A keyless URL is passed in for the same reason.
+    kind = wsl_kind()
+    tab = browser_argv("http://127.0.0.1:%d/" % port)     # keyless on purpose — never print the key
+    out("  WSL       %s" % (kind or "no"))
+    out("  browser   %s%s" % (Path(tab[0]).name if tab else "(found no way to open one — open the address yourself)",
+                              "   <- $BROWSER" if (os.environ.get("BROWSER") or "").strip() else ""))
     # The pane's character encoding. If it is not UTF-8, Korean, Japanese and Chinese input breaks — on screen it looks like "it will not type".
     loc = " ".join("%s=%s" % (k, os.environ[k]) for k in ("LC_ALL", "LC_CTYPE", "LANG") if os.environ.get(k))
     utf8 = has_utf8(os.environ)
@@ -2791,8 +2959,12 @@ def cli() -> None:
     ap.add_argument("--version", action="version", version="palmar " + __version__)
     ap.add_argument("--doctor", action="store_true",
                     help="이 코드·도는 데몬·판마다의 상태를 찍고 나간다")
+    # The address is printed either way. palmar's own window is a separate program (app/) that
+    # passes --no-browser and loads the address itself.
+    ap.add_argument("--no-browser", action="store_true",
+                    help="주소만 찍고 브라우저는 열지 않는다 (앱이 쓰는 길)")
     args = ap.parse_args()
     if args.doctor:
         raise SystemExit(doctor(args.port))
-    asyncio.run(main(args.port))
+    asyncio.run(main(args.port, open_page=not args.no_browser))
 

@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import unittest
 
@@ -473,6 +476,152 @@ class Doctor(unittest.TestCase):
             self.assertNotIn(d.key, out, "--doctor printed the key")
             self.assertIn("running daemon", out)
             self.assertIn("protocol", out)
+
+
+class OpeningTheBrowser(unittest.TestCase):
+    """The daemon hands the address to a browser unless told not to.
+
+    `$BROWSER` is the seam: point it at a script that only writes down its argv and the whole spawn
+    path — choosing the command, starting it, handing over the real address — can be measured on any
+    machine, including the Mac this was written on, without a window ever appearing."""
+
+    def recorder(self):
+        """A fake browser. It records what it was given and exits."""
+        box = tempfile.mkdtemp(prefix="palmar-browser-")
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        note = os.path.join(box, "argv")
+        opener = os.path.join(box, "opener.sh")
+        with open(opener, "w") as fh:
+            fh.write('#!/bin/sh\nprintf "%s\\n" "$@" > ' + note + '\n')
+        os.chmod(opener, 0o755)
+        return opener, note
+
+    def wait_for(self, path, secs=10):
+        end = time.time() + secs
+        while time.time() < end:
+            if os.path.exists(path):
+                time.sleep(0.2)          # let the write finish
+                with open(path) as fh:
+                    return fh.read()
+            time.sleep(0.1)
+        return None
+
+    def test_it_opens_the_real_address(self):
+        """Not some address — **the one with the key on it**. Handing over a keyless URL would open
+        the "no key" page and look like palmar was broken."""
+        opener, note = self.recorder()
+        with Daemon(env={"BROWSER": opener}, browser=True) as d:
+            got = self.wait_for(note)
+            self.assertIsNotNone(got, "the daemon never started $BROWSER")
+            self.assertIn(d.url.strip(), got.strip(),
+                          "the browser was handed something other than the daemon's own address")
+            self.assertIn("?k=", got, "the address handed over carried no key")
+
+    def test_no_browser_opens_nothing(self):
+        """The flag the app (app/) passes, and what every test here uses."""
+        opener, note = self.recorder()
+        with Daemon(env={"BROWSER": opener}, browser=False) as d:
+            self.assertIsInstance(d.get("/api/sessions"), list)   # it really is up
+            time.sleep(1.5)
+            self.assertFalse(os.path.exists(note), "--no-browser opened something anyway")
+
+    def test_a_browser_that_cannot_start_does_not_stop_the_daemon(self):
+        """Opening a browser is a convenience. Failing at it must not cost you the daemon — the
+        address is on stdout and in run/url either way."""
+        with Daemon(env={"BROWSER": "/nonexistent/definitely-not-here"}, browser=True) as d:
+            self.assertEqual(d.raw("GET", "/api/sessions")[0], 200)
+
+
+class TwoWaysIn(unittest.TestCase):
+    """The page and the app (app/) are two views of **one** daemon — one per HOME.
+
+    So running `palmar` while a daemon is already up is the ordinary case for someone who keeps both,
+    not a mistake. It used to exit 1 and tell you to `cat run/url`; since 2026-09-11 it opens the
+    running one. **What it must still never do is the thing the refusal existed to prevent** — rotate
+    that daemon's token or delete its panes' hook files (#2)."""
+
+    def second_palmar(self, home, extra_env=None, args=()):
+        from tests.helpers import PYTHON, REPO
+        env = dict(os.environ, HOME=home)
+        env.pop("LC_ALL", None)
+        env.update(extra_env or {})
+        return subprocess.run([PYTHON, "-m", "palmar"] + list(args), cwd=REPO,
+                              capture_output=True, text=True, timeout=40, env=env)
+
+    def recorder(self):
+        box = tempfile.mkdtemp(prefix="palmar-browser-")
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        note = os.path.join(box, "argv")
+        opener = os.path.join(box, "opener.sh")
+        with open(opener, "w") as fh:
+            fh.write('#!/bin/sh\nprintf "%s\\n" "$@" > ' + note + '\n')
+        os.chmod(opener, 0o755)
+        return opener, note
+
+    def test_a_second_start_opens_the_running_one(self):
+        opener, note = self.recorder()
+        with Daemon() as d:
+            r = self.second_palmar(d.home, {"BROWSER": opener})
+            self.assertEqual(r.returncode, 0, "a second palmar failed instead of attaching:\n" + r.stderr[-400:])
+            # **stdout's last line is still the address** (docs/protocol.md) — the app reads on that.
+            self.assertEqual(r.stdout.strip().splitlines()[-1], d.url)
+            time.sleep(0.4)
+            self.assertTrue(os.path.exists(note), "it attached but opened nothing")
+            with open(note) as fh:
+                self.assertIn(d.url, fh.read())
+
+    def test_it_leaves_the_running_daemon_alone(self):
+        """The refusal existed because a second start rotates the token and deletes run/*.json,
+        silently dropping the first daemon's pane hooks. Attaching must touch neither."""
+        with Daemon() as d:
+            s = d.open_pane(name="keep me")
+            before_token, before_key = d.token, d.key
+            hooks = sorted(os.listdir(d.run))
+            r = self.second_palmar(d.home, args=["--no-browser"])
+            self.assertEqual(r.returncode, 0, r.stderr[-400:])
+            self.assertEqual(d.token, before_token, "the running daemon's token was rotated")
+            self.assertEqual(d.key, before_key, "the key changed — the bookmark would be dead")
+            self.assertEqual(sorted(os.listdir(d.run)), hooks, "run/ files were deleted under it")
+            # and it is still serving, with that pane still there
+            self.assertIn(s["id"], [x["id"] for x in d.panes()])
+
+
+    def test_both_open_at_once_see_the_same_workspace(self):
+        """Picking one is the normal thing — **but having both open must not break.** They are two
+        WebSocket clients of one daemon, so a terminal opened in either has to appear in the other
+        without a reload. This is what makes "closing one leaves the other working" true."""
+        with Daemon() as d:
+            web = WS(d, "/events?token=" + d.token)
+            app = WS(d, "/events?token=" + d.token)
+            try:
+                self.assertIn("sessions", web.recv_json())     # hello, each gets its own
+                self.assertIn("sessions", app.recv_json())
+                made = d.open_pane(name="opened in one of them")
+
+                def saw_it(w):
+                    """Frames until the one that names the new pane. The daemon sends a log note
+                    before the session frame (protocol.md), so this cannot assume the first frame."""
+                    for _ in range(12):
+                        m = w.recv_json()
+                        if m.get("t") == "session" and m.get("s", {}).get("id") == made["id"]:
+                            return m["s"]
+                    return None
+
+                self.assertIsNotNone(saw_it(web), "the web view never saw the new terminal")
+                self.assertIsNotNone(saw_it(app), "the app window never saw the new terminal")
+            finally:
+                web.close()
+                app.close()
+
+    def test_no_browser_still_just_prints_the_address(self):
+        """The path the app takes when it starts a daemon and finds one already up."""
+        opener, note = self.recorder()
+        with Daemon() as d:
+            r = self.second_palmar(d.home, {"BROWSER": opener}, args=["--no-browser"])
+            self.assertEqual(r.returncode, 0, r.stderr[-400:])
+            self.assertEqual(r.stdout.strip().splitlines()[-1], d.url)
+            time.sleep(0.4)
+            self.assertFalse(os.path.exists(note), "--no-browser opened something anyway")
 
 
 if __name__ == "__main__":

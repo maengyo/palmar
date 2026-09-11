@@ -52,7 +52,7 @@ class Install(unittest.TestCase):
         # a port unlikely to collide
         import socket
         s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
-        proc = subprocess.Popen([shim, "--port", str(port)], cwd="/tmp",
+        proc = subprocess.Popen([shim, "--port", str(port), "--no-browser"], cwd="/tmp",
                                 env=dict(os.environ, HOME=home),
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:

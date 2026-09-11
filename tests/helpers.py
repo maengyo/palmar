@@ -44,7 +44,11 @@ class Daemon:
             d.post("/api/sessions", {"cwd": d.home})
     """
 
-    def __init__(self, env=None, shell=None):
+    def __init__(self, env=None, shell=None, browser=False):
+        # browser=False adds --no-browser, or every test on this machine opens a browser window.
+        # A test that wants to measure the opening itself passes browser=True *and* a $BROWSER that
+        # only writes down its argv — never one that really opens something.
+        self.browser = browser
         self.home = tempfile.mkdtemp(prefix="palmar-test-")
         self.port = free_port()
         self.proc = None
@@ -58,7 +62,8 @@ class Daemon:
         env.pop("LC_ALL", None)          # a test should not inherit the running shell's locale
         env.update(self._extra)
         self.proc = subprocess.Popen(
-            [PYTHON, "-m", "palmar", "--port", str(self.port)],
+            [PYTHON, "-m", "palmar", "--port", str(self.port)]
+            + ([] if self.browser else ["--no-browser"]),
             cwd=REPO, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         end = time.time() + START_TIMEOUT
         while time.time() < end:

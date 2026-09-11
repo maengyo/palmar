@@ -238,5 +238,101 @@ class Startup(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), str(D.PROTOCOL))
 
 
+URL = "http://127.0.0.1:8801/?k=abc123"
+
+
+def having(*names):
+    """A stand-in for shutil.which: these programs are on this imaginary machine and nothing else."""
+    return lambda n: ("/usr/bin/" + n) if n in names else None
+
+
+class WhereItOpens(unittest.TestCase):
+    """Which program gets handed the address.
+
+    **Every fact is injected**, because the machine these run on is a Mac and the case that matters
+    is WSL. The rule from AGENTS.md holds either way: what cannot be measured here is still written
+    down as what the code will do, so the day someone runs it on WSL the claim is already on record.
+    """
+
+    # ── which world are we in ───────────────────────────
+    def test_a_mac_is_not_wsl(self):
+        self.assertEqual(D.wsl_kind(env={}, osrelease="24.6.0"), "")
+
+    def test_wsl_is_seen_in_the_kernel_release(self):
+        """Both WSL1 and WSL2 carry 'microsoft' there."""
+        self.assertEqual(D.wsl_kind(env={}, osrelease="5.15.90.1-microsoft-standard-WSL2",
+                                    wslg=False), "wsl")
+        self.assertEqual(D.wsl_kind(env={}, osrelease="4.4.0-19041-Microsoft", wslg=False), "wsl")
+
+    def test_the_distro_name_alone_is_enough(self):
+        """A stripped-down distro can leave that /proc entry unreadable — WSL still sets this."""
+        self.assertEqual(D.wsl_kind(env={"WSL_DISTRO_NAME": "Ubuntu"}, osrelease="", wslg=False),
+                         "wsl")
+
+    def test_wslg_needs_a_screen_as_well_as_the_mount(self):
+        """**The mount is not the point — a display is.** ssh into a WSL distro and /mnt/wslg is
+        still mounted while there is nothing to draw a window on."""
+        rel = "5.15.90.1-microsoft-standard-WSL2"
+        self.assertEqual(D.wsl_kind(env={"WAYLAND_DISPLAY": "wayland-0"}, osrelease=rel,
+                                    wslg=True), "wslg")
+        self.assertEqual(D.wsl_kind(env={"DISPLAY": ":0"}, osrelease=rel, wslg=True), "wslg")
+        self.assertEqual(D.wsl_kind(env={}, osrelease=rel, wslg=True), "wsl")
+        self.assertEqual(D.wsl_kind(env={"DISPLAY": ":0"}, osrelease=rel, wslg=False), "wsl")
+
+    # ── what it hands the address to ────────────────────
+    def test_browser_env_wins_everywhere(self):
+        """The Unix convention, and how someone on WSLg asks for the Linux Firefox over Edge."""
+        for platform, kind in (("darwin", ""), ("linux", "wslg"), ("linux", "wsl"), ("linux", "")):
+            self.assertEqual(
+                D.browser_argv(URL, platform=platform, kind=kind,
+                               env={"BROWSER": "my-browser"}, which=having()),
+                ["my-browser", URL], "%s/%s ignored $BROWSER" % (platform, kind))
+
+    def test_a_mac_uses_open(self):
+        self.assertEqual(D.browser_argv(URL, platform="darwin", env={}, which=having()),
+                         ["open", URL])
+
+    def test_wsl_without_a_screen_hands_the_address_to_windows(self):
+        """No WSLg, so there is nothing inside Linux to show it on. wslu first — it is the package
+        that exists for this — then powershell, then cmd."""
+        argv = D.browser_argv(URL, platform="linux", kind="wsl", env={},
+                              which=having("wslview", "firefox"))
+        self.assertEqual(argv, ["wslview", URL], "a Linux browser was used with no screen for it")
+        argv = D.browser_argv(URL, platform="linux", kind="wsl", env={},
+                              which=having("powershell.exe"))
+        self.assertEqual(argv[0], "powershell.exe")
+        self.assertEqual(argv[-1], URL)
+        argv = D.browser_argv(URL, platform="linux", kind="wsl", env={}, which=having("cmd.exe"))
+        # **The empty string is `start`'s title argument.** Without it the URL becomes the title and
+        # nothing opens — the classic `start "http://…"` bug.
+        self.assertEqual(argv, ["cmd.exe", "/c", "start", "", URL])
+
+    def test_wslg_prefers_the_browser_next_to_the_daemon(self):
+        """With a screen, a Linux browser is the better answer: same side as the daemon, so its
+        127.0.0.1 is this machine and nothing has to be forwarded."""
+        argv = D.browser_argv(URL, platform="linux", kind="wslg", env={},
+                              which=having("firefox", "wslview"))
+        self.assertEqual(argv, ["firefox", URL])
+
+    def test_wslg_with_no_linux_browser_still_reaches_windows(self):
+        """Most distributions install no browser at all. That must not become 'palmar cannot open'."""
+        argv = D.browser_argv(URL, platform="linux", kind="wslg", env={}, which=having("wslview"))
+        self.assertEqual(argv, ["wslview", URL])
+
+    def test_plain_linux_uses_a_browser_then_xdg_open(self):
+        self.assertEqual(D.browser_argv(URL, platform="linux", kind="", env={},
+                                        which=having("chromium", "xdg-open")),
+                         ["chromium", URL])
+        self.assertEqual(D.browser_argv(URL, platform="linux", kind="", env={},
+                                        which=having("xdg-open")),
+                         ["xdg-open", URL])
+
+    def test_a_machine_with_nothing_says_so(self):
+        """None, not a guess. The caller prints 'open it yourself' — a command that does not exist
+        would fail silently into DEVNULL."""
+        self.assertIsNone(D.browser_argv(URL, platform="linux", kind="", env={}, which=having()))
+        self.assertIsNone(D.browser_argv(URL, platform="linux", kind="wsl", env={}, which=having()))
+
+
 if __name__ == "__main__":
     unittest.main()
