@@ -42,6 +42,8 @@ CREATE_UNICODE_ENVIRONMENT = 0x00000400
 #: The attribute that hands a child its pseudo-console. The number is from ProcThreadAttributeList
 #: in the SDK headers and there is no name for it in Python.
 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016
+#: Say the child's standard handles are given, then give none — see the note in spawn().
+STARTF_USESTDHANDLES = 0x00000100
 
 JobObjectExtendedLimitInformation = 9
 #: **The one that matters.** When the last handle to the job closes — including because palmar was
@@ -231,6 +233,21 @@ class ConPty:
                 si.lpAttributeList, 0, ctypes.c_size_t(PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE),
                 hpc, ctypes.c_size_t(sizeof(wintypes.HANDLE)), None, None):
             _err("UpdateProcThreadAttribute")
+
+        # **Three NULL standard handles, and this is not a detail.** The attribute above puts the
+        # child in our console; it does not decide where the child's stdout goes. Left alone,
+        # Windows hands the child the parent's standard handles, and palmar's are a pipe whenever it
+        # was not started from a terminal — so a pane's output went to the daemon's stdout instead of
+        # into the pane. Measured on a runner: the child was provably in our console (CONOUT$ came
+        # through) while everything it printed normally escaped to the job log.
+        #
+        # With STARTF_USESTDHANDLES set and nothing to hand over, the runtime opens CONIN$/CONOUT$
+        # itself — which is the console the attribute gave it. The parent cannot open the child's
+        # console to pass it in, so this is the way to say "use your own".
+        si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES
+        si.StartupInfo.hStdInput = None
+        si.StartupInfo.hStdOutput = None
+        si.StartupInfo.hStdError = None
 
         # **The job is made before the process and kept for its life.** Closing the last handle to
         # it kills everything inside, which is what takes an agent down with its pane.
