@@ -388,5 +388,85 @@ class ResizeGrip(unittest.TestCase):
         self.assertTrue(p["above6"], "the hit area does not reach above the corner")
 
 
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class KoreanUnderWslg(unittest.TestCase):
+    """Typing Korean when the IME commits with no preedit — the WSLg case.
+
+    wry turns preedit off (`set_enable_preedit(false)`, webkitgtk/mod.rs:360), ibus then sends its
+    preedit to its own panel instead of to the page, and WebKit ends up firing **compositionend for
+    a composition it never started** (WebKit bug 84394, ASSIGNED since 2012, reported against
+    ibus-hangul). xterm takes that as "finish the composition you are in" and, never having been
+    told where it began, sends the whole helper textarea — which it only empties on Enter or Ctrl-C.
+    Typing 하이하이 sent ten characters for four (reported from WSLg, 2026-09-11, and reproduced
+    below before the fix).
+
+    **What this can and cannot claim.** The event sequence is synthesised, so it is not evidence
+    about what WebKitGTK emits — that came from reading WebKit, ibus and wry. What it does hold is
+    our own handling of that sequence, which is the part that lives here. Chrome refuses to carry
+    `inputType` through the InputEvent constructor, so it is pinned on afterwards; without that the
+    branch under test is never reached and this passes while proving nothing."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+        cls.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          await fetch('/api/sessions?token='+T,{method:'POST',
+            headers:{'content-type':'application/json'},
+            body:JSON.stringify({cwd:%s,name:'ime'})});})()""" % json.dumps(cls.d.home))
+        time.sleep(3.5)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    PRELUDE = """
+      const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+      const t=[...window.palmar.tiles.values()][0];
+      const ta=t.termEl.querySelector('textarea');
+      ta.value=''; t.term.focus(); await sleep(120);
+      const mkInput=(type,data)=>{const e=new InputEvent('input',{data:data,bubbles:true});
+        Object.defineProperty(e,'inputType',{value:type}); return e;};
+      const out=[]; const sw=t.sendText; t.sendText=x=>{out.push(x); return sw(x);};
+      const d=t.term.onData(x=>out.push(x));
+    """
+
+    def drive(self, body):
+        return self.b.ev("(async()=>{%s\n%s\nawait sleep(450); d.dispose(); t.sendText=sw;\n"
+                         "return {joined:out.join(''), ta:ta.value};})()" % (self.PRELUDE, body),
+                         timeout=60)
+
+    def test_a_commit_with_no_preedit_sends_it_once(self):
+        """Four syllables in, four syllables out. Before the fix this was 하 · 하이 · 하이하 · 하이하이
+        — the textarea going out whole, every time, ten characters for four."""
+        r = self.drive("""for (const syl of ['하','이','하','이']) {
+             ta.dispatchEvent(new KeyboardEvent('keydown',{key:'Unidentified',keyCode:229,bubbles:true}));
+             ta.value += syl;
+             ta.dispatchEvent(mkInput('insertFromComposition', syl));
+             ta.dispatchEvent(new CompositionEvent('compositionend',{data:syl,bubbles:true}));
+             await sleep(90); }""")
+        self.assertEqual(r["joined"], "하이하이",
+                         "the composed text went out more than once")
+        self.assertEqual(r["ta"], "", "the helper textarea was left filling up")
+
+    def test_a_real_composition_is_left_alone(self):
+        """The end that *does* have a start still belongs to xterm. Dropping ends indiscriminately
+        would break every IME on every other platform, which is most of them."""
+        r = self.drive("""for (const syl of ['한','글']) {
+             ta.dispatchEvent(new CompositionEvent('compositionstart',{data:'',bubbles:true}));
+             ta.value = syl;
+             ta.dispatchEvent(new CompositionEvent('compositionupdate',{data:syl,bubbles:true}));
+             ta.dispatchEvent(mkInput('insertCompositionText', syl));
+             ta.dispatchEvent(new CompositionEvent('compositionend',{data:syl,bubbles:true}));
+             await sleep(90); ta.value=''; }""")
+        self.assertEqual(r["joined"], "한글")
+
+    def test_plain_typing_is_untouched(self):
+        r = self.drive("t.term.input('abc'); await sleep(150);")
+        self.assertEqual(r["joined"], "abc")
+
+
 if __name__ == "__main__":
     unittest.main()

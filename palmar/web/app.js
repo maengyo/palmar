@@ -553,6 +553,31 @@ class Tile {
       // If focus leaves with a key held down, keyup never gets here — clear on the way out too.
       ta.addEventListener('blur', () => { this.composing = false; this.kdSeen = false; this.imeFlush(); });
     }
+    // ── a compositionend for a composition that never started ───────────
+    // **WebKit ends compositions it never began.** `Editor::confirmComposition()` dispatches
+    // `compositionend` unconditionally, with no guard on whether one was open (WebKit bug 84394,
+    // ASSIGNED since 2012, reported against ibus-hangul). Normally you never see it, because a
+    // preedit opened the composition first. Under wry it opens none: wry calls
+    // `set_enable_preedit(false)` unconditionally (webkitgtk/mod.rs:360, added for fcitx), ibus
+    // then drops IBUS_CAP_PREEDIT_TEXT, and the preedit goes to the ibus panel instead of to the
+    // page — so `compositionstart` and `compositionupdate` never arrive and only the end does.
+    //
+    // xterm takes that end as "finish the composition you are in", and having never been told where
+    // it began, sends **the whole helper textarea** — which xterm only empties on Enter or Ctrl-C.
+    // Measured: typing 하이하이 sent 하 · 하이 · 하이하 · 하이하이, ten characters for four typed,
+    // which is exactly what was reported from WSLg (2026-09-11).
+    //
+    // So an end with no start is dropped here, before xterm sees it. What remains is xterm's own
+    // keyCode-229 path, which computes the one-syllable difference correctly on its own. **The
+    // parent, in capture**, for the same reason as the input handler below: on the textarea itself
+    // xterm's listener was registered first and would run first.
+    this.compOpen = false;
+    this.termEl.addEventListener('compositionstart', () => { this.compOpen = true; }, true);
+    this.termEl.addEventListener('compositionend', (ev) => {
+      if (!this.compOpen) { ev.stopPropagation(); return; }
+      this.compOpen = false;
+    }, true);
+
     // ── browsers that emit no composition events (Safari) ───────────────
     // Measured (2026-09-09, Safari 18.6, Korean): `compositionstart`·`compositionend` **never arrive at all.**
     // It speaks only through `input` — `insertText` starts a new character and `insertReplacementText` swaps out
@@ -564,7 +589,7 @@ class Tile {
     this.termEl.addEventListener('input', (ev) => {
       if (this.sawComposition) return;        // a browser that uses composition events — leave it to xterm
       const it = ev.inputType;
-      if (it !== 'insertText' && it !== 'insertReplacementText') return;
+      if (it !== 'insertText' && it !== 'insertReplacementText' && it !== 'insertFromComposition') return;
       // **Tell a plain key from an IME key by their order.** A plain key goes keydown → (xterm sends) → input,
       // an IME key goes input → keydown (measured: space fires keydown first, Korean fires input first).
       // A keydown with keyCode 229 does not raise the flag, so no flag here means IME.
@@ -573,6 +598,19 @@ class Tile {
       if (plain) return;                      // xterm already sent it on keydown
       ev.stopPropagation();                   // block xterm's _inputEvent — we send it
       const d = ev.data || '';
+      if (it === 'insertFromComposition') {
+        // **Already final.** This is what WebKitGTK sends for an IME commit when there is no preedit
+        // (wry turns preedit off), so unlike the two below there is nothing still being composed and
+        // nothing to hold back. Measured on WSLg: without this the event fell through, nothing here
+        // sent it, and the only thing that did was xterm finishing a composition it never started —
+        // which sent the whole textarea (see the compositionend note above).
+        if (this.imePending) { this.sendText(this.imePending); this.imePending = ''; }
+        this.sendText(d);
+        // WebKitGTK never empties the helper textarea, and anything that reads its value later reads
+        // a buffer that only grows. Nothing should be left behind in it.
+        if (ev.target && ev.target.value) ev.target.value = '';
+        return;
+      }
       if (it === 'insertReplacementText') {
         this.imePending = d;                  // the character being composed changed — do not send yet
       } else {
