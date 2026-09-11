@@ -1089,7 +1089,7 @@ $('.esc').addEventListener('click', () => { if (maxed) setMax(maxed, false); });
 addEventListener('resize', () => {
   // When the window narrows, the current rail widths can push the canvas below its minimum — clamp again here.
   // **Fix only the widths and do the cleanup once below** — using setRail would repaint the minimap three times.
-  railPut('l', railW('l')); railPut('r', railW('r'));
+  railSync('l'); railSync('r');
   if (maxed) maxed.refit(); renderMinimap(); refreshOff();
 });
 
@@ -1122,6 +1122,16 @@ function railW(side) {
 function railPut(side, px) {   // fixes the width only. No cleanup
   document.documentElement.style.setProperty('--rail-' + side, railClamp(side, px) + 'px');
 }
+//: **The one place that decides a rail's width, folding included.** railClamp floors at RAIL_MIN, so
+//: anything that re-applies a folded rail's own width springs it back to 180px while the fold state
+//: still says folded — the rail looks open, pressing fold does nothing, and you have to unfold it
+//: first. That is what a window resize did (reported 2026-09-11: minimise and restore, and the rail
+//: is back without being back). Folding is a 0 that has to be set past the clamp, so every path that
+//: sets a width has to come through here.
+function railSync(side) {
+  if (railFolded[side]) document.documentElement.style.setProperty('--rail-' + side, '0px');
+  else railPut(side, railW(side));
+}
 function setRail(side, px, save) {
   railPut(side, px);
   if (save !== false) saveRails();
@@ -1144,9 +1154,9 @@ const preFold = { l: RAIL_DEF.l, r: RAIL_DEF.r };
 function applyFold(side) {
   const folded = railFolded[side];
   document.body.classList.toggle('fold-' + side, folded);
-  // **0, past the clamp.** railPut runs railClamp, which floors the width at RAIL_MIN (~180px), so
-  // folding through it would leave a 180px empty strip. A folded rail is genuinely 0 — set it directly.
-  if (folded) document.documentElement.style.setProperty('--rail-' + side, '0px');
+  // **0, past the clamp** when folded — railClamp floors at RAIL_MIN, so folding through it would
+  // leave a 180px empty strip. Coming back, the remembered width rather than the current 0.
+  if (folded) railSync(side);
   else railPut(side, preFold[side]);
   const fold = $('#fold-' + side), open = $('#open-' + side);
   if (open) open.hidden = !folded;

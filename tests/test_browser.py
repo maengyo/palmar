@@ -275,6 +275,77 @@ class RailFold(unittest.TestCase):
               return e.hidden && getComputedStyle(e).display!=='none';})()""" % which)
             self.assertNotEqual(shown, True, "#%s is marked hidden and still displayed" % which)
 
+    def test_a_folded_rail_is_really_zero(self):
+        """The grid column goes to 0 but the rail kept its 1px divider, which is both a line marking
+        the edge of a rail that is not there and — at the window's edge — enough to raise a
+        horizontal scrollbar."""
+        self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
+        time.sleep(0.3)
+        self.b.ev("document.getElementById('fold-l').click(); document.getElementById('fold-r').click()")
+        time.sleep(0.4)
+        for side, sel in (("left", ".rail.left"), ("right", ".rail.right")):
+            w = self.b.ev("document.querySelector('%s').getBoundingClientRect().width" % sel)
+            self.assertEqual(w, 0, "the folded %s rail is %spx wide, not 0" % (side, w))
+
+    def test_folding_takes_the_top_bar_with_it(self):
+        """The top bar's outer columns are the rails' widths, so the two line up down the screen —
+        **but what sits in them up here does not fold.** Tied to a 0 column the logo was clipped to
+        38px and the notify/theme/web/help buttons were laid out past the right edge of the window
+        (reported 2026-09-11 as the screen not fitting)."""
+        def col(sel):
+            return self.b.ev("""(()=>{const e=document.querySelector('%s');
+              const r=e.getBoundingClientRect();
+              return {w:Math.round(r.width), clipped:e.scrollWidth > Math.ceil(r.width)+1,
+                      offscreen: r.right > innerWidth + 1};})()""" % sel)
+
+        self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
+        time.sleep(0.3)
+        self.b.ev("document.getElementById('fold-l').click(); document.getElementById('fold-r').click()")
+        time.sleep(0.4)
+        left, right = col(".top .l"), col(".top .r")
+        self.assertFalse(left["clipped"], "the logo is cut off when the left rail is folded")
+        self.assertFalse(right["offscreen"], "the top-right buttons are off the screen")
+        self.assertFalse(right["clipped"])
+
+    def test_folding_can_only_reduce_sideways_scrolling(self):
+        """Folding is asked for to get room. It used to leave the page's minimum width alone, so a
+        window narrower than that went on scrolling sideways however much was folded away."""
+        def scroll_w():
+            return self.b.ev("document.documentElement.scrollWidth")
+        self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
+        time.sleep(0.3)
+        wide = scroll_w()
+        self.b.ev("document.getElementById('fold-l').click()")
+        time.sleep(0.4)
+        one = scroll_w()
+        self.b.ev("document.getElementById('fold-r').click()")
+        time.sleep(0.4)
+        both = scroll_w()
+        self.assertLessEqual(one, wide, "folding a rail made the page wider")
+        self.assertLessEqual(both, one, "folding the second rail made the page wider")
+
+    def test_a_fold_survives_the_window_changing_size(self):
+        """**The clamp floors a rail at RAIL_MIN**, so anything that re-applied a folded rail's own
+        width sprang it back to 180px while the state still said folded: the rail looked open,
+        pressing fold did nothing, and it had to be unfolded first. That is what a window resize did
+        — minimise and restore, and the rail is back without being back (reported 2026-09-11)."""
+        self.b.ev("document.getElementById('open-l').click()")
+        time.sleep(0.3)
+        self.b.ev("document.getElementById('fold-l').click()")
+        time.sleep(0.4)
+        self.assertEqual(self.railvar("l"), "0px")
+        try:
+            self.b.ws.call("Emulation.setDeviceMetricsOverride",
+                           {"width": 760, "height": 560, "deviceScaleFactor": 1, "mobile": False})
+            time.sleep(0.5)
+            self.assertEqual(self.railvar("l"), "0px", "a resize unfolded it behind the state")
+        finally:
+            self.b.ws.call("Emulation.clearDeviceMetricsOverride")
+            time.sleep(0.5)
+        self.assertEqual(self.railvar("l"), "0px", "restoring the window unfolded it behind the state")
+        w = self.b.ev("document.querySelector('.rail.left').getBoundingClientRect().width")
+        self.assertEqual(w, 0, "it is %spx wide while the state says folded" % w)
+
     def test_a_fold_survives_a_reload(self):
         self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
         time.sleep(0.2)

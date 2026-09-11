@@ -172,7 +172,14 @@ body {
 
 /* ── window ─────────────────────────────────── */
 .win {
-  position: relative; min-width: 1120px; height: 100vh; min-height: 680px;
+  /* **The floor follows the rails.** 1120px was a fixed minimum that assumed both rails were always
+     there, so folding one bought room on screen and the window still scrolled sideways below 1120
+     (reported 2026-09-11). 632px is what is left of that number once the two default rails are
+     taken out of it, so with nothing folded this is exactly 1120 as before — and folding now
+     actually lowers it. The min() keeps it from ever rising above the old value when someone drags
+     a rail wide, so this can only remove horizontal scrolling, never add it. */
+  position: relative; height: 100vh; min-height: 680px;
+  min-width: min(1120px, calc(var(--rail-l) + var(--rail-r) + 632px));
   display: grid; grid-template-rows: 44px 1fr 26px;
   background:
     radial-gradient(1200px 700px at 8% -10%, var(--atmo-1), transparent 60%),
@@ -182,7 +189,13 @@ body {
 
 /* ── top bar ────────────────────────────────── */
 .top {
-  display: grid; grid-template-columns: var(--rail-l) 1fr var(--rail-r); align-items: center;
+  /* The top bar's outer columns are the rails' widths so the two line up down the screen. **A folded
+     rail is 0, and what sits in those columns up here does not fold with it** — the logo on the left,
+     the notify/theme/web/help buttons on the right. Tied to a 0 column the logo was clipped to 38px
+     and the buttons were laid out past the right edge of the window entirely (reported 2026-09-11 as
+     the screen not fitting). Folded, the column takes its content's width instead. */
+  display: grid; align-items: center;
+  grid-template-columns: var(--top-l, var(--rail-l)) 1fr var(--top-r, var(--rail-r));
   border-bottom: 1px solid var(--line); background: var(--topbar);
   -webkit-app-region: drag;
 }
@@ -339,6 +352,13 @@ body.rz-drag { cursor: col-resize; user-select: none; }
    and the canvas would take a rail's slot (measured: cv width went to 0). It stays in place at 0
    width; overflow:hidden on .rail keeps its contents from spilling. Only the grip and the now-
    pointless fold button are hidden, and a slim tab is put in the gap to bring it back. */
+body.fold-l { --top-l: auto; }
+body.fold-r { --top-r: auto; }
+/* **A folded rail is 0, border included.** The grid column goes to 0 but the rail keeps its 1px
+   divider, so the element is 1px wide at the very edge of the window — enough for a horizontal
+   scrollbar, and the divider marks the edge of a rail that is not there. */
+body.fold-l .rail.left  { border-right: 0; }
+body.fold-r .rail.right { border-left: 0; }
 body.fold-l .rz.l,   body.fold-r .rz.r   { display: none; }
 body.fold-l .rail.left  .rail-fold,
 body.fold-r .rail.right .rail-fold       { display: none; }
