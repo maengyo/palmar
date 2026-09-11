@@ -402,5 +402,48 @@ class GlyphsTheMachineMayNotHave(unittest.TestCase):
         self.assertEqual(bad, [], "chrome that needs a CJK font to draw:\n  " + "\n  ".join(bad))
 
 
+class TheFontStackOrder(unittest.TestCase):
+    """`--mono` is the whole UI's font, not just the terminal's — body, tabs, buttons, the lot.
+
+    **On Linux none of the Latin faces named before the generic exist**, so whichever family is
+    named next becomes the face for *everything*, Latin included. Naming the Korean families there
+    meant that installing D2Coding silently replaced the UI typeface and moved the layout with it
+    (regression, 2026-09-11; measured with CDP's getPlatformFontsForNode: Latin resolved to the
+    Korean face). The generic has to come first so Latin keeps coming from the system monospace,
+    and Hangul — which that face does not have — carries on down the list per character.
+
+    A string test rather than a browser one: the rule is about the order of names, it holds on every
+    machine, and a machine that happens to have Menlo cannot see the difference at all."""
+
+    #: Families that exist to supply CJK glyphs. Every one of them belongs after the generic.
+    CJK_FAMILIES = ("D2Coding", "Nanum", "Noto Sans Mono CJK", "Noto Sans CJK", "Noto Sans KR",
+                    "Malgun", "Apple SD Gothic")
+
+    def mono(self):
+        css = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "palmar", "web", "style.css")
+        with open(css, encoding="utf-8") as fh:
+            text = fh.read()
+        m = re.search(r"--mono:\s*(.*?);", text, re.S)
+        self.assertIsNotNone(m, "--mono is not in style.css any more")
+        return " ".join(m.group(1).split())
+
+    def test_the_generic_comes_before_the_cjk_families(self):
+        stack = self.mono()
+        # Split on commas and compare whole family names, so the bare generic `monospace` is not
+        # confused with the quoted "Noto Sans Mono CJK KR" that contains the same letters.
+        families = [f.strip() for f in stack.split(",")]
+        try:
+            generic = families.index("monospace")
+        except ValueError:
+            self.fail("`monospace` is not a family of its own in --mono: " + stack)
+        for i, fam in enumerate(families):
+            if any(k.lower() in fam.lower() for k in self.CJK_FAMILIES):
+                self.assertGreater(
+                    i, generic,
+                    "%s is named before the generic, so on Linux it becomes the font for Latin too "
+                    "and the whole UI changes shape. Stack: %s" % (fam, stack))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -66,17 +66,24 @@
      machine that has one is not left depending on fontconfig guessing well — left to itself
      fontconfig may pick a proportional face, which in a terminal is the wrong shape.
 
-     **The fixed-width Korean faces come first** (D2Coding, NanumGothicCoding): they are built for
-     code, where Noto Sans CJK is a text face. Columns stay aligned either way — xterm.js sizes
-     cells from the first family, which is always present, and lays Hangul across two of them — so
-     the worst a fallback costs is a syllable sitting narrow in its pair, not a broken grid.
+     **`monospace` comes before them, and that placement is the whole point.** On Linux none of the
+     four names before it exist, so whatever is named next becomes the face for *everything* —
+     including Latin. Putting the Korean families there made D2Coding the UI font the moment someone
+     installed it, and the whole layout moved with it (regression, 2026-09-11). The generic goes
+     first so Latin keeps coming from the system's monospace, and Hangul — which that face does not
+     have — carries on down this list per character, which is how CSS font matching works.
+
+     Among the Korean faces, the fixed-width ones lead (D2Coding, NanumGothicCoding): they are built
+     for code, where Noto Sans CJK is a text face. Columns stay aligned either way — xterm.js sizes
+     cells from the first family that resolves and lays Hangul across two of them — so the worst a
+     fallback costs is a syllable sitting narrow in its pair, not a broken grid.
 
      A machine with none still needs one installed. On Debian/Ubuntu the small right answer for a
      terminal is fonts-naver-d2coding (~8 MB); fonts-noto-cjk (~89 MB) covers four languages you
      probably do not need. */
-  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace,
           "D2Coding", "NanumGothicCoding", "Noto Sans Mono CJK KR", "Noto Sans CJK KR",
-          "Malgun Gothic", "Apple SD Gothic Neo", monospace;
+          "Malgun Gothic", "Apple SD Gothic Neo";
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
