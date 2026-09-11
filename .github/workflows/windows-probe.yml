@@ -44,3 +44,9 @@ jobs:
 
       - name: probe
         run: python dev\win-probe.py
+
+      # **The only machine that can say whether palmar/conpty.py works.** It was written on a Mac
+      # from documentation; this runs it. The three byte sections are the point — they are exactly
+      # what pywinpty failed, and failing them here would mean writing it achieved nothing.
+      - name: conpty
+        run: python dev\conpty-check.py
