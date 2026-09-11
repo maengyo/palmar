@@ -61,7 +61,11 @@ class Page(unittest.TestCase):
 
     def test_a_quiet_worker_says_so_on_its_row(self):
         """The Attention list's one unique signal — a pane that reads 'working' but has printed
-        nothing for STUCK_S — moved onto the pane's row in the left list (msgText)."""
+        nothing for STUCK_S — moved onto the pane's row in the left list (msgText).
+
+        **This covers the drawing, not the feed.** It fills lastOutAt by hand, so it passed for a day
+        while the daemon sent no `quiet` at all and the note could never appear in real use. What
+        the daemon actually sends is tests/test_daemon.py::WhatProtocolPromises."""
         sid = self.open_one()
 
         def row_msg(quiet_secs):

@@ -735,5 +735,43 @@ class TheAddress(unittest.TestCase):
             self.assertEqual(d.raw("GET", "/api/address/open")[0], 405)
 
 
+class WhatProtocolPromises(unittest.TestCase):
+    """Fields `docs/protocol.md` declares on a session, checked against what actually leaves.
+
+    `since` and `quiet` were in the contract and in the browser's code and **never once sent**. The
+    browser's only use of `quiet` is to seed the map its "working, but printing nothing" note reads,
+    so with the field missing that note could not appear however long a pane sat silent — and the
+    browser test covering it passed, because it filled that map by hand (found 2026-09-11, auditing
+    the roadmap). A test that drives a real daemon is what closes the gap."""
+
+    def test_a_session_carries_since_and_quiet(self):
+        with Daemon() as d:
+            s = d.open_pane(name="contract")
+            self.assertIn("since", s, "protocol.md promises `since` and it is not sent")
+            self.assertIn("quiet", s, "protocol.md promises `quiet` and it is not sent")
+            self.assertIsInstance(s["since"], float)
+            # created and since are both wall clock, so they are comparable — the browser sorts
+            # what is waiting against Date.now(), and a monotonic value there would be nonsense.
+            self.assertLess(abs(s["since"] - s["created"]), 5.0,
+                            "`since` is not on the same clock as `created`")
+
+    def test_quiet_is_how_long_since_it_last_printed(self):
+        with Daemon() as d:
+            s = d.open_pane(name="silent")
+            time.sleep(2.5)
+            later = [x for x in d.panes() if x["id"] == s["id"]][0]
+            self.assertIsNotNone(later["quiet"], "a pane that has printed keeps no quiet time")
+            self.assertGreater(later["quiet"], 1.5, "quiet does not grow while nothing is printed")
+            self.assertLess(later["quiet"], 20.0)
+
+    def test_a_pane_that_has_printed_nothing_has_no_quiet_time(self):
+        """null, not 0. A pane that just started is not one that has gone quiet, and the browser
+        skips the field rather than reading a zero as "silent since forever"."""
+        with Daemon() as d:
+            s = d.open_pane(name="fresh")
+            # measured at the moment of creation, before the shell's first prompt reaches the ring
+            self.assertIn(s["quiet"], (None,), "quiet was %r on a pane that has printed nothing" % s["quiet"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -618,6 +618,10 @@ class Session:
         #: A bare zsh on macOS does not set the title, so it never showed up there).
         self.title_spun = False
         self.logged = "unknown"      # the status last written to the activity log (registry.changed reads it)
+        #: When the status now showing began (wall clock, like `created`). protocol.md sorts what is
+        #: waiting by it — a pane that has waited twenty minutes and one that just asked are not the
+        #: same job — so it has to leave the daemon, and for a long time it did not.
+        self.status_since = time.time()
         #: When a person last typed into this pane from a browser (monotonic, 0 = never). Used only
         #: to tell an approval the person gave from one something else answered — palmar shows "this
         #: pane wants you", so when the wait ends it should not claim you answered if you did not.
@@ -720,6 +724,15 @@ class Session:
             # True when this pane's last wait ended with nobody typing here (#14). The browser reads
             # it so the live row says "answered — not here" instead of claiming you finished it.
             "answered_elsewhere": self.answered_elsewhere,
+            # **Both of these are in protocol.md and neither was ever sent.** The browser reads
+            # `since` to put the longest wait on top, and `quiet` to say a pane claims to be working
+            # while printing nothing — and with the field absent that note could never once appear,
+            # however long a pane sat silent (found auditing the roadmap, 2026-09-11).
+            "since": self.status_since,
+            # Seconds since bytes last came out. null while a pane has printed nothing at all: that
+            # is a pane that just started, not one that has gone quiet.
+            "quiet": (round(max(0.0, time.monotonic() - self.last_out), 1)
+                      if self.last_out else None),
         }
 
     # ── PTY → browser (spike D) ──────────────────────────────────
@@ -1370,6 +1383,7 @@ class Registry:
         seven call sites silently loses that event — so it goes where it cannot be missed."""
         st = s.eff_status()
         if st != s.logged:
+            s.status_since = time.time()
             # **A wait that ends with nobody having typed here is not an approval palmar can vouch
             # for.** It might be you in another window, an agent in another pane holding the token,
             # or the command finishing on its own. palmar knows every byte it wrote to this pty
