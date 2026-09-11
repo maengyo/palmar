@@ -155,6 +155,10 @@ kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, _P(wintypes.DWORD)]
 kernel32.GetExitCodeProcess.restype = wintypes.BOOL
 kernel32.CancelIoEx.argtypes = [wintypes.HANDLE, LPVOID]
 kernel32.CancelIoEx.restype = wintypes.BOOL
+kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
+kernel32.GetStdHandle.restype = wintypes.HANDLE
+kernel32.SetHandleInformation.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD]
+kernel32.SetHandleInformation.restype = wintypes.BOOL
 
 # Absent before Windows 10 1809, so `available()` below can still answer instead of crashing here.
 if hasattr(kernel32, "CreatePseudoConsole"):

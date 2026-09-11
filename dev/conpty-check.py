@@ -160,7 +160,8 @@ def _variants():
     import threading
     k = C.kernel32
 
-    def attempt(label, lp_value, inherit, use_std, job=False, uni_env=False):
+    def attempt(label, lp_value, inherit, use_std, job=False, uni_env=False,
+                via_stdout=False, hide_std=False):
         sa = C.SECURITY_ATTRIBUTES(ctypes.sizeof(C.SECURITY_ATTRIBUTES), None, True)
         in_r, in_w = wintypes.HANDLE(), wintypes.HANDLE()
         out_r, out_w = wintypes.HANDLE(), wintypes.HANDLE()
@@ -191,13 +192,19 @@ def _variants():
             si.StartupInfo.hStdInput = in_r
             si.StartupInfo.hStdOutput = out_w
             si.StartupInfo.hStdError = out_w
-        marker = "MARK" + label.replace(" ", "").replace("+", "").upper()[:10]
-        path = script(marker + ".py", [
-            "import sys",
-            "f = open('CONOUT$', 'w')",
-            "f.write('%s' + chr(10))" % marker,
-            "f.flush()",
-        ])
+        marker = "MARK" + "".join(c for c in label.upper() if c.isalnum())[:10]
+        path = script(marker + ".py", (
+            ["import sys", "sys.stdout.write('%s' + chr(10))" % marker, "sys.stdout.flush()"]
+            if via_stdout else
+            ["import sys", "f = open('CONOUT$', 'w')", "f.write('%s' + chr(10))" % marker, "f.flush()"]))
+        # **Our own standard handles are inheritable on a CI runner**, and a child with no
+        # STARTF_USESTDHANDLES takes them — so a normal program's stdout bypasses the console it is
+        # attached to. Marking them non-inheritable should push it back onto the console.
+        if hide_std:
+            for std in (-10, -11, -12):
+                h = k.GetStdHandle(std)
+                if h and h != wintypes.HANDLE(-1).value:
+                    k.SetHandleInformation(h, 0x00000001, 0)      # HANDLE_FLAG_INHERIT off
         pi = C.PROCESS_INFORMATION()
         # the two things ConPty.spawn does that the plain variants do not
         hjob = None
@@ -253,14 +260,13 @@ def _variants():
         return won
 
     wins = []
-    for label, lp, inherit, use_std, job, uni in (
-            ("plain (known good)", "handle", False, False, False, False),
-            ("+ job object", "handle", False, False, True, False),
-            ("+ unicode env flag", "handle", False, False, False, True),
-            ("+ both (= spawn)", "handle", False, False, True, True),
+    for label, lp, inherit, use_std, job, uni, via, hide in (
+            ("conout (known good)", "handle", False, False, True, True, False, False),
+            ("stdout, as is", "handle", False, False, True, True, True, False),
+            ("stdout, std not inherit", "handle", False, False, True, True, True, True),
     ):
         try:
-            if attempt(label, lp, inherit, use_std, job, uni):
+            if attempt(label, lp, inherit, use_std, job, uni, via, hide):
                 wins.append(label)
         except Exception as e:
             say(NO, "%-22s raised %s: %s" % (label, type(e).__name__, str(e)[:50]))
