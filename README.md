@@ -147,8 +147,9 @@ Run `palmar` while the window is already open and it opens the page on that same
 refusing. A terminal opened in either shows up in the other, live. Closing either one leaves the
 daemon — and your shells — running.
 
-The window has been run on macOS. The WSLg side is written and **not yet measured** — see
-`docs/decisions.md`.
+The window has been run on macOS and, since 2026-09-11, on WSLg. Setting WSLg up for the first
+time — fonts, the input method, and what the failures look like — is written out in
+[`docs/wslg.md`](docs/wslg.md) (Korean).
 
 ## Status lights, without configuring anything
 

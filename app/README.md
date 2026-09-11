@@ -74,6 +74,11 @@ fallback is run from somewhere the package can actually be imported.
 
 ### On WSL, for WSLg
 
+> **A step-by-step walkthrough in Korean is at [`docs/wslg.md`](../docs/wslg.md)** — first-time
+> setup from `wsl --update` through fonts, the input method, and what to do when it does not work.
+> What follows here is the short version.
+
+
 WSLg draws Linux GUI programs on the Windows desktop, so this binary — built **inside** WSL — is a
 normal Windows-looking window, the same way Obsidian is. The daemon is already POSIX and runs in
 WSL unchanged.
