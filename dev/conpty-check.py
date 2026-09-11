@@ -145,6 +145,113 @@ def run(lines, secs=20.0, rows=50, cols=200, name="child.py", until=None):
         p.close()
 
 
+@guarded("variants — five spellings of the same spawn, one run")
+def _variants():
+    """**Batching the hypotheses.** Every call returns TRUE and the child still joins somebody
+    else's console, so the fault is in how one of these arguments is being marshalled. Testing them
+    one per CI round is what made this expensive; here they all run in one.
+
+    Each variant starts a child that writes a marker to CONOUT$ — the console it is actually in —
+    and we read our pipe. Whichever marker arrives names the spelling that works."""
+    import ctypes
+    import ctypes.wintypes as wintypes
+    from ctypes import byref
+    from palmar import conpty as C
+    import threading
+    k = C.kernel32
+
+    def attempt(label, lp_value, inherit, use_std):
+        sa = C.SECURITY_ATTRIBUTES(ctypes.sizeof(C.SECURITY_ATTRIBUTES), None, True)
+        in_r, in_w = wintypes.HANDLE(), wintypes.HANDLE()
+        out_r, out_w = wintypes.HANDLE(), wintypes.HANDLE()
+        k.CreatePipe(byref(in_r), byref(in_w), byref(sa), 0)
+        k.CreatePipe(byref(out_r), byref(out_w), byref(sa), 0)
+        hpc = wintypes.HANDLE()
+        try:
+            k.CreatePseudoConsole(C.COORD(133, 37), in_r, out_w, 0, byref(hpc))
+        except OSError as e:
+            say(NO, "%-22s CreatePseudoConsole raised %s" % (label, e))
+            return False
+        need = ctypes.c_size_t(0)
+        k.InitializeProcThreadAttributeList(None, 1, 0, byref(need))
+        buf = (ctypes.c_ubyte * need.value)()
+        si = C.STARTUPINFOEXW()
+        si.StartupInfo.cb = ctypes.sizeof(C.STARTUPINFOEXW)
+        si.lpAttributeList = ctypes.cast(buf, ctypes.c_void_p)
+        k.InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, byref(need))
+        val = {"handle": hpc,
+               "byref": byref(hpc),
+               "value": ctypes.c_void_p(hpc.value)}[lp_value]
+        ok_u = k.UpdateProcThreadAttribute(si.lpAttributeList, 0,
+                                           ctypes.c_size_t(C.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE),
+                                           val, ctypes.c_size_t(ctypes.sizeof(wintypes.HANDLE)),
+                                           None, None)
+        if use_std:
+            si.StartupInfo.dwFlags |= 0x00000100          # STARTF_USESTDHANDLES
+            si.StartupInfo.hStdInput = in_r
+            si.StartupInfo.hStdOutput = out_w
+            si.StartupInfo.hStdError = out_w
+        marker = "MARK" + label.replace(" ", "").replace("+", "").upper()[:10]
+        path = script(marker + ".py", [
+            "import sys",
+            "f = open('CONOUT$', 'w')",
+            "f.write('%s' + chr(10))" % marker,
+            "f.flush()",
+        ])
+        pi = C.PROCESS_INFORMATION()
+        ok_c = k.CreateProcessW(None,
+                                ctypes.create_unicode_buffer('"%s" -u "%s"' % (sys.executable, path)),
+                                None, None, bool(inherit), C.EXTENDED_STARTUPINFO_PRESENT,
+                                None, None, byref(si), byref(pi))
+        k.CloseHandle(out_w)
+        k.CloseHandle(in_r)
+        out, hit = [], threading.Event()
+
+        def pump():
+            try:
+                while True:
+                    b = (ctypes.c_char * 4096)()
+                    g = wintypes.DWORD(0)
+                    if not k.ReadFile(out_r, b, 4096, byref(g), None) or not g.value:
+                        break
+                    out.append(bytes(b[:g.value]))
+                    if marker.encode() in b"".join(out):
+                        break
+            except Exception:
+                pass
+            finally:
+                hit.set()
+
+        threading.Thread(target=pump, daemon=True).start()
+        hit.wait(6)
+        blob = b"".join(out)
+        won = marker.encode() in blob
+        say(OK if won else NO,
+            "%-22s update=%s create=%s -> %s" % (label, bool(ok_u), bool(ok_c),
+                                                 "**IN OUR CONSOLE**" if won else repr(blob[:38])))
+        k.CancelIoEx(out_r, None)
+        k.CloseHandle(in_w)
+        k.CloseHandle(out_r)
+        k.ClosePseudoConsole(hpc)
+        k.CloseHandle(pi.hProcess) if ok_c else None
+        return won
+
+    wins = []
+    for label, lp, inherit, use_std in (
+            ("handle, inherit=0", "handle", False, False),
+            ("handle, inherit=1", "handle", True, False),
+            ("byref, inherit=0", "byref", False, False),
+            ("c_void_p, inherit=0", "value", False, False),
+            ("handle + stdhandles", "handle", True, True),
+    ):
+        try:
+            if attempt(label, lp, inherit, use_std):
+                wins.append(label)
+        except Exception as e:
+            say(NO, "%-22s raised %s: %s" % (label, type(e).__name__, str(e)[:50]))
+    say("    ->", ("works: " + ", ".join(wins)) if wins else "**none of the five worked**")
+
+
 @guarded("spawn, step by step")
 def _steps():
     """Every call's return and the error behind it. Cheaper than guessing from a Mac."""
