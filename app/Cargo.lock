@@ -1240,6 +1240,7 @@ name = "palmar-app"
 version = "0.1.0"
 dependencies = [
  "tao",
+ "webkit2gtk",
  "wry",
 ]
 

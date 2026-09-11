@@ -27,6 +27,14 @@ path = "src/main.rs"
 tao = "0.30"
 wry = "0.45"
 
+# Linux only, and only to undo one line inside wry: it disables the IME preedit unconditionally
+# (webkitgtk/mod.rs:360, "fcitx input editor can anchor at edit cursor position"), which leaves ibus
+# users with no composing syllable on screen. Reaching the setting needs wry's own WebView type, so
+# this must be **the same crate at the same version with the same features wry builds it with** —
+# `=2.0.1` from app/Cargo.lock, `v2_40` from wry's own feature list — or the types do not unify.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "=2.0.1", features = ["v2_40"] }
+
 # A window is not a hot loop. Optimising for size keeps the binary in the same order of magnitude as
 # the thing it replaces a 1.1GB install with.
 [profile.release]

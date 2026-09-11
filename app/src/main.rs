@@ -332,7 +332,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _webview = WebViewBuilder::new(&window).with_url(&url).build()?;
 
     #[cfg(target_os = "linux")]
-    let _webview = {
+    let webview = {
         use tao::platform::unix::WindowExtUnix;
         use wry::WebViewBuilderExtUnix;
         // tao puts a vertical gtk::Box in the window as its only child; wry packs the webview into
@@ -342,6 +342,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("this window has no GTK container to put a webview in")?;
         WebViewBuilder::new_gtk(vbox).with_url(&url).build()?
     };
+
+    // **Put the composing syllable back on screen.** wry turns the IME preedit off for every
+    // webview it builds — added so fcitx's editor could anchor at the cursor — and for ibus that
+    // means the half-formed syllable never reaches the page at all: ibus sends it to its own panel,
+    // and you see nothing until the character is finished. (It is also what made Korean repeat
+    // itself: with no preedit there is no compositionstart, and WebKit still fires compositionend
+    // for the composition it never started — WebKit bug 84394. That half is handled in the page.)
+    //
+    // Only for ibus. fcitx is the case wry disabled it for, and this has no business overruling
+    // that for someone who is not affected.
+    #[cfg(target_os = "linux")]
+    {
+        let im = std::env::var("GTK_IM_MODULE").unwrap_or_default();
+        if im.contains("ibus") {
+            use webkit2gtk::prelude::*;
+            use wry::WebViewExtUnix;
+            if let Some(ctx) = webview.webview().input_method_context() {
+                ctx.set_enable_preedit(true);
+            }
+        }
+    }
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
