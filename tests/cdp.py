@@ -22,15 +22,39 @@ import urllib.request
 CHROME_PATHS = (
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
     "/usr/bin/chromium",
     "/usr/bin/chromium-browser",
+    "/opt/google/chrome/chrome",
+    "/snap/bin/chromium",
 )
+#: Names to look for on PATH when none of the fixed paths hit. A runner image can put it anywhere.
+CHROME_NAMES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
 
 
 def chrome_path():
+    """Where Chrome is, or None.
+
+    **Set `PALMAR_REQUIRE_BROWSER=1` and None becomes an error instead.** Thirty-five tests skip
+    themselves when this returns None, so on a machine that was supposed to have a browser — a CI
+    runner — a silent skip is a green run that proved nothing. CI sets it; a laptop without Chrome
+    does not, and goes on skipping."""
+    chosen = os.environ.get("CHROME") or os.environ.get("CHROME_PATH")
+    if chosen:
+        if os.path.exists(chosen):
+            return chosen
+        raise RuntimeError("CHROME points at %r, which is not there" % chosen)
     for p in CHROME_PATHS:
         if os.path.exists(p):
             return p
+    for name in CHROME_NAMES:
+        found = shutil.which(name)
+        if found:
+            return found
+    if os.environ.get("PALMAR_REQUIRE_BROWSER"):
+        raise RuntimeError(
+            "PALMAR_REQUIRE_BROWSER is set and no Chrome was found. Looked at:\n  "
+            + "\n  ".join(CHROME_PATHS) + "\nand on PATH for: " + ", ".join(CHROME_NAMES))
     return None
 
 

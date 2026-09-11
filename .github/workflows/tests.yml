@@ -1,0 +1,85 @@
+# The 137 tests, run by something other than a person remembering to.
+#
+# They have existed since 2026-09-09 and nothing ran them automatically until now. Twice in one day
+# a test turned out to be passing while proving nothing — a synthetic InputEvent that silently
+# dropped the field under test, and a browser test that hand-filled the very map the daemon was
+# failing to send. A suite nobody runs rots the same way, only quieter.
+#
+# **On every push and every pull request.** The other two workflows here are manual because they
+# cost Windows minutes or build Rust; this is Linux, takes about four minutes, and is the one thing
+# that should never wait to be asked for.
+name: tests
+
+on:
+  push:
+    paths-ignore: ["**.md", "docs/**"]
+  pull_request:
+    paths-ignore: ["**.md", "docs/**"]
+  workflow_dispatch:
+
+jobs:
+  unittest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false          # 3.9 failing should not hide what 3.13 says, or the other way round
+      matrix:
+        # The floor and the ceiling. 3.9 is what macOS ships and what the code claims to run on
+        # (daemon.py refuses to start below it); 3.13 is what a current machine has.
+        python: ["3.9", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # No pip install: palmar is the standard library and a vendored xterm.js, and the tests are
+      # unittest. If this step ever needs to grow, something has gone wrong with that promise.
+      - name: what is here
+        run: |
+          set -eux
+          python --version
+          test -z "$(ls requirements*.txt 2>/dev/null)" || (echo "a requirements file appeared" && exit 1)
+
+      # Chrome drives the 35 browser tests over the DevTools protocol. The runner image ships one;
+      # this proves which, because the alternative is 35 tests skipping themselves in silence.
+      - name: which chrome
+        run: |
+          set -eux
+          which google-chrome || which chromium || true
+          google-chrome --version || chromium --version
+
+      - name: the tests
+        env:
+          # Turns "no Chrome, skip 35 tests" into a failure. On a runner that is a broken image,
+          # not a machine without a browser.
+          PALMAR_REQUIRE_BROWSER: "1"
+        run: |
+          set -o pipefail
+          python -m unittest -v \
+            tests.test_pure tests.test_app tests.test_daemon tests.test_install tests.test_browser \
+            2>&1 | tee /tmp/tests.log
+
+      # **A green run that skipped everything is the failure this workflow exists to prevent**, so
+      # the count is asserted rather than trusted. Read from the run above rather than run again —
+      # the suite takes about four minutes and there is no reason to pay for it twice.
+      # test_app's `cargo check` is the one expected skip: no Rust in this job, and
+      # .github/workflows/app-linux.yml builds that half.
+      - name: how many actually ran
+        run: |
+          python - <<'PY'
+          import re, sys
+          tail = open("/tmp/tests.log", encoding="utf-8", errors="replace").read()
+          m = re.search(r"^Ran (\d+) tests", tail, re.M)
+          if not m:
+              sys.exit("could not find a test count in the output")
+          ran = int(m.group(1))
+          skipped = int((re.search(r"skipped=(\d+)", tail) or ["", "0"])[1])
+          print("ran %d, skipped %d" % (ran, skipped))
+          if ran < 130:
+              sys.exit("only %d tests ran; the suite is about 137" % ran)
+          if skipped > 2:
+              sys.exit("%d tests skipped; only cargo's should be" % skipped)
+          PY
