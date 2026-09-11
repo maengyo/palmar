@@ -328,5 +328,65 @@ class RestoreCard(unittest.TestCase):
                 self.assertEqual(b.ev("window.palmar.tiles.size"), 0)
 
 
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class ResizeGrip(unittest.TestCase):
+    """The corner you drag to resize a window, with a real scrollbar beside it.
+
+    **This class turns scrollbars back on.** Every other test here runs Chrome with
+    --hide-scrollbars, which forces every scrollbar to zero width — a test about one would prove
+    nothing there, and that is why this bug could not be seen before it was reported.
+
+    What was wrong: the grip is 12px in the very corner, and xterm's viewport puts a 10px scrollbar
+    down the right edge ending in the same place, so missing by a few pixels lands on the scrollbar
+    and the cursor does not change (user report 2026-09-11). Measured here, the drawn box was already
+    winning the hit test inside itself; what was missing was anywhere else to catch."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser(scrollbars=True).start()
+        cls.b.open(cls.d.url)
+        cls.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          await fetch('/api/sessions?token='+T,{method:'POST',
+            headers:{'content-type':'application/json'},
+            body:JSON.stringify({cwd:%s,name:'grip'})});})()""" % json.dumps(cls.d.home))
+        time.sleep(3.5)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def probe(self):
+        return self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+          const v=t.el.querySelector('.xterm-viewport');
+          const g=t.el.querySelector('.grip'); const r=g.getBoundingClientRect();
+          const hit=(x,y)=>{const e=document.elementFromPoint(x,y);
+            return !!(e && (e===g||g.contains(e)||(e.classList&&e.classList.contains('grip'))));};
+          const across=[];
+          for(const fx of [0.15,0.5,0.85]) across.push(hit(r.left+r.width*fx, r.top+r.height*0.5));
+          return {bar: v.offsetWidth - v.clientWidth,
+                  across: across,
+                  left6: hit(r.left-6, r.top+r.height/2),
+                  above6: hit(r.left+r.width/2, r.top-6)};})()""")
+
+    def test_there_really_is_a_scrollbar_to_compete_with(self):
+        """The precondition. Without it the rest of this class is measuring nothing — which is
+        exactly what --hide-scrollbars did."""
+        self.assertGreater(self.probe()["bar"], 0,
+                           "no scrollbar took any width, so this proves nothing")
+
+    def test_the_drawn_corner_is_grabbable(self):
+        self.assertEqual(self.probe()["across"], [True, True, True],
+                         "the scrollbar is taking the hit test inside the grip itself")
+
+    def test_you_can_catch_it_clear_of_the_scrollbar(self):
+        """The part that actually changed. Before the fix a point six pixels to the left of the drawn
+        grip belonged to the terminal, so the whole target was the 12px square in the corner."""
+        p = self.probe()
+        self.assertTrue(p["left6"], "the hit area does not reach left of the scrollbar")
+        self.assertTrue(p["above6"], "the hit area does not reach above the corner")
+
+
 if __name__ == "__main__":
     unittest.main()

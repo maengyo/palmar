@@ -1246,7 +1246,12 @@ cvScroll.addEventListener('pointerdown', (ev) => {
 // carries is one dot, no count and no close button. The order belongs to the daemon (protocol.md "the daemon owns
 // the order"), so a drop sends all of them at once through POST /api/canvases/order — fix them one at a time and
 // two browsers draw different tab strips.
-const addTabEl = el('span', 'ib', '＋');
+// ASCII '+', not the fullwidth '＋' it used to be. That character lives in the CJK
+// Halfwidth/Fullwidth Forms block, so a machine with no CJK font draws it as an empty box —
+// which is what the add-canvas button looked like under WSLg (user report 2026-09-11). The same
+// reason the close button is drawn in CSS rather than set as ✕ (AGENTS.md): chrome should not
+// depend on a glyph that the machine may not have.
+const addTabEl = el('span', 'ib plus', '+');
 addTabEl.id = 'tab-add';
 addTabEl.title = 'new canvas';
 

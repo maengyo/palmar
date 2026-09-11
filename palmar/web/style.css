@@ -58,7 +58,16 @@
   --atmo-2:   rgba(190,140,80,.10);
   --shadow:   0 1px 0 rgba(255,255,255,.6) inset, 0 10px 28px -14px rgba(31,34,41,.28);
   --shadow-2: 0 14px 36px -14px rgba(31,34,41,.35);
-  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* JetBrains Mono is vendored and always present, so it is what xterm.js measures a cell from —
+     the families after it only ever supply glyphs it does not have. **Nothing in the old stack had
+     Hangul**: ui-monospace/SFMono/Menlo/Consolas do not exist on Linux and generic monospace lands
+     on DejaVu Sans Mono, which has none either, so Korean came out as tofu in the window on WSLg
+     (user report 2026-09-11). The CJK families below are named before the generic fallback so a
+     machine that has one is not left depending on fontconfig guessing well. A machine with none
+     still needs one installed — on Debian/Ubuntu that is fonts-noto-cjk. */
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+          "Noto Sans Mono CJK KR", "Noto Sans CJK KR", "Noto Sans KR", "D2Coding",
+          "NanumGothicCoding", "Malgun Gothic", "Apple SD Gothic Neo", monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -336,6 +345,9 @@ body.fold-r .rail.right .rail-fold       { display: none; }
   font-size: 13px; letter-spacing: 0; cursor: pointer;
 }
 .ib:hover { border-color: var(--accent); color: var(--ink); }
+/* An ASCII '+' sits smaller and lighter than the fullwidth '＋' that used to be here, so it is given
+   the weight back rather than the glyph. The line-height keeps it centred in the 22px box. */
+.ib.plus { font-size: 16px; font-weight: 500; line-height: 1; padding-bottom: 2px; }
 .scroll { overflow-y: auto; min-height: 0; flex: 1; }
 /* Thick enough to grab — at 8px the hand kept missing. And **hover is said with color**: the cursor shape
    does not change over a scrollbar, so there is no other way to tell. */
@@ -633,10 +645,30 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 }
 .term .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: var(--ink-3); background-clip: padding-box; }
 .term .xterm .xterm-viewport::-webkit-scrollbar-thumb:active { background: var(--accent); background-clip: padding-box; }
+/* **The target was 12px in the very corner, with a scrollbar against it.** Once a pane has
+   scrollback, xterm's viewport puts a 10px native scrollbar down the right edge ending in this same
+   corner, so missing the grip by a few pixels lands on the scrollbar and the cursor does not change
+   (user report 2026-09-11, WSLg).
+
+   Measured with a real scrollbar (tests/test_browser.py ResizeGrip, Chromium): the drawn 12px box was
+   already winning the hit test *inside itself* — what was missing was anywhere else to catch. So the
+   fix that shows up in the measurement is the bigger hit area, not the stacking.
+
+   The z-index is kept as a defence and is **not** what the measurement showed: the report came from
+   WebKitGTK, which is not the engine tested here, and lifting the grip above the viewport costs
+   nothing. Same family as the rail grips straddling the rail scrollbars, fixed 2026-09-08 — except
+   this one cannot be moved aside, because the corner is where a resize handle belongs. */
 .grip {
   position: absolute; right: 3px; bottom: 3px; width: 12px; height: 12px; opacity: .5; cursor: nwse-resize;
+  z-index: 3;
   background: linear-gradient(135deg, transparent 55%, var(--ink-3) 55%, var(--ink-3) 62%, transparent 62%),
               linear-gradient(135deg, transparent 78%, var(--ink-3) 78%, var(--ink-3) 85%, transparent 85%);
+}
+/* What you can grab is bigger than what is drawn, and it reaches **left of the scrollbar** so there is
+   always somewhere to catch that is not over one. It grows inward, not past the tile edge, because
+   .tile clips at its rounded corner and anything outside would be neither drawn nor hit. */
+.grip::before {
+  content: ""; position: absolute; left: -8px; top: -8px; right: -3px; bottom: -3px; cursor: nwse-resize;
 }
 .toast {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);

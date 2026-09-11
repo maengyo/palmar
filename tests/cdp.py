@@ -122,20 +122,25 @@ class WS:
 class Browser:
     """One headless Chrome and one page. Use it as a context manager."""
 
-    def __init__(self, width=1400, height=860):
+    def __init__(self, width=1400, height=860, scrollbars=False):
         self.port = free_port()
         self.profile = "/tmp/palmar-test-cdp-%d" % self.port
         self.exe = chrome_path()
         self.proc = None
         self.ws = None
         self.size = (width, height)
+        # --hide-scrollbars keeps screenshots clean, and forces every scrollbar to zero width. That
+        # makes anything about a scrollbar — overlapping it, being covered by it — impossible to see
+        # here. A test about one has to turn it off.
+        self.scrollbars = scrollbars
 
     def start(self):
         shutil.rmtree(self.profile, ignore_errors=True)
         self.proc = subprocess.Popen(
             [self.exe, "--headless=new", "--remote-debugging-port=%d" % self.port,
              "--user-data-dir=" + self.profile, "--no-first-run", "--no-default-browser-check",
-             "--disable-gpu", "--hide-scrollbars",
+             "--disable-gpu",
+             *([] if self.scrollbars else ["--hide-scrollbars"]),
              "--window-size=%d,%d" % self.size, "--force-device-scale-factor=1", "about:blank"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         end = time.time() + 40

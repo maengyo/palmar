@@ -150,6 +150,56 @@ else
   note "sudo apt install -y pkg-config build-essential"
 fi
 
+# ── 5. what the window needs beyond starting ───────────────────────────────────────────────
+# Three things that all look like "palmar is broken" from the outside and are none of them palmar:
+# no Hangul font, no input method, and no working GL.
+head2 "5. Korean, and speed"
+
+# **Fonts.** The terminal font is vendored (JetBrains Mono) and has no Hangul; the page falls back
+# per glyph to whatever the system has. With no CJK font anywhere, Korean is tofu.
+if command -v fc-list >/dev/null 2>&1; then
+  HANGUL=$(fc-list :lang=ko 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$HANGUL" -gt 0 ]; then
+    ok "$HANGUL font(s) with Korean glyphs"
+  else
+    bad "no font on this machine has Hangul — Korean will be empty boxes"
+    note "sudo apt install -y fonts-noto-cjk"
+  fi
+else
+  note "fontconfig is not installed, so this cannot be checked here:"
+  note "    sudo apt install -y fontconfig   (then run this again)"
+  note "If Korean shows as boxes, the fix is: sudo apt install -y fonts-noto-cjk"
+fi
+
+# **Input method.** Showing Hangul and typing it are different problems with different fixes.
+say "  \$GTK_IM_MODULE               ${GTK_IM_MODULE:-(unset)}"
+say "  \$XMODIFIERS                  ${XMODIFIERS:-(unset)}"
+if command -v ibus >/dev/null 2>&1; then
+  ok "ibus is installed"
+elif command -v fcitx5 >/dev/null 2>&1; then
+  ok "fcitx5 is installed"
+else
+  note "no input method installed. That is only a problem if you cannot TYPE Korean —"
+  note "showing it is the font above, and the two fail separately."
+fi
+
+# **GL.** The terminal draws through WebGL when it can and falls back to a DOM renderer when it
+# cannot, and that fallback is the slow one. Under WSLg this is where the Mesa noise comes from.
+if [ -d /usr/lib/wsl/lib ]; then
+  ok "/usr/lib/wsl/lib present (WSLg's own GPU libraries)"
+else
+  note "/usr/lib/wsl/lib is absent — there is no WSL GPU stack to use"
+fi
+if command -v glxinfo >/dev/null 2>&1; then
+  REND=$(glxinfo -B 2>/dev/null | grep -i "OpenGL renderer" | cut -d: -f2- | sed 's/^ *//')
+  if [ -n "$REND" ]; then ok "OpenGL renderer: $REND"; else bad "glxinfo could not get a GL context"; fi
+else
+  note "mesa-utils is not installed, so GL cannot be checked here:"
+  note "    sudo apt install -y mesa-utils   (then: glxinfo -B)"
+fi
+note "In the window, the status bar (bottom right) says 'webgl N · dom N'."
+note "**dom means the slow renderer** — that is what laggy typing looks like."
+
 head2 "result"
 if [ "$FAILED" -eq 0 ]; then
   say "  nothing failed. Build and run it:"

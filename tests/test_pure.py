@@ -6,6 +6,7 @@ regression somebody already paid for once; the point of writing it down is that 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -332,6 +333,73 @@ class WhereItOpens(unittest.TestCase):
         would fail silently into DEVNULL."""
         self.assertIsNone(D.browser_argv(URL, platform="linux", kind="", env={}, which=having()))
         self.assertIsNone(D.browser_argv(URL, platform="linux", kind="wsl", env={}, which=having()))
+
+
+class GlyphsTheMachineMayNotHave(unittest.TestCase):
+    """Characters the chrome draws itself, checked against what a bare Linux box can render.
+
+    palmar already refuses to set the close button as `✕` and draws it in CSS instead, because
+    "every font draws it differently" (AGENTS.md). The same reasoning rules out characters a machine
+    may not have **at all**: the add-canvas button was a fullwidth `＋` (U+FF0B), which lives in the
+    CJK Halfwidth/Fullwidth Forms block, and on a WSL install with no CJK font it drew as an empty
+    box (user report 2026-09-11).
+
+    **Hangul is deliberately not on this list.** The IME diagnostic has to print Korean — asking you
+    to type 안녕하십니까 in English would not test anything — and `docs/` section titles are quoted in
+    Korean on purpose, as grep keys (AGENTS.md). What is banned is the fullwidth and ideographic
+    punctuation that gets reached for as an *icon*, which is the mistake that was actually made."""
+
+    #: Blocks a plain Latin font is not expected to cover, and that no piece of chrome needs. Anything
+    #: drawn from here wants CSS or an inline SVG instead of a glyph.
+    RISKY = (
+        (0x2E80, 0x2EFF, "CJK Radicals"),
+        (0x3000, 0x303F, "CJK Symbols and Punctuation"),
+        (0x31C0, 0x31EF, "CJK Strokes"),
+        (0x3200, 0x33FF, "Enclosed CJK / CJK Compatibility"),
+        (0x4E00, 0x9FFF, "CJK Unified Ideographs"),
+        (0xF900, 0xFAFF, "CJK Compatibility Ideographs"),
+        (0xFE30, 0xFE4F, "CJK Compatibility Forms"),
+        (0xFF00, 0xFFEF, "Halfwidth and Fullwidth Forms"),
+    )
+
+    def test_no_chrome_glyph_needs_a_cjk_font(self):
+        web = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "palmar", "web")
+        bad = []
+        for name in ("index.html", "app.js", "style.css"):
+            path = os.path.join(web, name)
+            if not os.path.exists(path):
+                continue
+            html = name.endswith(".html")
+            in_block = False
+            with open(path, encoding="utf-8") as fh:
+                lines = list(enumerate(fh, 1))
+            for n, line in lines:
+                # Comments explain the ban and quote the banned character while doing it; the fix for
+                # this very bug does. Line numbers stay the file's own, so a failure is findable.
+                stripped = line.strip()
+                if html:
+                    if "<!--" in line:
+                        in_block = "-->" not in line[line.index("<!--"):]
+                        continue
+                    if in_block:
+                        in_block = "-->" not in line
+                        continue
+                else:
+                    if in_block:
+                        in_block = "*/" not in line
+                        continue
+                    if stripped.startswith("/*"):
+                        in_block = "*/" not in stripped[2:]
+                        continue
+                    if stripped.startswith("//") or stripped.startswith("*"):
+                        continue
+                    if "//" in line and '"' not in line.split("//")[0] and "'" not in line.split("//")[0]:
+                        line = line.split("//")[0]
+                for ch in line:
+                    for lo, hi, block in self.RISKY:
+                        if lo <= ord(ch) <= hi:
+                            bad.append("%s:%d  %r (U+%04X, %s)" % (name, n, ch, ord(ch), block))
+        self.assertEqual(bad, [], "chrome that needs a CJK font to draw:\n  " + "\n  ".join(bad))
 
 
 if __name__ == "__main__":
