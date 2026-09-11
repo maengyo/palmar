@@ -703,34 +703,6 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .rs-n2 { background: transparent; border-color: var(--line-2); color: var(--ink-2); }
 .rs-n2:hover { color: var(--ink); border-color: var(--ink-3); }
 
-.acts { flex: none; max-height: 168px; overflow-y: auto; padding: 0 8px 6px; }
-.act {
-  display: grid; grid-template-columns: 7px 1fr auto; align-items: baseline; gap: 8px;
-  padding: 4px 6px; border-radius: 5px; cursor: pointer; font-size: 11.5px; color: var(--ink-2);
-}
-.act:hover { background: var(--hover); }
-.act .dot { align-self: center; }
-.act .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.act .wt { color: var(--ink-3); }
-.act .ago { color: var(--ink-3); font-size: 10.5px; font-variant-numeric: tabular-nums; }
-/* The longer it has waited, the darker the text — the place the eye should land on first is the longest wait. */
-.act.aged .ago { color: var(--st-wait); }
-.act.stuck .ago { color: var(--ink-3); }
-/* A small header dividing the clusters. No new color, no new weight. */
-.act-h {
-  padding: 8px 6px 3px; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
-  color: var(--ink-3);
-}
-.act-h:first-child { padding-top: 2px; }
-.acts .quiet { padding: 8px 6px; color: var(--ink-3); }
-/* What happened since you last looked. This is the "while you were away" — it splits new from already seen. */
-.act.fresh { color: var(--ink); }
-.act.fresh .dot { box-shadow: 0 0 0 3px var(--accent-2); }
-/* If that session is gone, pressing it has nowhere to go — so it is left looking that way. */
-.act.dead { opacity: .55; cursor: default; }
-.act.dead:hover { background: transparent; }
-.acts .hint2 { padding: 6px 6px 2px; }
-
 .tree { padding: 2px 8px; font-size: 12px; line-height: 26px; }
 /* A search result row. The same body as a tree row, and with no hierarchy it holds no caret slot open. */
 .row.found { padding-left: 8px; }

@@ -163,17 +163,18 @@
       </main>
     </section>
 
-    <!-- ── right: what happened, then directories ── -->
+    <!-- ── right: directories ── -->
+    <!-- The Attention list was removed 2026-09-11: it showed the waiting and finished panes the left
+         list already shows, so it was that list's subset and no help (user, on first real use). The
+         one thing only it had — "working but gone quiet" — moved into the left list's row text. Its
+         space went to the directory tree, which now browses the whole machine. What happened while
+         you were away lives in the left list (waiting on top) and in notifications. -->
     <aside class="rail right">
-      <!-- The status lights only say "now". This list says what happened while you were away — what
-           finished and what asked, and in what order. The daemon holds it, so it survives a closed browser. -->
       <!-- The offer left by a daemon that stopped. Canvases come back on their own; terminals are
            processes, so opening eight of them is a thing a person presses once. Hidden unless there
            is something to offer, and gone once anything has been opened. -->
       <div class="restore" id="restore" hidden></div>
-      <div class="rh"><button class="rail-fold r" id="fold-r" type="button" title="collapse (⌘\)" aria-label="collapse the right rail">›</button>Attention<span class="sp"></span><span class="n" id="act-new"></span></div>
-      <div class="acts" id="acts"></div>
-      <div class="rh">Directories<span class="sp"></span><span class="ib" id="mkdir" title="new folder">＋</span><span class="ib" id="refresh" title="refresh">↻</span></div>
+      <div class="rh"><button class="rail-fold r" id="fold-r" type="button" title="collapse (⌘\)" aria-label="collapse the right rail">›</button>Directories<span class="sp"></span><span class="ib" id="mkdir" title="new folder">＋</span><span class="ib" id="refresh" title="refresh">↻</span></div>
       <div class="scroll">
         <div class="tree" id="tree"></div>
         <div class="hint2" id="tree-hint">folders only · read when expanded</div>

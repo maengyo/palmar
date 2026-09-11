@@ -45,6 +45,40 @@ class Page(unittest.TestCase):
         page used to send it every ten seconds while the daemon was down (#14)."""
         self.assertIsNone(self.b.ev("typeof KEY === 'undefined' ? null : 'KEY exists'"))
 
+    def test_the_attention_list_is_gone(self):
+        """It was removed 2026-09-11 — it repeated the left list. Nothing named 'Attention' is left
+        in a rail, and the elements it hung on are gone."""
+        self.assertFalse(self.b.ev("!!document.getElementById('acts')"))
+        self.assertFalse(self.b.ev("!!document.getElementById('act-new')"))
+        headers = self.b.ev("[...document.querySelectorAll('.rail .rh')].map(e=>e.textContent).join('|')")
+        self.assertNotIn("Attention", headers)
+
+    def test_the_fold_button_moved_into_the_directories_header(self):
+        """Its old home, the Attention header, is gone — so it lives in the Directories header now,
+        or the right rail can no longer be folded from the rail."""
+        header = self.b.ev("document.getElementById('fold-r').closest('.rh').textContent")
+        self.assertIn("Directories", header)
+
+    def test_a_quiet_worker_says_so_on_its_row(self):
+        """The Attention list's one unique signal — a pane that reads 'working' but has printed
+        nothing for STUCK_S — moved onto the pane's row in the left list (msgText)."""
+        sid = self.open_one()
+
+        def row_msg(quiet_secs):
+            return self.b.ev("""(()=>{
+              const s=window.palmar.sessions.get(%s);
+              s.status='working';
+              window.palmar.lastOutAt.set(%s, Date.now()/1000 - %d);
+              window.palmar.renderList();
+              const m=document.querySelector('.ses[data-id="%s"] .msg');
+              return m?m.textContent:null;})()""" % (json.dumps(sid), json.dumps(sid), quiet_secs, sid))
+
+        long_quiet = row_msg(400)          # STUCK_S is 300
+        self.assertIsNotNone(long_quiet, "the pane has no row in the left list")
+        self.assertIn("quiet", long_quiet, "a working-but-quiet pane did not say so on its row")
+        # A pane that just printed is not quiet — the note must not stick around.
+        self.assertNotIn("quiet", row_msg(5) or "", "a pane that just printed was called quiet")
+
     def test_a_terminal_opens_and_types_korean(self):
         sid = self.open_one()
         self.assertGreaterEqual(self.b.ev("window.palmar.tiles.size"), 1)
@@ -102,9 +136,13 @@ class Shortcuts(unittest.TestCase):
         with Browser() as b:
             b.open(self.d.url, script=script)
             return b.ev("""(()=>{const k=document.getElementById('kmod');
+              const keys=d=>[...d.querySelectorAll('kbd')].map(x=>x.textContent).join('+');
+              // Copy is picked by its marker, not by a row number: rows get inserted (the rail-fold
+              // shortcut did), and a fixed index would then read whatever slid into that slot.
+              const copy=document.querySelector('.keys dt[data-mac-drops-shift]');
               return {search:[...k.querySelectorAll('kbd')].map(x=>x.textContent).join(''),
-                      rows:[...document.querySelectorAll('.keys dt')].slice(0,4)
-                        .map(d=>[...d.querySelectorAll('kbd')].map(x=>x.textContent).join('+'))};})()""")
+                      rows:[...document.querySelectorAll('.keys dt')].slice(0,4).map(keys),
+                      copy:copy?keys(copy):null};})()""")
 
     def test_a_mac_is_told_about_command(self):
         r = self.keys_for("MacIntel")
@@ -114,13 +152,13 @@ class Shortcuts(unittest.TestCase):
         # platform — the rule that turns Ctrl+Shift+C into ⌘C matched on shape and took it away,
         # leaving two identical rows and one of them wrong.
         self.assertEqual(r["rows"][1], "⌘+Shift+⏎")
-        self.assertEqual(r["rows"][3], "⌘+C")
+        self.assertEqual(r["copy"], "⌘+C")
 
     def test_everywhere_else_is_told_about_ctrl(self):
         r = self.keys_for("Linux x86_64")
         self.assertEqual(r["search"], "CtrlK")
         self.assertEqual(r["rows"][:2], ["Ctrl+⏎", "Ctrl+Shift+⏎"])
-        self.assertEqual(r["rows"][3], "Ctrl+Shift+C")
+        self.assertEqual(r["copy"], "Ctrl+Shift+C")
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")

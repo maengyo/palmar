@@ -1610,6 +1610,13 @@ function msgText(s) {
   // A wait this pane left with nobody typing here is not one palmar can call your approval (#14).
   if (s.answered_elsewhere) parts.push('answered — not here');
   else if (s.last_event) parts.push(EVENT_PHRASE[s.last_event] || s.last_event);   // #24: event name → human words
+  // Only palmar can say this — it holds the PTY. A pane that reads "working" but has printed nothing for a
+  // while (STUCK_S). It does not accuse: it may be thinking hard. This was the Attention list's one unique
+  // signal; when that list was removed it moved here, onto the row that already shows the pane.
+  if (s.status === 'working') {
+    const q = quietFor(s);
+    if (q !== null && q >= STUCK_S) parts.push('quiet ' + agoShort(lastOutAt.get(s.id)));
+  }
   if (t && t.lastLine) parts.push(t.lastLine);
   if (parts.length) return parts.join(' · ');
   // Do not leave something with no hooks quietly grey (AGENTS.md principle 3) — say it in words
@@ -1834,7 +1841,13 @@ function renderList() {
     if (b) b.focus();
   }
 }
-setInterval(() => { for (const [id, it] of items) it._ago.nodeValue = agoText(id); }, 10000);
+setInterval(() => {
+  for (const [id, it] of items) {
+    it._ago.nodeValue = agoText(id);
+    const s = sessions.get(id);
+    if (s && it._msg) it._msg.textContent = msgText(s);   // makes "quiet 6m" run without rebuilding the list
+  }
+}, 10000);
 
 // ── search (⌘K): filter session rows and folder rows by text ──
 function applyFilter() {
@@ -2085,37 +2098,11 @@ function checkProtocol(m) {
   ].filter(Boolean));
 }
 
-// ── what happened ─────────────────────────────────────────
-// The status lights speak about **now**. The time you were away was kept nowhere — what finished, what asked, in
-// what order. The daemon holds that (the time with the browser closed is precisely "the time you were away") and
-// hands it over with hello on attach. All this side does is show it and take a click through to it.
-const LS_SEEN_AT = 'palmar.seenAt';
-const ACT_MAX = 60;                 // how many are kept on screen. The daemon holds more.
-const ACT_CLASS = { waiting: 'wait', done: 'done', created: 'idle', gone: 'idle' };
-let acts = [];
-let seenAt = 0;
-try { seenAt = Number(localStorage.getItem(LS_SEEN_AT)) || 0; } catch (e) {}
-const actsEl = document.getElementById('acts');
-const actNewEl = document.getElementById('act-new');
-
-// **When it counts as seen**: while this window is in front. What piled up while it was covered is "the time you were away".
-function markSeen() {
-  if (!document.hasFocus()) return;
-  seenAt = Date.now() / 1000;
-  try { localStorage.setItem(LS_SEEN_AT, String(seenAt)); } catch (e) {}
-}
-
-// **It answers "what do I do now".** It started out as the place that wrote down "what happened while I was
-// away", but that is the past and not the question a person actually asks — in front of eight terminals the
-// question is *what is waiting on me, and which of those comes first*. The status lights only get as far as "what".
-//
-// Three bunches:
-//   waiting — what wants you. **The longest wait is on top.** A pane that has waited 20 minutes and one that just
-//            asked are not the same job.
-//   looks stuck — says it is working but has printed nothing for more than STUCK_S. Nobody else reports this, and
-//            we can know it because we hold the PTY. **It does not assert** — it may be thinking hard.
-//   nothing else at all — only then does it show the past. It is worth something only when things are quiet.
-const STUCK_S = 300;      // 5 minutes. Shorter and ordinary thinking time becomes "stuck"
+// ── "working, but quiet" ──────────────────────────────────
+// The Attention list that used to sit here was removed (see index.html) — it repeated the left list and helped
+// nobody. Its one signal nothing else had — a pane that reads **working** but has printed nothing for a while —
+// moved into the left list's row (msgText). We can tell only because we hold the PTY. It does not accuse.
+const STUCK_S = 300;      // 5 minutes. Shorter and ordinary thinking time reads as "quiet"
 
 //: The **time** of the last output. The `quiet` the daemon sends is the value at the moment that frame was built,
 //: so while things go quiet no broadcast arrives and it stands still — turn it into a time on arrival and the clock runs from there.
@@ -2182,86 +2169,6 @@ function renderRestore(offer) {
   restoreEl.appendChild(act);
 }
 
-function renderActs() {
-  if (!actsEl) return;
-  actsEl.textContent = '';
-  const now = Date.now() / 1000;
-  const wants = [], stuck = [];
-  for (const x of sessions.values()) {
-    if (WANTS_YOU.has(x.status)) wants.push(x);
-    else if (x.status === 'working') { const q = quietFor(x); if (q !== null && q >= STUCK_S) stuck.push(x); }
-  }
-  wants.sort((a, b) => (a.since || now) - (b.since || now));      // the longest wait on top
-  stuck.sort((a, b) => (quietFor(b) || 0) - (quietFor(a) || 0));
-  const fresh = acts.filter((e) => e.t > seenAt).length;
-  if (actNewEl) actNewEl.textContent = wants.length ? String(wants.length) : (fresh ? fresh + ' new' : '');
-
-  const row = (x, cls, right, title) => {
-    const r = el('div', 'act' + cls);
-    r.appendChild(el('span', 'dot ' + (STATUS_CLASS[x.status] || 'idle')));
-    const mid = el('span', 'nm');
-    mid.appendChild(el('b', null, labelOf(x)));
-    mid.appendChild(document.createTextNode(' '));
-    mid.appendChild(el('span', 'wt',
-      x.status === 'waiting' ? 'needs you'
-      : x.answered_elsewhere ? 'answered — not here'    // the daemon saw no typing in this pane (#14)
-      : 'finished'));
-    r.appendChild(mid);
-    r.appendChild(el('span', 'ago', right));
-    r.title = title;
-    r.addEventListener('click', () => goToSession(x.id));
-    actsEl.appendChild(r);
-  };
-
-  if (wants.length) {
-    for (const x of wants) {
-      const held = now - (x.since || now);
-      row(x, held > 600 ? ' aged' : '', agoShort(x.since || now),
-          labelOf(x) + ' · ' + x.cwd + ' — waiting ' + agoShort(x.since || now));
-    }
-  }
-  if (stuck.length) {
-    actsEl.appendChild(el('div', 'act-h', 'quiet while working'));
-    for (const x of stuck) {
-      const r = el('div', 'act stuck');
-      r.appendChild(el('span', 'dot work'));
-      const mid = el('span', 'nm');
-      mid.appendChild(el('b', null, labelOf(x)));
-      mid.appendChild(document.createTextNode(' '));
-      mid.appendChild(el('span', 'wt', 'nothing printed'));
-      r.appendChild(mid);
-      const q = quietFor(x) || 0;
-      r.appendChild(el('span', 'ago', agoShort(now - q)));
-      r.title = labelOf(x) + ' — says it is working but has printed nothing for '
-              + agoShort(now - q) + '. It may be thinking, or it may be stuck.';
-      r.addEventListener('click', () => goToSession(x.id));
-      actsEl.appendChild(r);
-    }
-  }
-  if (!wants.length && !stuck.length) {
-    // It is quiet. Show the past **only then** — that is the only time there is room to look at it.
-    if (!acts.length) {
-      actsEl.appendChild(el('div', 'quiet', 'all quiet · nothing is waiting on you'));
-      return;
-    }
-    actsEl.appendChild(el('div', 'act-h', 'all quiet · what happened'));
-    for (const e of acts.slice().reverse().slice(0, ACT_MAX)) {
-      const alive = sessions.has(e.id);
-      const r = el('div', 'act' + (e.t > seenAt ? ' fresh' : '') + (alive ? '' : ' dead'));
-      r.appendChild(el('span', 'dot ' + (ACT_CLASS[e.kind] || 'idle')));
-      const mid = el('span', 'nm');
-      mid.appendChild(el('b', null, e.name || shortPath(e.cwd)));
-      mid.appendChild(document.createTextNode(' '));
-      mid.appendChild(el('span', 'wt', e.what));
-      r.appendChild(mid);
-      r.appendChild(el('span', 'ago', agoShort(e.t)));
-      r.title = (e.name || e.cwd) + ' · ' + e.what + (alive ? '' : ' · this terminal is gone');
-      if (alive) r.addEventListener('click', () => goToSession(e.id));
-      actsEl.appendChild(r);
-    }
-  }
-}
-
 function agoShort(t) {
   const d = Math.max(0, Date.now() / 1000 - t);
   if (d < 45) return 'now';
@@ -2270,11 +2177,6 @@ function agoShort(t) {
   return Math.round(d / 86400) + 'd';
 }
 
-function pushAct(e) {
-  acts.push(e);
-  if (acts.length > ACT_MAX * 2) acts = acts.slice(-ACT_MAX);
-  renderActs();
-}
 
 // ── session updates ─────────────────────────────────────
 function upsert(s) {
@@ -2314,9 +2216,6 @@ function upsert(s) {
   }
   renderTabs();      // the dot is computed — recount when status or canvas changes
   renderList();
-  // The right-hand list reads status too. **Not calling here leaves it one step behind** — the `log` frame arrives
-  // before `session` (contract: note comes before broadcast), so what was drawn then is still the old status (the same spot as `gone`).
-  renderActs();
   renderMinimap();
   updateStatusBar();
   return t;
@@ -2343,9 +2242,6 @@ function remove(id) {
   // it moves windows, so nothing moves unless it was asked for.
   if (wasIn && autoTidy) tidyCanvas(wasIn);
   paintTidy();
-  // A row in what-happened shows "is that session still there". `log` arrives before `gone` (contract: note comes
-  // before broadcast), so the row drawn then is drawn as still alive — fix it here.
-  renderActs();
   renderTabs();
   renderList();
   renderMinimap();
@@ -2374,9 +2270,7 @@ function connectEvents() {
     if (m.t === 'hello') {
       checkProtocol(m); setCanvases(m.canvases || []); reconcile(m.sessions || []);
       renderRestore(m.restore);
-      acts = m.log || []; renderActs();
     }
-    else if (m.t === 'log' && m.e) pushAct(m.e);
     else if (m.t === 'session' && m.s) upsert(m.s);
     else if (m.t === 'gone' && m.id) remove(m.id);
     else if (m.t === 'canvas' && m.c) putCanvas(m.c);           // created or renamed
@@ -2666,7 +2560,9 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // Auto-tidy only runs on a pane disappearing, and that moment is hard to create from outside.
                   // Expose **the same function** the button calls, unchanged.
                   tidyCanvas,
-                  lastOutAt, renderActs };
+                  // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
+                  // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
+                  lastOutAt, renderList };
 
 // `palmar.watchInput()` from the console. **A real IME cannot be measured headless** — CDP's imitation of
 // composition passes while reports say it fails on a real machine, so let that machine print what actually arrives.
@@ -2805,11 +2701,6 @@ function boot() {
     if (o) o.addEventListener('click', () => setFold(side, false));
   }
   loadFold();
-  // When the window comes back to the front, **show it as new for a moment** and then mark it seen. Clearing it
-  // the instant it returns leaves no time to see what happened while you were away.
-  addEventListener('focus', () => setTimeout(() => { markSeen(); renderActs(); }, 4000));
-  // Time passes — make 'now' visibly become '3m'. The same interval as the list's ago.
-  setInterval(renderActs, 15000);   // makes the waiting time visibly run
   setNotify(notifyOn && 'Notification' in window && Notification.permission === 'granted');
   applyTheme(storedTheme());
   renderBadge(true);
