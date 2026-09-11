@@ -21,7 +21,7 @@ on:
 jobs:
   probe:
     runs-on: windows-latest
-    timeout-minutes: 10          # the deadline exists to stop a hang from burning minutes
+    timeout-minutes: 15          # the deadline exists to stop a hang from burning minutes
 
     steps:
       - uses: actions/checkout@v4
@@ -49,4 +49,4 @@ jobs:
       # from documentation; this runs it. The three byte sections are the point — they are exactly
       # what pywinpty failed, and failing them here would mean writing it achieved nothing.
       - name: conpty
-        run: python dev\conpty-check.py
+        run: python -u dev\conpty-check.py

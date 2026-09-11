@@ -30,7 +30,10 @@ FAILED = []
 
 
 def say(*a):
-    print(" ".join(str(x) for x in a))
+    # **flush every line.** On a CI runner stdout is a pipe and therefore buffered, so when the
+    # first run hung nothing at all had been printed — the log showed the hang and none of the
+    # progress leading to it (2026-09-11).
+    print(" ".join(str(x) for x in a), flush=True)
 
 
 def head(t):
@@ -67,23 +70,51 @@ def script(name, lines):
     return path
 
 
-def run(lines, secs=20.0, rows=50, cols=200, name="child.py"):
+def drain(p, secs, until=None):
+    """Read a ConPTY for `secs`, on a thread, and give back what arrived.
+
+    **read() blocks and there is no way to wait on that handle** — that is the whole reason the
+    Windows daemon will read on a thread. The first version of this file looped `while time.time()
+    < end: p.read()`, which cannot time out at all: a read that never returns never lets the
+    deadline be looked at, and the check hung for eight minutes and printed nothing.
+
+    The thread is a daemon thread and is simply abandoned if it is still blocked. That is also what
+    the daemon does: a pane's reader dies with the process, not with the pane."""
+    import threading
+    out, done = [], threading.Event()
+
+    def pump():
+        try:
+            while True:
+                chunk = p.read()
+                if not chunk:
+                    break
+                out.append(chunk)
+                if until and until in b"".join(out):
+                    break
+        except Exception:
+            pass
+        finally:
+            done.set()
+
+    t = threading.Thread(target=pump, daemon=True)
+    t.start()
+    done.wait(secs)
+    if not done.is_set():
+        say("    (the reader is still blocked after %.0fs — abandoning it)" % secs)
+    return b"".join(out)
+
+
+def run(lines, secs=20.0, rows=50, cols=200, name="child.py", until=None):
     """Run a python child in a ConPTY and return every byte it produced."""
     from palmar import conpty
     path = script(name, lines)
     p = conpty.ConPty()
     p.spawn('"%s" -u "%s"' % (sys.executable, path), rows=rows, cols=cols)
-    out, end = [], time.time() + secs
     try:
-        while time.time() < end:
-            chunk = p.read()
-            if chunk:
-                out.append(chunk)
-            elif not p.alive():
-                break
+        return drain(p, secs, until)
     finally:
         p.close()
-    return b"".join(out)
 
 
 @guarded("it imports, and this Windows has ConPTY")
@@ -96,7 +127,8 @@ def _import():
 
 @guarded("a child starts and its output comes back")
 def _hello():
-    got = run(["import sys", "sys.stdout.write('MARKERyes')", "sys.stdout.flush()"])
+    got = run(["import sys", "sys.stdout.write('MARKERyes')", "sys.stdout.flush()"],
+              secs=15.0, until=b"MARKERyes")
     say("    read back %r" % got[-60:])
     say(OK if b"MARKERyes" in got else NO,
         "the child ran" if b"MARKERyes" in got else "**nothing came back**")
@@ -106,7 +138,7 @@ def _hello():
 def _nul():
     got = run(["import sys",
                "sys.stdout.buffer.write(b'[A' + bytes([0]) + b'B]')",
-               "sys.stdout.flush()"])
+               "sys.stdout.flush()"], secs=15.0, until=b"B]")
     i = got.find(b"[A")
     say("    read back %r" % (got[i:i + 6] if i >= 0 else got[-40:]))
     ok = bytes([0]) in got
@@ -119,7 +151,7 @@ def _nul():
 def _bad():
     got = run(["import sys",
                "sys.stdout.buffer.write(b'[' + bytes([255, 254]) + b']')",
-               "sys.stdout.flush()"])
+               "sys.stdout.flush()"], secs=15.0, until=b"]")
     i = got.find(b"[")
     say("    read back %r" % (got[i:i + 6] if i >= 0 else got[-40:]))
     ok = bytes([255, 254]) in got
@@ -133,7 +165,7 @@ def _korean():
     got = run(["import sys",
                "sys.stdout.buffer.write((chr(0xD55C) * 70000).encode('utf-8'))",
                "sys.stdout.write(chr(10) + 'END' + chr(10))",
-               "sys.stdout.flush()"], secs=40.0)
+               "sys.stdout.flush()"], secs=60.0, until=b"END")
     han = got.count(chr(0xD55C).encode("utf-8"))
     fffd = got.count(chr(0xFFFD).encode("utf-8"))
     say("    got %d 한, %d U+FFFD, END seen: %s, %d bytes" %
