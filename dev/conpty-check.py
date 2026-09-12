@@ -528,21 +528,10 @@ def _input():
                               "sys.stdout.flush()"])
     p = conpty.ConPty()
     p.spawn('"%s" -u "%s"' % (sys.executable, path))
-    out, end = [], time.time() + 20
-    try:
-        time.sleep(1.0)
-        p.write(b"hello-from-palmar" + bytes([13]))
-        while time.time() < end:
-            chunk = p.read()
-            if chunk:
-                out.append(chunk)
-                if b"SAW:" in b"".join(out):
-                    break
-            elif not p.alive():
-                break
-    finally:
-        p.close()
-    got = b"".join(out)
+    time.sleep(1.0)
+    p.write(b"hello-from-palmar" + bytes([13]))
+    got = drain(p, 15.0, until=b"SAW:")
+    p.close()
     say("    read back %r" % got[-70:])
     say(OK if b"SAW:hello-from-palmar" in got else NO, "the child saw what we wrote")
 
@@ -573,10 +562,7 @@ def _tree():
     before = _sleepers()
     p = conpty.ConPty()
     p.spawn('"%s" -u "%s"' % (sys.executable, path))
-    end = time.time() + 20
-    while time.time() < end:
-        if b"SPAWNED" in p.read():
-            break
+    drain(p, 15.0, until=b"SPAWNED")
     time.sleep(1.5)
     during = _sleepers()
     p.close()
@@ -603,20 +589,37 @@ def _resize():
                                 "    time.sleep(0.05)"])
     p = conpty.ConPty()
     p.spawn('"%s" -u "%s"' % (sys.executable, path), rows=24, cols=80)
-    out, end = [], time.time() + 20
-    resized = False
-    try:
-        while time.time() < end:
-            chunk = p.read()
-            if chunk:
+    # **The reader has to be on a thread here too.** This section still had the old loop, which
+    # cannot time out: once read() stops returning, `while time.time() < end` is never reached
+    # again, and the watchdog was killing the run here (2026-09-11). The resize happens from this
+    # thread while that one drains, which is also how the daemon will do it.
+    import threading
+    out, seen5, resized = [], threading.Event(), [False]
+
+    def pump():
+        try:
+            while True:
+                chunk = p.read()
+                if not chunk:
+                    break
                 out.append(chunk)
-                if not resized and b"line5" in b"".join(out):
-                    p.resize(40, 120)
-                    resized = True
-            elif not p.alive():
-                break
-    finally:
-        p.close()
+                if b"line5" in b"".join(out):
+                    seen5.set()
+                if b"line39" in b"".join(out):
+                    break
+        except Exception:
+            pass
+        finally:
+            seen5.set()
+
+    t = threading.Thread(target=pump, daemon=True)
+    t.start()
+    if seen5.wait(10):
+        p.resize(40, 120)
+        resized[0] = True
+    t.join(12)
+    p.close()
+    resized = resized[0]
     got = b"".join(out)
     say("    resized mid-output:", resized, "· saw line39:", b"line39" in got)
     say(OK if (resized and b"line39" in got) else NO,
