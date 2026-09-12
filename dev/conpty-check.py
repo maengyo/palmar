@@ -138,7 +138,8 @@ def run(lines, secs=20.0, rows=50, cols=200, name="child.py", until=None):
     from palmar import conpty
     path = script(name, lines)
     p = conpty.ConPty()
-    p.spawn('"%s" -u "%s"' % (sys.executable, path), rows=rows, cols=cols)
+    # **A list, the same call the daemon will make.** The quoting is conpty.py's problem now.
+    p.spawn([sys.executable, "-u", path], rows=rows, cols=cols)
     try:
         return drain(p, secs, until)
     finally:
@@ -450,7 +451,7 @@ def _attached():
         "sys.stdout.flush()",
     ])
     p = conpty.ConPty()
-    p.spawn('"%s" -u "%s"' % (sys.executable, path), rows=37, cols=133)
+    p.spawn([sys.executable, "-u", path], rows=37, cols=133)
     say("    asked for 133 x 37 · child pid", p.pid)
     got = drain(p, 10.0, until=b"SIZE=")
     p.close()
@@ -561,7 +562,7 @@ def _tree():
     ])
     before = _sleepers()
     p = conpty.ConPty()
-    p.spawn('"%s" -u "%s"' % (sys.executable, path))
+    p.spawn([sys.executable, "-u", path])
     drain(p, 15.0, until=b"SPAWNED")
     time.sleep(1.5)
     during = _sleepers()
@@ -588,7 +589,7 @@ def _resize():
                                 "    sys.stdout.flush()",
                                 "    time.sleep(0.05)"])
     p = conpty.ConPty()
-    p.spawn('"%s" -u "%s"' % (sys.executable, path), rows=24, cols=80)
+    p.spawn([sys.executable, "-u", path], rows=24, cols=80)
     # **The reader has to be on a thread here too.** This section still had the old loop, which
     # cannot time out: once read() stops returning, `while time.time() < end` is never reached
     # again, and the watchdog was killing the run here (2026-09-11). The resize happens from this

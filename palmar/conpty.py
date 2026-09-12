@@ -186,6 +186,11 @@ def available() -> bool:
 class ConPty:
     """A pseudo-console, the process in it, and the job that owns its whole tree."""
 
+    #: **Nothing here can be waited on.** asyncio's Proactor loop has no add_reader at all — it
+    #: raises NotImplementedError even for a socket (measured) — so the daemon reads on a thread.
+    #: This is the one thing it branches on.
+    blocking = True
+
     def __init__(self):
         self._hpc = None            # HPCON
         self._in_w = None           # our end: what we write to the child
@@ -196,12 +201,16 @@ class ConPty:
         self.closed = False
 
     # ── starting ───────────────────────────────────────────────────────
-    def spawn(self, cmdline: str, cwd=None, env=None, rows: int = 24, cols: int = 80) -> None:
-        """Start `cmdline` inside a new pseudo-console.
+    def spawn(self, argv, env=None, cwd=None, rows: int = 24, cols: int = 80) -> None:
+        """Start `argv` inside a new pseudo-console.
 
-        `cmdline` is a full Windows command line, not an argv list: CreateProcessW takes a string
-        and the quoting rules are the child's, not ours. **The caller chooses the command** — the
-        daemon hard-codes it, which is a security rule (#14), not a convenience."""
+        **Takes a list, like the POSIX side**, so the daemon never has to know which platform it is
+        on. CreateProcessW wants one string and the quoting rules are Windows', so the joining
+        happens here — `subprocess.list2cmdline` is those rules, in the standard library.
+        **The caller chooses the command** — the daemon hard-codes it (#14), which is a security
+        rule, not a convenience. A bare string is still accepted for the probes."""
+        import subprocess
+        cmdline = argv if isinstance(argv, str) else subprocess.list2cmdline(list(argv))
         if not available():
             raise OSError("this Windows has no ConPTY (needs 10 1809 or newer)")
 
@@ -312,6 +321,22 @@ class ConPty:
         if self._hpc is None:
             return
         kernel32.ResizePseudoConsole(self._hpc, COORD(max(1, int(cols)), max(1, int(rows))))
+
+    def fileno(self):
+        """**None, and that is the point.** There is no handle here the event loop can wait on; see
+        `blocking` above. The POSIX side returns its master fd."""
+        return None
+
+    def foreground_is_shell(self):
+        """Unknowable on Windows. ConPTY has no foreground process group, and GetConsoleProcessList
+        needs the caller attached to that console — so the status lights fall back to what the title
+        and the output say, which is how they work for an unknown agent anyway."""
+        return None
+
+    def hangup(self) -> None:
+        """There is no SIGHUP. Terminating the job is the closest thing, and it is also the only
+        thing that takes the pane's children with it — measured: killing the shell alone does not."""
+        self.kill()
 
     # ── life and death ─────────────────────────────────────────────────
     def alive(self) -> bool:
