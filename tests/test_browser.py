@@ -682,5 +682,286 @@ class NoTitleBar(unittest.TestCase):
                 self.assertEqual(b.ev("window.__sent"), [msg])
 
 
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class PushAside(unittest.TestCase):
+    """Windows do not overlap. Drop one on another and the one that was there gets out of the way.
+
+    What was wrong: nothing pushed. The canvas, the drag and the coordinate store had all been built and
+    the pushing never had been (roadmap #8) — drag a window onto another and they simply sat on top of
+    each other. decisions.md sets the rule: hold the window the hand just placed, move what it landed on
+    by **exactly the overlap** and no further, take the **shortest** way out, carry on if that lands on a
+    third, and say so in a toast with an undo.
+
+    Geometry is set here by writing the coordinate store, because the interesting cases need windows in
+    exact relative positions and three of them at once — more than a hand can drag into place one at a
+    time without the earlier drags already pushing things. The store is what the real code reads
+    (AGENTS.md "창은 스토어에서 직접 읽는다"), and one test below does drive a whole drag with real mouse
+    events to show the store and the hand agree."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+        cls.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          for (const n of ['a','b','c'])
+            await fetch('/api/sessions?token='+T,{method:'POST',
+              headers:{'content-type':'application/json'},
+              body:JSON.stringify({cwd:%s,name:n})});})()""" % json.dumps(cls.d.home))
+        time.sleep(5)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def setUp(self):
+        """Every test opens its own board (tests/README.md).
+
+        Two things leak between tests here and both bit. **The switch** is sticky by design, so a test
+        that turns it off hands the next one a dead feature. **The toast stays up for nine seconds**
+        when it carries an undo — far longer than a test takes — so the next test's "did it announce
+        anything?" reads the previous test's toast and passes or fails for the wrong reason."""
+        self.b.ev("""(()=>{const el=document.getElementById('pushaside');
+          if (el && !el.checked) { el.checked = true; el.dispatchEvent(new Event('change')); }
+          const t = document.querySelector('.toast');
+          if (t) { t.classList.remove('show'); t.textContent = ''; }
+          return 1;})()""")
+
+    # ── the bench ────────────────────────────────────────────────────────────
+    JS = """
+      const P = window.palmar, L = P.layout();
+      const by = (n) => [...P.tiles.values()].find((t) => t.s.name === n);
+      const put = (n, x, y, w, h) => { const t = by(n);
+        L[t.id] = Object.assign({}, L[t.id], {x:x, y:y, w:w, h:h});
+        // **Place it instantly.** .tile has a 0.35s transition on left/top, so for a third of a second
+        // after this the element is somewhere between where it was and where it was put — and a test
+        // that then grabs its title bar by getBoundingClientRect() grabs thin air. That is the same
+        // mid-transition trap tidyCanvas and applyPush document; here it made one drag test fail
+        // depending on where the *previous* test had left the window.
+        t.el.style.transition='none';
+        t.el.style.left=x+'px'; t.el.style.top=y+'px'; t.el.style.width=w+'px'; t.el.style.height=h+'px';
+        void t.el.offsetWidth;                      // flush the layout while the transition is off
+        t.el.style.transition='';
+        return t.id; };
+      const at = (n) => { const r = L[by(n).id]; return [r.x, r.y, r.w, r.h]; };
+    """
+
+    def bench(self, body):
+        """Lay the three windows out, run `body`, and hand back whatever it returns."""
+        return self.b.ev("(()=>{" + self.JS + "\n" + body + "})()")
+
+    def test_it_pushes_by_the_overlap_and_no_further(self):
+        """b sticks 40px into a. It should come to rest one gap clear of a — not a screen away, and not
+        snapped to any grid. 'Exactly the overlap' is the whole rule."""
+        r = self.bench("""
+          put('a',100,100,200,200); put('b',260,100,200,200); put('c',900,900,200,200);
+          const m = P.pushAside(by('a').s.canvas, by('a').id);
+          P.applyPush(m);
+          return {moved: m.length, a: at('a'), b: at('b'), c: at('c')};
+        """)
+        self.assertEqual(r["moved"], 1, "it moved something other than the one window in the way")
+        self.assertEqual(r["a"], [100, 100, 200, 200], "the window the hand placed was moved")
+        self.assertEqual(r["b"][:2], [312, 100], "b did not come to rest exactly one gap clear of a")
+        self.assertEqual(r["c"], [900, 900, 200, 200], "a window nowhere near it was moved")
+
+    def test_it_takes_the_shortest_way_out(self):
+        """b overlaps a from above by 140px. Sideways costs 212px, downwards 272, upwards 152 — up wins.
+        Getting this wrong is not a crash, it is a window that flies across the screen when a nudge
+        would have done."""
+        r = self.bench("""
+          put('a',300,300,200,200); put('b',300,240,200,200); put('c',900,900,200,200);
+          P.applyPush(P.pushAside(by('a').s.canvas, by('a').id));
+          return {b: at('b')};
+        """)
+        self.assertEqual(r["b"][:2], [300, 88], "b went somewhere other than straight up, the near way")
+
+    def test_a_push_that_lands_on_a_third_carries_on(self):
+        """Three in a row, each overlapping the next. Pushing the first has to move both, and the third
+        has to end up clear of the second rather than clear of the first."""
+        r = self.bench("""
+          put('a',100,100,200,200); put('b',260,100,200,200); put('c',420,100,200,200);
+          const m = P.pushAside(by('a').s.canvas, by('a').id);
+          P.applyPush(m);
+          return {moved: m.length, b: at('b'), c: at('c')};
+        """)
+        self.assertEqual(r["moved"], 2, "the cascade stopped at the first window")
+        self.assertEqual(r["b"][:2], [312, 100])
+        self.assertEqual(r["c"][:2], [524, 100], "c settled against a instead of against b")
+
+    def test_nothing_overlapping_moves_nothing(self):
+        """The ordinary case: most drags land in empty space. Nothing should move and no toast should
+        appear — a toast on every drag would be noise."""
+        r = self.bench("""
+          put('a',100,100,200,200); put('b',400,100,200,200); put('c',700,100,200,200);
+          return {moved: P.pushAside(by('a').s.canvas, by('a').id).length};
+        """)
+        self.assertEqual(r["moved"], 0)
+
+    def test_it_never_pushes_a_window_off_the_top_or_left(self):
+        """The canvas grows right and down without limit (⑩) but is pinned at 0 on the other two sides.
+        A window squeezed against the origin must take a longer way out rather than a negative
+        coordinate, which would put it somewhere no scrollbar reaches."""
+        r = self.bench("""
+          put('a',0,0,400,400); put('b',20,20,200,200); put('c',900,900,200,200);
+          P.applyPush(P.pushAside(by('a').s.canvas, by('a').id));
+          return {b: at('b')};
+        """)
+        self.assertGreaterEqual(r["b"][0], 0, "b was pushed to a negative x")
+        self.assertGreaterEqual(r["b"][1], 0, "b was pushed to a negative y")
+        self.assertTrue(r["b"][0] >= 412 or r["b"][1] >= 412,
+                        "b is still sitting on top of a: " + repr(r["b"]))
+
+    def test_a_pile_comes_apart(self):
+        """Everything dropped on the same spot. This is the case the round limit exists for — it has to
+        either resolve or leave the screen alone, never stop halfway."""
+        r = self.bench("""
+          put('a',200,200,200,200); put('b',200,200,200,200); put('c',200,200,200,200);
+          P.applyPush(P.pushAside(by('a').s.canvas, by('a').id));
+          const rs = ['a','b','c'].map(at).map((q) => ({x:q[0], y:q[1], w:q[2], h:q[3]}));
+          let bad = 0;
+          for (let i=0;i<rs.length;i++) for (let j=i+1;j<rs.length;j++) if (P.hits(rs[i], rs[j])) bad++;
+          return {bad: bad, a: at('a')};
+        """)
+        self.assertEqual(r["bad"], 0, "windows are still overlapping after the push")
+        self.assertEqual(r["a"], [200, 200, 200, 200], "the anchor moved out of the pile")
+
+    # ── through the hand ─────────────────────────────────────────────────────
+    def drag(self, name, dx, dy):
+        """Grab a window by its title bar with real mouse events and drop it dx,dy away."""
+        box = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name===%s);
+          const r = t.el.querySelector('.tb').getBoundingClientRect();
+          return {x: r.left + r.width/2, y: r.top + r.height/2};})()""" % json.dumps(name))
+        x, y = box["x"], box["y"]
+        send = lambda **kw: self.b.ws.call("Input.dispatchMouseEvent", dict(button="left", **kw))
+        send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            send(type="mouseMoved", x=x + dx * i / 3, y=y + dy * i / 3, buttons=1)
+        send(type="mouseReleased", x=x + dx, y=y + dy, clickCount=1, buttons=0)
+        time.sleep(0.6)
+
+    def test_a_real_drag_onto_another_window_pushes_it(self):
+        """The path a person actually takes: press the title bar, move, let go. Everything above reads
+        and writes the coordinate store; this is the one that shows the store and the hand agree."""
+        self.bench("put('a',60,60,240,200); put('b',340,60,240,200); put('c',60,400,240,200); return 1;")
+        self.drag("a", 220, 0)
+        r = self.b.ev("""(()=>{const P=window.palmar, L=P.layout();
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          const at=(n)=>{const r=L[by(n).id]; return {x:r.x,y:r.y,w:r.w,h:r.h};};
+          const a=at('a'), b=at('b');
+          return {a:[a.x,a.y], b:[b.x,b.y], over: P.hits(a,b),
+                  toast: document.querySelector('.toast').classList.contains('show'),
+                  words: document.querySelector('.toast').textContent,
+                  undo: !!document.querySelector('.toast .undo')};})()""")
+        self.assertGreater(r["a"][0], 200, "the drag never moved the window: " + repr(r["a"]))
+        self.assertFalse(r["over"], "they are still overlapping after the drop: " + repr(r))
+        self.assertTrue(r["toast"], "nothing told the user a window had been moved")
+        self.assertIn("moved 1 window", r["words"])
+        self.assertTrue(r["undo"], "the toast has no undo")
+
+    def test_undo_puts_it_back(self):
+        """decisions.md asks for the undo by name. What it restores is the pushed windows, not the one
+        the hand placed — putting that back would undo the drag itself, which nobody asked for."""
+        self.bench("put('a',60,60,240,200); put('b',340,60,240,200); put('c',60,400,240,200); return 1;")
+        before = self.b.ev("""(()=>{const P=window.palmar,L=P.layout();
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n); const r=L[by('b').id];
+          return [r.x, r.y];})()""")
+        self.drag("a", 220, 0)
+        moved = self.b.ev("""(()=>{const P=window.palmar,L=P.layout();
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n); const r=L[by('b').id];
+          return [r.x, r.y];})()""")
+        self.assertNotEqual(moved, before, "b never moved, so there is no undo to test")
+        self.b.ev("document.querySelector('.toast .undo').click()")
+        time.sleep(0.5)
+        after = self.b.ev("""(()=>{const P=window.palmar,L=P.layout();
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n); const r=L[by('b').id];
+          const a=L[by('a').id];
+          return {b:[r.x,r.y], a:[a.x,a.y],
+                  saved: JSON.parse(localStorage.getItem('palmar-tiles')||'{}')[by('b').id]};})()""")
+        self.assertEqual(after["b"], before, "undo did not put b back where it was")
+        self.assertEqual([after["saved"]["x"], after["saved"]["y"]], before,
+                         "undo moved it on screen but left the old position saved")
+        self.assertGreater(after["a"][0], 200, "undo dragged the window back too")
+
+    def test_growing_a_window_pushes_its_neighbour(self):
+        """Resize goes through the same moment a drag does — the hand lets go, then the overlap is
+        resolved. Shrinking is the asymmetric half: it opens a gap and pulls nothing back, because
+        sizes and positions belong to the user and palmar only ever resolves overlap, never tiles
+        (AGENTS.md "밀어내기를 타일링으로 바꾸지 마라")."""
+        self.bench("put('a',60,60,240,200); put('b',420,60,240,200); put('c',60,400,240,200); return 1;")
+        grip = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name==='a');
+          const r = t.el.querySelector('.grip').getBoundingClientRect();
+          return {x: r.left + r.width/2, y: r.top + r.height/2};})()""")
+        x, y = grip["x"], grip["y"]
+        send = lambda **kw: self.b.ws.call("Input.dispatchMouseEvent", dict(button="left", **kw))
+        send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            send(type="mouseMoved", x=x + 60 * i, y=y, buttons=1)
+        send(type="mouseReleased", x=x + 180, y=y, clickCount=1, buttons=0)
+        time.sleep(0.8)
+        r = self.b.ev("""(()=>{const P=window.palmar, L=P.layout();
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          const at=(n)=>{const q=L[by(n).id]; return {x:q.x,y:q.y,w:q.w,h:q.h};};
+          const a=at('a'), b=at('b');
+          return {aw: a.w, b:[b.x,b.y], over: P.hits(a,b)};})()""")
+        self.assertGreater(r["aw"], 300, "the resize never happened: width " + repr(r["aw"]))
+        self.assertFalse(r["over"], "the grown window is sitting on its neighbour: " + repr(r))
+        self.assertGreater(r["b"][0], 420, "b did not move out of the way")
+
+    # ── the switch ───────────────────────────────────────────────────────────
+    def flip(self, on):
+        """Flip the real checkbox in the shortcuts panel, the way a hand does."""
+        return self.b.ev("""(()=>{const el=document.getElementById('pushaside');
+          if(!el) return 'no switch';
+          el.checked=%s; el.dispatchEvent(new Event('change'));
+          return window.palmar.pushOn();})()""" % ("true" if on else "false"))
+
+    def test_the_switch_is_there_and_starts_on(self):
+        """Not overlapping is the decided behaviour, so the switch is an opt-out, not an opt-in — the
+        opposite of Tidy automatically, which starts off because it moves windows you never touched."""
+        r = self.b.ev("""(()=>{const el=document.getElementById('pushaside');
+          return {there: !!el, checked: el && el.checked, on: window.palmar.pushOn(),
+                  label: el && el.closest('label') && el.closest('label').textContent.trim()};})()""")
+        self.assertTrue(r["there"], "no switch in the shortcuts panel")
+        self.assertTrue(r["on"], "push-aside did not start on")
+        self.assertTrue(r["checked"], "the switch does not show the state it is in")
+        self.assertIn("Push", r["label"])
+
+    def test_turning_it_off_leaves_the_overlap_alone(self):
+        """Off has to mean **nothing moves**, not 'moves less'. The windows stay where they were put."""
+        self.assertFalse(self.flip(False), "the switch did not turn it off")
+        self.bench("put('a',60,60,240,200); put('b',340,60,240,200); put('c',60,400,240,200); return 1;")
+        self.drag("a", 220, 0)
+        r = self.b.ev("""(()=>{const P=window.palmar,L=P.layout();
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          const a=L[by('a').id], b=L[by('b').id];
+          return {b:[b.x,b.y], over: P.hits(a,b),
+                  toast: document.querySelector('.toast').classList.contains('show')};})()""")
+        self.assertEqual(r["b"], [340, 60], "b moved with the switch off")
+        self.assertTrue(r["over"], "they did not end up overlapping, so this proves nothing")
+        self.assertFalse(r["toast"], "it announced a push that never happened")
+
+    def test_turning_it_back_on_pushes_again(self):
+        """The switch is not one-way."""
+        self.flip(False)
+        self.assertTrue(self.flip(True), "the switch did not turn it back on")
+        self.bench("put('a',60,60,240,200); put('b',340,60,240,200); put('c',60,400,240,200); return 1;")
+        self.drag("a", 220, 0)
+        r = self.b.ev("""(()=>{const P=window.palmar,L=P.layout();
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          return {over: P.hits(L[by('a').id], L[by('b').id])};})()""")
+        self.assertFalse(r["over"], "it did not start pushing again")
+
+    def test_only_the_off_state_is_written_down(self):
+        """On is the default, so an empty store has to mean on — otherwise a browser that refuses
+        localStorage, or a fresh profile, would silently come up with the feature off."""
+        self.flip(False)
+        off = self.b.ev("localStorage.getItem('palmar.push')")
+        self.flip(True)
+        on = self.b.ev("localStorage.getItem('palmar.push')")
+        self.assertEqual(off, "0", "turning it off wrote nothing, so it will come back on after a reload")
+        self.assertIsNone(on, "turning it back on left a key behind; the default must be an absent key")
+
+
 if __name__ == "__main__":
     unittest.main()

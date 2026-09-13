@@ -25,6 +25,12 @@ here*, and a shell opens on the canvas at that path. Drag the title bar to move 
 resize it — the shell's rows and columns follow, so a wider window is really a wider terminal.
 The canvas grows as you add windows; scroll to reach the rest.
 
+**Windows do not overlap.** Drop one on another and the one that was there slides out of the way — by
+exactly the overlap, the shortest way out, carrying on to a third if it has to. Nothing is tiled and
+nothing is resized: the sizes are yours, and the only thing palmar settles is the overlap. A line at
+the bottom says how many moved and offers to undo it. **Push windows aside** in the shortcuts panel
+turns it off — then windows may sit on top of each other, and clicking one brings it to the front.
+
 **Canvases are tabs.** A strip above the canvas holds them. **＋** makes one and asks for its name;
 double-click a tab to rename it, drag to reorder. A tab carries one small dot when something in
 that canvas wants you, and nothing else. Every open browser sees the same tabs in the same order,
@@ -59,9 +65,11 @@ away instead.
 
 **A minimap** sits bottom-right for the canvas you are on. Click or drag in it to move the viewport.
 
-**Nothing moves a window except you.** Closing the last terminal at the bottom shrinks the canvas on
-its own, but closing the one at the top leaves the space above the rest — because taking that space
-back means moving windows, and a window you can see should not jump because a different one closed.
+**Nothing moves a window unless you did something.** Dropping a window on another moves that one —
+you aimed it there, it slides rather than jumps, and the undo is right there. What never happens is a
+window moving because of something you did not do: closing the last terminal at the bottom shrinks the
+canvas on its own, but closing the one at the top leaves the space above the rest, because taking that
+space back means moving windows that are sitting in plain sight.
 The button on the tab bar does it when you ask: everything slides back to the corner keeping its
 spacing, and it greys out when there is nothing to close up. If you would rather it happened by
 itself, **Tidy automatically** in the shortcuts panel turns that on.
@@ -219,8 +227,9 @@ no port to take.
 
 ## What is not built yet
 
-- **Windows do not push each other aside.** A new one lands in the first free grid slot; dragging
-  one onto another overlaps them.
+- **A new window does not push anything.** It lands in the first free slot instead, which on a canvas
+  that grows without limit always exists. Pushing is what your own hand sets off, by dropping or
+  resizing a window onto another.
 - **No button moves a terminal between canvases.** The daemon does it and every open browser
   follows along — where the handle belongs on screen is not settled.
 - **A daemon restart still ends every shell.** What comes back is where you were: the canvases

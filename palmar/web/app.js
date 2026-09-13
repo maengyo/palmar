@@ -9,8 +9,10 @@
 //      that protocol.md's "위치·크기" section describes. The daemon knows only the pane's cols·rows.
 //   ⑥ the status string only becomes a CSS class (wait/work/done/idle). Colors live only in style.css's --st-*.
 //      idle and unknown share the same grey slot — once the mapping is decided, only STATUS_CLASS changes.
-//   ⑩ where a new window goes: scan the grid for the first free slot, else the bottom. No push-aside (#23) yet
-//      and no overlap setting. The default size DEFAULT_W/H is an undecided that hangs off ⑩ too.
+//   ⑩ where a new window goes: scan the grid for the first free slot, else the bottom — and since the canvas
+//      grows without limit, that search never fails, so an opening window has nothing to push. Push-aside
+//      (#8, see pushAside below) is what a **hand** placing a window sets off. There is no overlap setting,
+//      by decision. The default size DEFAULT_W/H is an undecided that hangs off ⑩ too.
 //   ⑪⑫ the canvas list·order·names and a session's canvas·name **belong to the daemon** (protocol.md "캔버스").
 //      This file holds a copy and swaps it out on hello. Three things are the browser's alone — the tab in view,
 //      the fold of list groups (localStorage 'palmar-groups' · 'palmar-canvas-groups'), the minimap. The daemon
@@ -300,16 +302,26 @@ function paintClosing(id) {
 
 let toastTimer = null;
 function toast(parts) {
-  // parts: [{b:'bold'}, 'plain', {d:'dim'}], or a string
+  // parts: [{b:'bold'}, 'plain', {d:'dim'}, {a:'undo', on:fn}], or a string
   toastEl.textContent = '';
+  let act = false;
   for (const p of [].concat(parts)) {
     if (typeof p === 'string') toastEl.appendChild(document.createTextNode(p));
     else if (p.b != null) toastEl.appendChild(el('b', null, p.b));
     else if (p.d != null) toastEl.appendChild(el('span', 'd', p.d));
+    else if (p.a != null) {
+      // A real button, so it is reachable by keyboard. The toast is pointer-events:none until .show,
+      // which is what keeps a faded-out one from swallowing clicks on the canvas underneath.
+      const b = el('button', 'undo', p.a);
+      b.addEventListener('click', () => { toastEl.classList.remove('show'); if (p.on) p.on(); });
+      toastEl.appendChild(b);
+      act = true;
+    }
   }
   toastEl.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 4500);
+  // A toast you are meant to press needs longer than one you only read.
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), act ? 9000 : 4500);
 }
 function agoText(id) {
   const at = changedAt.get(id) || 0;
@@ -854,6 +866,7 @@ class Tile {
       paintTidy();          // moving a window creates or removes slack to close up
       if (was === 'size') this.refit();   // tell the PTY only when the resize is let go (spike D)
       this.persist();
+      settle(this.id);                    // whatever it landed on gets out of the way (decisions.md "새 창이 옆을 민다")
       renderMinimap();                    // the world may have grown — take the scale again
       refreshOff();
     };
@@ -976,6 +989,113 @@ function firstFree(w, h, canvasId) {
       if (!hit(x, y)) return { x, y };
   const bottom = rects.reduce((m, r) => Math.max(m, r.y + r.h), 0);
   return { x: GAP, y: bottom ? bottom + GAP : GAP };
+}
+
+// ── push-aside (decisions.md "겹치지 않는다. 새 창이 옆을 민다") ──────────────────────
+// Windows do not overlap. Land one on another and the one that was there moves — by exactly the overlap
+// and no further ("겹친 만큼만 최단 거리로"), and if that lands it on a third, the third goes the same way.
+// **This is not tiling.** Sizes belong to the user; the only thing palmar resolves is overlap
+// (AGENTS.md "밀어내기를 타일링으로 바꾸지 마라"). Shrinking a window therefore pulls nothing back.
+//
+// It runs **when the hand lets go**, not during the drag. Pushing live means the path you drag along
+// bulldozes whatever it crosses even when you carry straight on past it, and the window you were aiming
+// at has already fled by the time you arrive. On drop, the neighbours slide out from under the window
+// you just placed — which is also what the toast then says happened.
+//
+// Where it does not run: opening a window. firstFree already puts it where there is room, and since the
+// canvas grows without limit (⑩) that search cannot fail, so there is never anything to push. The other
+// half of the decision — a **new** terminal sits down and shoves — needs somewhere on screen for a person
+// to aim it, and there is no click-to-place yet. That is a person's call, not this file's.
+const PUSH_ROUNDS = 20;                 // termcanvas's limit, the number decisions.md names
+
+// The gap counts: two windows a hair apart read as touching, and that gap is the grid the eye already sees.
+function hits(a, b) {
+  return a.x < b.x + b.w + GAP && a.x + a.w + GAP > b.x &&
+         a.y < b.y + b.h + GAP && a.y + a.h + GAP > b.y;
+}
+
+// The four ways out of `p`, each the exact distance that clears the gap and not a pixel more.
+function shove(p, r, dir) {
+  const ways = [
+    { d: 'r', x: p.x + p.w + GAP, y: r.y, by: Math.abs(p.x + p.w + GAP - r.x) },
+    { d: 'b', x: r.x, y: p.y + p.h + GAP, by: Math.abs(p.y + p.h + GAP - r.y) },
+    { d: 'l', x: p.x - GAP - r.w, y: r.y, by: Math.abs(p.x - GAP - r.w - r.x) },
+    { d: 't', x: r.x, y: p.y - GAP - r.h, by: Math.abs(p.y - GAP - r.h - r.y) },
+  ];
+  // **Keep going the way it was already going.** A row of windows slides over as a row instead of
+  // scattering, and every step of a cascade then leads away from the window that started it — which is
+  // what makes it stop. Re-choosing the nearest way at each hop lets two windows trade places forever.
+  const same = dir && ways.find((w) => w.d === dir);
+  if (same && same.x >= 0 && same.y >= 0) return same;
+  // The canvas grows right and down without limit but is pinned at 0 on the other two sides, so left and
+  // up can run out of room; right and down never do, so there is always a way out. Ties go to the two
+  // directions the canvas grows in, which is why those are first in the list.
+  return ways.filter((w) => w.x >= 0 && w.y >= 0).reduce((m, w) => (w.by < m.by ? w : m));
+}
+
+// Resolve every overlap on one canvas while holding `anchorId` still — the window the hand just placed is
+// the one that keeps its position, everything else gets out of its way. Returns the moves it takes, which
+// is also what undo needs; [] when nothing overlapped.
+function pushAside(canvasId, anchorId) {
+  const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
+  if (mine.length < 2) return [];
+  // **Work on a copy.** A run that hits the round limit has to leave the screen exactly as it was, rather
+  // than stop halfway with windows parked where nobody asked for them.
+  const box = new Map(mine.map((t) => [t.id, Object.assign({}, layout[t.id])]));
+  let wave = [{ id: anchorId, dir: null }];
+  for (let round = 0; wave.length; round++) {
+    if (round >= PUSH_ROUNDS) return [];
+    const next = new Map();
+    for (const { id, dir } of wave) {
+      const p = box.get(id);
+      if (!p) continue;
+      for (const [oid, r] of box) {
+        if (oid === id || oid === anchorId || !hits(p, r)) continue;
+        const w = shove(p, r, dir);
+        r.x = w.x; r.y = w.y;
+        next.set(oid, { id: oid, dir: w.d });   // shoved twice in one wave: the later shove has the last word
+      }
+    }
+    wave = [...next.values()];
+  }
+  const moves = [];
+  for (const [id, r] of box) {
+    const was = layout[id];
+    if (r.x !== was.x || r.y !== was.y) moves.push({ id, x0: was.x, y0: was.y, x: r.x, y: r.y });
+  }
+  return moves;
+}
+
+// Put the moves on screen. The CSS transition on .tile does the sliding, so this is also the animation.
+function applyPush(moves) {
+  for (const m of moves) {
+    const t = tiles.get(m.id), r = layout[m.id];
+    if (!t || !r) continue;
+    // **Write the intended value; never read it back.** left/top are mid-transition numbers while the
+    // slide runs — the same trap tidyCanvas documents, and saving one of those puts the old position back.
+    t.el.style.left = m.x + 'px';
+    t.el.style.top = m.y + 'px';
+    layout[m.id] = Object.assign({}, r, { x: m.x, y: m.y });
+  }
+  saveLayout();
+  renderMinimap();
+  refreshOff();
+  paintTidy();
+}
+
+// Called when a window is let go. The name in the toast is read off the title bar rather than rebuilt from
+// the session, so it always says the words that are on the window itself.
+function settle(anchorId) {
+  if (!pushOn) return;                  // the switch in the shortcuts panel
+  const t = tiles.get(anchorId);
+  if (!t) return;
+  const moves = pushAside(t.s.canvas, anchorId);
+  if (!moves.length) return;
+  applyPush(moves);
+  const back = moves.map((m) => ({ id: m.id, x: m.x0, y: m.y0 }));
+  toast([{ b: t.nameEl.textContent || 'window' },
+         'moved ' + moves.length + (moves.length > 1 ? ' windows' : ' window') + ' aside',
+         { a: 'undo', on: () => applyPush(back) }]);
 }
 
 // Lay a canvas out as a grid. **Only used when a batch arrives at once** — a restore. One at a time,
@@ -1103,6 +1223,18 @@ addEventListener('resize', () => {
 const LS_AUTOTIDY = 'palmar.autotidy';
 let autoTidy = false;
 try { autoTidy = localStorage.getItem(LS_AUTOTIDY) === '1'; } catch (e) {}
+
+//: Push-aside, and a switch for it. **It starts on** — not overlapping is the decided behaviour
+//: (decisions.md "겹치지 않는다"), and unlike auto-tidy what it moves is only ever what your own hand just
+//: landed on. The switch exists because the person who owns that decision asked for one after using it
+//: (2026-09-14), which reverses "겹치기 설정을 만들지 마라" from 2026-09-07.
+//: **Only the off state is written.** On is the default, so an empty localStorage means on, and a browser
+//: that refuses storage gets the behaviour rather than the exception.
+//: Off does not mean chaos: focusTile already raises the window you click, which is what makes a stack
+//: usable instead of merely untidy.
+const LS_PUSH = 'palmar.push';
+let pushOn = true;
+try { pushOn = localStorage.getItem(LS_PUSH) !== '0'; } catch (e) {}
 
 const LS_RAILS = 'palmar.rails';
 const RAIL_DEF = { l: 256, r: 232 };
@@ -2623,6 +2755,12 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // Auto-tidy only runs on a pane disappearing, and that moment is hard to create from outside.
                   // Expose **the same function** the button calls, unchanged.
                   tidyCanvas,
+                  // Push-aside. A test drives the real drag with mouse events; these are here so the geometry
+                  // can also be asked directly — the cascade and the round limit need more windows than a
+                  // hand can comfortably drag into place one at a time.
+                  pushAside, applyPush, hits,
+                  // The switch's state, read-only — a test flips the real checkbox and checks this followed.
+                  pushOn: () => pushOn,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
                   lastOutAt, renderList,
@@ -2868,6 +3006,15 @@ function boot() {
       sw.addEventListener('change', () => {
         autoTidy = sw.checked;
         try { if (autoTidy) localStorage.setItem(LS_AUTOTIDY, '1'); else localStorage.removeItem(LS_AUTOTIDY); } catch (e) {}
+      });
+    }
+    const psw = document.getElementById('pushaside');
+    if (psw) {
+      psw.checked = pushOn;
+      psw.addEventListener('change', () => {
+        pushOn = psw.checked;
+        // **Write only the off state.** See LS_PUSH above — the default has to survive an empty store.
+        try { if (pushOn) localStorage.removeItem(LS_PUSH); else localStorage.setItem(LS_PUSH, '0'); } catch (e) {}
       });
     }
   }

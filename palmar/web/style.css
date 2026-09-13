@@ -772,7 +772,15 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .toast.show { opacity: 1; pointer-events: auto; }
 .toast b { color: var(--ink); font-weight: 500; }
 .toast .d { color: var(--ink-3); }
-.toast .undo { color: var(--accent); cursor: pointer; }
+/* The undo beside a push-aside toast. A real <button> so it is reachable by keyboard, stripped back to
+   looking like the word it is — the toast is one line and a second boxed button would read as a dialog. */
+.toast .undo {
+  color: var(--accent); cursor: pointer;
+  background: none; border: 0; padding: 0; font: inherit; text-decoration: underline;
+  text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.toast .undo:hover { text-decoration-color: var(--accent); }
+.toast .undo:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 /* ── minimap (⑩ ⑪, spike J) ─────────────────────
    **There is only one, and it is the canvas being viewed.** The rectangles' positions come from JS's coordinate store, and
    the only thing that moves on scroll is .mm-vp's transform — the DOM layout is never read (AGENTS.md).
