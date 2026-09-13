@@ -1,4 +1,4 @@
-# The 137 tests, run by something other than a person remembering to.
+# The 150 tests, run by something other than a person remembering to.
 #
 # They have existed since 2026-09-09 and nothing ran them automatically until now. Twice in one day
 # a test turned out to be passing while proving nothing — a synthetic InputEvent that silently
@@ -6,8 +6,20 @@
 # failing to send. A suite nobody runs rots the same way, only quieter.
 #
 # **On every push and every pull request.** The other two workflows here are manual because they
-# cost Windows minutes or build Rust; this is Linux, takes about four minutes, and is the one thing
-# that should never wait to be asked for.
+# cost Windows minutes or build Rust; this is the one thing that should never wait to be asked for.
+#
+# **Two operating systems, and the third cannot run yet.** Linux is where most people will run the
+# daemon; macOS is this project's floor for "no install at all" (`/usr/bin/python3` is 3.9.6 there)
+# and the only place the window's WKWebView build is checked. **Windows is absent on purpose** —
+# `palmar/daemon.py` raises SystemExit on `win32` above its own imports, so not one test in this
+# suite can even import it there. That is not an oversight in this file, it is #29; `docs/windows.md`
+# holds what is already measured. Until the port lands, `windows-conpty.yml` is the whole of Windows.
+#
+# **What still has no coverage anywhere: WebKit.** These tests drive Chrome, so they exercise Blink —
+# on Linux, on macOS, and in the Windows app's WebView2 too. The window built by `app/` uses
+# **WKWebView** on macOS and **WebKitGTK** on Linux, and those are a different engine. The Korean
+# input bug of 2026-09-11 was a WebKit bug that Chrome never showed. Passing here does not speak for
+# the window; only `docs/wslg.md`'s by-hand checks do.
 name: tests
 
 on:
@@ -19,14 +31,21 @@ on:
 
 jobs:
   unittest:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    runs-on: ${{ matrix.os }}
+    # macOS pays for a `cargo check` of wry and tao that Linux skips for want of WebKitGTK headers,
+    # and that dependency tree is not small. Four minutes of tests, the rest is Rust.
+    timeout-minutes: 40
     strategy:
-      fail-fast: false          # 3.9 failing should not hide what 3.13 says, or the other way round
+      fail-fast: false        # 3.9 failing should not hide what 3.13 says, or Linux what macOS says
       matrix:
-        # The floor and the ceiling. 3.9 is what macOS ships and what the code claims to run on
-        # (daemon.py refuses to start below it); 3.13 is what a current machine has.
-        python: ["3.9", "3.13"]
+        include:
+          # The floor and the ceiling. 3.9 is what macOS ships and what the code claims to run on
+          # (daemon.py refuses to start below it); 3.13 is what a current machine has.
+          - { os: ubuntu-24.04, python: "3.9",  skips: 6 }
+          - { os: ubuntu-24.04, python: "3.13", skips: 6 }
+          # macOS is deliberately unpinned: there is no ABI reason to hold it still the way
+          # app-linux.yml holds glibc, and we want to hear about a new macOS breaking us.
+          - { os: macos-latest, python: "3.13", skips: 5 }
 
     steps:
       - uses: actions/checkout@v4
@@ -43,45 +62,86 @@ jobs:
           python --version
           test -z "$(ls requirements*.txt 2>/dev/null)" || (echo "a requirements file appeared" && exit 1)
 
-      # Chrome drives the 35 browser tests over the DevTools protocol. The runner image ships one;
-      # this proves which, because the alternative is 35 tests skipping themselves in silence.
+      # Chrome drives the 48 browser tests over the DevTools protocol. Ask **the function the tests
+      # ask**, rather than repeating its search here — a check that looks in a different place than
+      # the code is a check that can pass while the code fails. It raises when it finds nothing,
+      # because the alternative is 44 tests skipping themselves in silence.
       - name: which chrome
+        env:
+          PALMAR_REQUIRE_BROWSER: "1"
         run: |
-          set -eux
-          which google-chrome || which chromium || true
-          google-chrome --version || chromium --version
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, ".")
+          from tests.cdp import chrome_path
+          print("chrome:", chrome_path())
+          PY
+
+      # **Only macOS reaches the Rust.** On Linux `can_build_app()` finds no WebKitGTK headers and
+      # `test_it_compiles` skips, so there is nothing to cache. Cold, `cargo check --release` of wry
+      # and tao is minutes; without this the whole point of running on every push would be lost to
+      # recompiling a dependency tree that did not change. actions/cache is first-party, which keeps
+      # the "no dependencies" promise this repo makes about itself.
+      - name: crates, kept between runs
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('app/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
 
       - name: the tests
         env:
-          # Turns "no Chrome, skip 35 tests" into a failure. On a runner that is a broken image,
+          # Turns "no Chrome, skip 48 tests" into a failure. On a runner that is a broken image,
           # not a machine without a browser.
           PALMAR_REQUIRE_BROWSER: "1"
         run: |
           set -o pipefail
           python -m unittest -v \
             tests.test_pure tests.test_app tests.test_daemon tests.test_install tests.test_browser \
-            2>&1 | tee /tmp/tests.log
+            2>&1 | tee tests.log
 
       # **A green run that skipped everything is the failure this workflow exists to prevent**, so
       # the count is asserted rather than trusted. Read from the run above rather than run again —
       # the suite takes about four minutes and there is no reason to pay for it twice.
-      # Four skips are expected on a test-only Linux runner, and no more:
-      #   Builds.test_it_compiles          — cargo is on the image, WebKitGTK's headers are not
-      #   FindingTheDaemon (3)             — the window has not been built here
-      # app-linux.yml is what compiles that half. Anything past six means something else went quiet.
+      #
+      # Expected skips, by runner:
+      #   ubuntu (4)  FindingTheDaemon (3) — the window has not been built here
+      #               Builds.test_it_compiles — cargo is on the image, WebKitGTK's headers are not
+      #   macOS  (3)  FindingTheDaemon (3) — same reason. test_it_compiles **runs** here, because
+      #               WKWebView needs no dev package, so macOS is where the window's Rust is checked.
+      # The cap sits a little above each so an added test does not fail the build for being new; the
+      # names are printed either way, which is what makes tightening it cheap.
       - name: how many actually ran
+        env:
+          CAP: ${{ matrix.skips }}
         run: |
           python - <<'PY'
-          import re, sys
-          tail = open("/tmp/tests.log", encoding="utf-8", errors="replace").read()
-          m = re.search(r"^Ran (\d+) tests", tail, re.M)
+          import os, re, sys
+          log = open("tests.log", encoding="utf-8", errors="replace").read()
+          m = re.search(r"^Ran (\d+) tests", log, re.M)
           if not m:
               sys.exit("could not find a test count in the output")
           ran = int(m.group(1))
-          skipped = int((re.search(r"skipped=(\d+)", tail) or ["", "0"])[1])
+          # unittest's own tally is the authority. Counting "... skipped" lines instead undercounts:
+          # a test with a docstring prints the docstring first and the marker lands on **that** line.
+          skipped = int((re.search(r"skipped=(\d+)", log) or ["", "0"])[1])
           print("ran %d, skipped %d" % (ran, skipped))
-          if ran < 130:
-              sys.exit("only %d tests ran; the suite is about 137" % ran)
-          if skipped > 6:
-              sys.exit("%d tests skipped; four are expected here" % skipped)
+          # Name them anyway — that is what makes tightening the cap cheap next time. For a test with
+          # a docstring the name is the line above the marker, for the rest it is the line itself.
+          lines, named = log.splitlines(), re.compile(r"^\S+ \(")
+          for i, ln in enumerate(lines):
+              if "... skipped" not in ln:
+                  continue
+              head = ln if named.match(ln) else (lines[i - 1] if i else "?")
+              print("  skipped: %s -- %s" % (head.split(" ... ")[0].strip(),
+                                             ln.split("skipped", 1)[1].strip()))
+          cap = int(os.environ["CAP"])
+          if ran < 143:
+              sys.exit("only %d tests ran; the suite is about 150" % ran)
+          if skipped > cap:
+              sys.exit("%d tests skipped, at most %d expected on this runner" % (skipped, cap))
           PY
