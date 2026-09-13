@@ -2,6 +2,10 @@
 
 *Read this in [English](README.md).*
 
+> 한글판은 영어판보다 조금 뒤처져 있다. **창으로 쓰는 이야기**(`app/` — 브라우저 없이 자기 창에서
+> 도는 741KB 프로그램, 맥·리눅스·WSLg)가 아직 여기 없다. 영어판의 "In a window instead" 와
+> [`app/README.md`](app/README.md) 를 보면 된다.
+
 터미널을 많이 띄워 놓고 쓰는 사람을 위한 가벼운 도구.
 
 > **palmar 는 AI 도구가 아니다.** 모델을 돌리지 않고, API 를 부르지 않고, 당신의 작업을 어디로도

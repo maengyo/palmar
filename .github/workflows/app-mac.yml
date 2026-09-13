@@ -1,0 +1,116 @@
+# Builds the window for macOS so that nobody has to install Rust to use it.
+#
+# The macOS counterpart of app-linux.yml, and deliberately not a copy of it. Two differences, both
+# on purpose:
+#
+# **Manual only — no push trigger.** app-linux.yml runs on every push that touches `app/` because it
+# is the only machine in the project that compiles the Linux half, so a change there is unverified
+# until it has run. That reason does not hold here: `tests.yml` runs on macOS on every push and its
+# `test_it_compiles` is a real `cargo check --release`, so a macOS build break is already caught for
+# free. What is left for this file is **packaging**, not verification — and a macOS runner bills at
+# **10× the Linux rate** on a private repo, so it runs when a binary is actually wanted.
+#
+#     gh workflow run app-mac.yml
+#     gh run watch
+#     gh run download -n palmar-app-macos-universal
+#     chmod +x palmar-app          # upload-artifact does not keep the executable bit
+#     ./palmar-app
+#
+# `gh run download` does not set the quarantine attribute the way a browser does, so Gatekeeper
+# stays out of the way. Downloading the artifact through the web UI instead **will** quarantine it,
+# and an unsigned binary is then refused — `xattr -d com.apple.quarantine palmar-app` clears it.
+# Signing and notarising is #12; until then, prefer `gh`.
+#
+# **A universal binary, not the runner's own architecture.** The runner is arm64 and an Intel Mac
+# cannot run an arm64 binary at all, so shipping one slice would quietly exclude half the Macs in
+# the world. Both slices are built and `lipo`-ed together.
+#
+# Measured locally on 2026-09-13 before this file was written, so it is asserting a known answer:
+# the fat binary is 1,611,200 bytes, both slices carry `minos 11.0`, and `otool -L` lists only
+# system frameworks plus libSystem, libobjc and libiconv — nothing is shipped twice.
+name: app (macos)
+
+on:
+  # Only. See the note above about 10× billing and about tests.yml already checking the compile.
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Deliberately unpinned. app-linux.yml pins its glibc floor in a container because glibc is not
+    # forward compatible; on macOS the floor is `MACOSX_DEPLOYMENT_TARGET` below, which is a property
+    # of the binary rather than of the machine that built it. So track the newest runner and hear
+    # about a new macOS breaking us.
+    runs-on: macos-latest
+    timeout-minutes: 40
+
+    env:
+      # **The macOS floor: 11.0 (Big Sur, 2020).** One number for both slices, because arm64 macOS
+      # did not exist before 11.0 and a split floor would mean the Intel half claims to run where the
+      # webview has not been tried. Raising reach below this is not free — it means claiming WKWebView
+      # behaves on releases nobody here has run.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Rust is preinstalled on the macOS image; only the second target has to be fetched. No
+      # packages otherwise — WKWebView is in the OS, which is the whole reason this binary is small.
+      - name: rust, and the other architecture
+        run: |
+          set -eux
+          rustc --version
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: build both slices
+        working-directory: app
+        run: |
+          set -eux
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: make one binary of the two
+        working-directory: app
+        run: |
+          set -eux
+          mkdir -p target/universal
+          lipo -create -output target/universal/palmar-app \
+            target/aarch64-apple-darwin/release/palmar-app \
+            target/x86_64-apple-darwin/release/palmar-app
+
+      # Print what it is rather than trust that it is. Three things, each of which has a way of
+      # being quietly wrong: which architectures are really inside, what macOS it claims to need,
+      # and whether anything outside the OS crept into the link.
+      - name: what came out
+        working-directory: app
+        run: |
+          set -eux
+          ls -l target/universal/palmar-app
+          lipo -info target/universal/palmar-app
+          otool -l target/universal/palmar-app | grep -A3 LC_BUILD_VERSION | grep -E 'platform|minos'
+          otool -L target/universal/palmar-app
+
+      # Both slices have to actually start. PATH is emptied so no daemon can be found or spawned and
+      # no window can open: what is checked is that the binary loads and reaches its own error path,
+      # which is the part `lipo` could have broken. Rosetta is present on the runner image; if it
+      # ever is not, this step says so instead of shipping an untried Intel half.
+      - name: both slices start
+        working-directory: app
+        run: |
+          set -eu
+          for a in arm64 x86_64; do
+            echo "--- $a"
+            out=$(arch -$a env HOME="$RUNNER_TEMP/emptyhome" PATH=/nonexistent \
+                  target/universal/palmar-app 2>&1 || true)
+            echo "$out"
+            case "$out" in
+              *"could not reach a daemon"*) ;;
+              *) echo "the $a slice did not reach its own error path"; exit 1 ;;
+            esac
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: palmar-app-macos-universal
+          path: app/target/universal/palmar-app
+          if-no-files-found: error
+          retention-days: 90

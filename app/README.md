@@ -34,8 +34,12 @@ The webview is the one the operating system already has, so nothing is shipped t
 nothing else — it runs with no toolchain present (measured on macOS with `cargo` and `rustc` off
 PATH). The only reason to install Rust was that there was nowhere to get a built one.
 
-`.github/workflows/app-linux.yml` is that place. It builds on every push that touches `app/`, and
-can be started by hand once it is on the default branch:
+`.github/workflows/` is that place — one workflow per platform.
+
+### Linux
+
+It builds on every push that touches `app/`, and can be started by hand once it is on the default
+branch:
 
 ```sh
 gh workflow run app-linux.yml && gh run watch
@@ -49,6 +53,34 @@ gh run download -n palmar-app-linux-x86_64  # gh carries your auth, so a private
 chmod +x palmar-app                         # upload-artifact does not keep the executable bit
 ./palmar-app
 ```
+
+### macOS
+
+```sh
+gh workflow run app-mac.yml && gh run watch
+gh run download -n palmar-app-macos-universal
+chmod +x palmar-app
+./palmar-app
+```
+
+Nothing to install beside it: WKWebView is part of the OS.
+
+**Manual only, no push trigger** — unlike the Linux one. `tests.yml` already runs on macOS on every
+push and its `test_it_compiles` is a real `cargo check --release`, so a build break is caught there
+for free; what is left for the workflow is packaging, and a macOS runner bills at **10× the Linux
+rate** on a private repo. So it runs when a binary is actually wanted.
+
+**It is a universal binary.** The runner is arm64 and an Intel Mac cannot run an arm64 binary at
+all, so both slices are built and `lipo`-ed together. Measured 2026-09-13: 1,611,200 bytes for the
+pair, both carrying `minos 11.0` — **macOS 11 Big Sur is the floor**, because arm64 macOS did not
+exist before it and a split floor would mean the Intel half claiming to run where the webview has
+never been tried. `otool -L` lists WebKit, AppKit, CoreFoundation and their neighbours, plus
+libSystem, libobjc and libiconv: all of it in the OS, nothing shipped twice.
+
+**Gatekeeper.** `gh run download` does not set the quarantine attribute, so the binary just runs.
+Downloading the artifact through the web UI **does** set it, and an unsigned binary is then refused
+— `xattr -d com.apple.quarantine palmar-app` clears it. It is also not a `.app` bundle: no icon, no
+Finder double-click, no Dock name. Signing, notarising and bundling is #12.
 
 It is built inside an `ubuntu:22.04` container against **glibc 2.35**, so it runs on Ubuntu 22.04
 and 24.04 alike — glibc is backward compatible but not forward compatible, so the floor has to be

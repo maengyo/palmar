@@ -149,6 +149,10 @@ Electron: being heavy is the thing this project is avoiding.
 cd app && cargo build --release && ./target/release/palmar-app
 ```
 
+**Rust is a build dependency, not a runtime one**, and there is somewhere to get a built one — CI
+produces a Linux x86-64 binary and a macOS universal binary (Intel and Apple silicon in one file,
+macOS 11 and up). See [`app/`](app/README.md) for which command downloads which.
+
 **Pick whichever you prefer — you are not meant to run both.** But if you do, it works:
 there is one daemon per home, whichever you start first brings it up, and the other attaches to it.
 Run `palmar` while the window is already open and it opens the page on that same daemon instead of
