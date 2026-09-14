@@ -648,9 +648,14 @@ body.fold-r .rail.right .rail-fold       { display: none; }
    the contrast has to come from the ring itself. The accent is used as it is rather than mixed towards
    white — white reads on the dark theme and disappears on the light one, where the accent is a blue on
    a pale tile. */
+/* Registered so the browser can interpolate it: a custom property that is just a string jumps, a
+   <number> tweens, and the ring then glides between ticks instead of stepping. Browsers without
+   @property ignore both lines and step — no worse than before. */
+@property --p { syntax: '<number>'; inherits: false; initial-value: 0; }
 .tile.arming::after {
   content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 3px;
   pointer-events: none; z-index: 3;
+  transition: --p .1s linear;
   background: conic-gradient(from -90deg,
               var(--accent) calc(var(--p, 0) * 1%),
               color-mix(in srgb, var(--accent) 20%, transparent) 0);

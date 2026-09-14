@@ -74,6 +74,7 @@ import collections
 import hashlib
 import hmac
 import json
+import math
 import re
 import secrets
 import shutil
@@ -238,6 +239,14 @@ URL_FILE = RUN_DIR / "url"
 #: It lives outside `run/`, which is this daemon's live state and gets swept at start-up; this file
 #: is meant to outlive a daemon, which is the whole point of it. 0600 — it holds paths.
 RESTORE_FILE = PALMAR_DIR / "restore.json"
+#: ③ **decided (2026-09-14): where every window sits lives here.** Position, size, z, text size and
+#: group membership, one object keyed by session id, written whenever a browser saves and handed to
+#: every browser in the hello frame. Until now it was the browser's `localStorage`, so two browsers on
+#: one daemon each had their own board — group in Safari, switch to Chrome, and nothing was grouped
+#: (user, 2026-09-14). Outside `run/` because it is meant to outlive a daemon, like restore.json.
+#: 0600 for the same reason as the rest of this directory. Nothing in it is a secret; it is habit.
+LAYOUT_FILE = PALMAR_DIR / "layout.json"
+LAYOUT_MAX_ENTRIES = 2000     # keyed by session id, and ids are never reused — a cap, not a budget
 RESTORE_EVERY_S = 10.0
 RESTORE = [None]          # what the previous daemon left, read once at start-up
 #: old canvas id → the id of the canvas restored in its place. **A restored canvas is a new canvas** —
@@ -1418,6 +1427,10 @@ class Registry:
         #: Creation sequence. **Never reused** — hand a deleted number out again and labels collide again.
         self.canvas_seq = 0
         self.event_clients: set = set()
+        #: ③ — the board: {session id: {x, y, w, h, z, f?, g?}}. Read from LAYOUT_FILE at start-up,
+        #: replaced whole by PUT /api/layout, broadcast as {"t": "layout"} so every other browser follows.
+        self.layout: dict = {}
+        self.layout_rev = 0           # climbs on every save, so a browser can drop a stale broadcast
 
     # ── Sessions ─────────────────────────────────────────
     def list(self) -> list[Session]:
@@ -1752,6 +1765,54 @@ def snapshot() -> dict:
                       "cwd": cwd_of(s.pid) or s.cwd}
                      for s in registry.list()],
     }
+
+
+_ID_RE = re.compile(r"[A-Za-z0-9_\-]{1,64}")
+
+
+def clean_layout(obj):
+    """The board as the daemon will keep it, or None if this is not a board. Only the fields the page
+    writes, only as numbers (bool is an int in Python and is refused), only ids shaped like ids — the
+    file is served back to every browser, so what goes in is what comes out."""
+    if not isinstance(obj, dict) or len(obj) > LAYOUT_MAX_ENTRIES:
+        return None
+    out = {}
+    for sid, r in obj.items():
+        if not isinstance(sid, str) or not _ID_RE.fullmatch(sid) or not isinstance(r, dict):
+            return None
+        e = {}
+        for k in ("x", "y", "w", "h", "z", "f"):
+            v = r.get(k)
+            if v is None:
+                continue
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+                return None
+            e[k] = v
+        g = r.get("g")
+        if g is not None:
+            if not isinstance(g, str) or len(g) > 64:
+                return None
+            e["g"] = g
+        out[sid] = e
+    return out
+
+
+def read_layout() -> dict:
+    """What the last daemon kept, or nothing. A file that cannot be trusted is worth less than none."""
+    try:
+        d = json.loads(LAYOUT_FILE.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(d, dict) or d.get("v") != 1:
+        return {}
+    return clean_layout(d.get("layout")) or {}
+
+
+def save_layout() -> None:
+    try:
+        write_private(LAYOUT_FILE, json.dumps({"v": 1, "layout": registry.layout}).encode() + b"\n", 0o600)
+    except OSError as e:
+        log(f"could not write {LAYOUT_FILE} — {e}")
 
 
 def save_restore() -> None:
@@ -2510,6 +2571,8 @@ async def ws_events(reader, writer, headers: dict) -> None:
     writer.write(Frame.text({"t": "hello", "v": PROTOCOL, "daemon": __version__,
                              "canvases": [c.to_json() for c in registry.canvas_list()],
                              "sessions": [s.to_json() for s in registry.list()],
+                             # ③ the board, so the sessions below land where they were left
+                             "layout": registry.layout, "layout_rev": registry.layout_rev,
                              # **It comes along at the moment of attaching.** The moment you want to know
                              # "what happened while I was away" is exactly then, so it is not asked twice.
                              "log": list(registry.log),
@@ -2801,6 +2864,31 @@ async def handle_request(reader, writer) -> None:
             RESTORE[0] = None
             save_restore()                    # the offer is declined — do not offer it again
             writer.write(http(204))
+        else:
+            writer.write(http(405))
+        return
+
+    # ③ the board. GET is open like the other reads; PUT replaces it whole — the page owns the object
+    # and saves it entire, so a merge would only invent a second author.
+    if path == "/api/layout":
+        if method == "GET":
+            writer.write(http_json(200, {"layout": registry.layout, "rev": registry.layout_rev}))
+        elif method == "PUT":
+            if not token_ok:
+                writer.write(http(403))
+                return
+            obj = parse_json_body(body)
+            cleaned = clean_layout(obj.get("layout")) if obj is not None else None
+            if cleaned is None:
+                writer.write(http_error(400, "body must be {\"layout\": {id: {x, y, w, h, z, f?, g?}}}"))
+                return
+            registry.layout = cleaned
+            registry.layout_rev += 1
+            save_layout()
+            by = obj.get("by")
+            registry.broadcast({"t": "layout", "layout": cleaned, "rev": registry.layout_rev,
+                                "by": by[:64] if isinstance(by, str) else ""})
+            writer.write(http_json(200, {"rev": registry.layout_rev}))
         else:
             writer.write(http(405))
         return
@@ -3184,6 +3272,9 @@ async def main(port: int, open_page: bool = True) -> None:
         log(f"restored {len(named)} canvas(es) from {RESTORE_FILE.name}")
     else:
         registry.new_canvas()
+    registry.layout = read_layout()
+    if registry.layout:
+        log(f"the board came back from {LAYOUT_FILE.name} — {len(registry.layout)} window(s)")
     loop = asyncio.get_running_loop()
     reaper.install(loop)
     try:

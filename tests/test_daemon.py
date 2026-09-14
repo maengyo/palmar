@@ -1056,3 +1056,99 @@ class WhereAPaneIsNow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheBoardLivesOnTheDaemon(unittest.TestCase):
+    """③, decided 2026-09-14: where every window sits is the daemon's to keep, not the browser's.
+
+    It was `localStorage`, so two browsers on one daemon each had their own board — group in Safari,
+    switch to Chrome, and nothing was grouped and every window was somewhere else (user). One object,
+    `~/.palmar/layout.json`, PUT whole by whichever browser moved something and handed to every browser
+    in hello, with a broadcast in between so the others follow without reloading."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.d.stop()
+
+    BOARD = {"abc123": {"x": 40, "y": 60, "w": 520, "h": 360, "z": 3, "g": "g1"},
+             "def456": {"x": 600, "y": 60, "w": 520, "h": 360, "z": 4, "f": 13.5, "g": "g1"}}
+
+    def test_a_new_daemon_has_an_empty_board(self):
+        """Its own daemon: the class's one is shared and the other tests fill it."""
+        with Daemon() as d:
+            self.assertEqual(d.get("/api/layout"), {"layout": {}, "rev": 0})
+
+    def test_it_keeps_what_it_is_given(self):
+        st, b = self.d.raw("PUT", "/api/layout", {"layout": self.BOARD, "by": "me"})
+        self.assertEqual(st, 200, b)
+        rev = json.loads(b)["rev"]
+        got = self.d.get("/api/layout")
+        self.assertEqual(got["layout"], self.BOARD)
+        self.assertEqual(got["rev"], rev)
+        # On disk, 0600, outside run/ — it is meant to outlive this daemon.
+        path = os.path.join(self.d.home, ".palmar", "layout.json")
+        self.assertTrue(os.path.exists(path), "nothing was written")
+        if os.name != "nt":
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        self.assertEqual(json.load(open(path))["layout"], self.BOARD)
+
+    def test_hello_carries_it(self):
+        self.d.raw("PUT", "/api/layout", {"layout": self.BOARD})
+        w = WS(self.d, "/events?token=" + self.d.token)
+        self.addCleanup(w.close)
+        hello = w.recv_json()
+        self.assertEqual(hello["layout"], self.BOARD)
+        self.assertIn("layout_rev", hello)
+
+    def test_every_other_browser_hears_about_a_save(self):
+        w = WS(self.d, "/events?token=" + self.d.token)
+        self.addCleanup(w.close)
+        w.recv_json()                                   # the hello
+        st, b = self.d.raw("PUT", "/api/layout", {"layout": self.BOARD, "by": "safari"})
+        self.assertEqual(st, 200, b)
+        m = w.recv_json()
+        self.assertEqual(m["t"], "layout")
+        self.assertEqual(m["layout"], self.BOARD)
+        self.assertEqual(m["by"], "safari", "a browser cannot tell its own save from another's")
+        self.assertEqual(m["rev"], json.loads(b)["rev"])
+
+    def test_a_daemon_that_starts_over_a_file_serves_it(self):
+        """The file is meant to outlive a daemon — restore.json's reason, and this one's. The helper
+        makes its HOME before it starts the daemon, so the file a previous daemon would have left
+        can simply be put there first."""
+        d = Daemon()
+        path = os.path.join(d.home, ".palmar")
+        os.makedirs(path, exist_ok=True)
+        with open(os.path.join(path, "layout.json"), "w") as fh:
+            json.dump({"v": 1, "layout": self.BOARD}, fh)
+        d.start()
+        try:
+            self.assertEqual(d.get("/api/layout")["layout"], self.BOARD)
+        finally:
+            d.stop()
+
+    def test_a_save_needs_the_token(self):
+        st, _ = self.d.raw("PUT", "/api/layout", {"layout": {}}, token=False)
+        self.assertEqual(st, 403)
+
+    def test_it_refuses_what_is_not_a_board(self):
+        """What goes in is served back to every browser, so the shape is checked on the way in."""
+        bad = [
+            {"layout": []},                                         # not an object
+            {"layout": {"abc": {"x": "40"}}},                       # a number as a string
+            {"layout": {"abc": {"x": True}}},                       # bool is an int in Python — refused
+            {"layout": {"abc": {"g": 5}}},                          # a group id that is not a string
+            {"layout": {"../etc": {"x": 1}}},                       # not an id
+            {"nope": {}},                                           # no board at all
+        ]
+        for body in bad:
+            st, _ = self.d.raw("PUT", "/api/layout", body)
+            self.assertEqual(st, 400, "accepted %r" % (body,))
+        # A field the page does not write is dropped, not refused: the page may grow one.
+        st, _ = self.d.raw("PUT", "/api/layout", {"layout": {"abc": {"x": 1, "y": 2, "colour": "red"}}})
+        self.assertEqual(st, 200)
+        self.assertEqual(self.d.get("/api/layout")["layout"], {"abc": {"x": 1, "y": 2}})

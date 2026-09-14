@@ -5,7 +5,7 @@
 //    Picking a framework rewrites this file — so state (sessions·tiles) and the DOM are tied as thinly as we can.
 //
 // Left provisional (places where a decision that belongs to a person is not pre-empted — only what it takes to run):
-//   ③ position·size·z order live in localStorage 'palmar-tiles', keyed by session id. Exactly the provisional
+//   ③ position·size·z order live on the daemon (decided 2026-09-14; see saveLayout). Below stands the provisional
 //      that protocol.md's "위치·크기" section describes. The daemon knows only the pane's cols·rows.
 //   ⑥ the status string only becomes a CSS class (wait/work/done/idle). Colors live only in style.css's --st-*.
 //      idle and unknown share the same grey slot — once the mapping is decided, only STATUS_CLASS changes.
@@ -162,9 +162,65 @@ function loadLayout() {
   try { const v = JSON.parse(localStorage.getItem(LS_TILES) || '{}'); return v && typeof v === 'object' ? v : {}; }
   catch (e) { return {}; }
 }
+//: ③ **decided (2026-09-14): the layout lives on the daemon.** Positions, sizes, z, text size and group
+//: membership are one object, kept in `~/.palmar/layout.json` and carried in the hello frame. The
+//: browser store is kept only as the hand-over — a daemon whose file is empty is given what this
+//: browser had — and as the fallback for a daemon too old to have the endpoint. Two browsers on one
+//: daemon then see one arrangement: grouping in Safari and switching to Chrome used to land on a
+//: board with no groups and every window somewhere else (user, 2026-09-14).
+const CLIENT = Math.random().toString(36).slice(2, 10);   // who saved — a page ignores its own broadcast
+let layoutRev = 0;
+let layoutOnDaemon = null;        // null until hello says; false when the daemon predates the endpoint
 function saveLayout() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { try { localStorage.setItem(LS_TILES, JSON.stringify(layout)); } catch (e) {} }, 150);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(LS_TILES, JSON.stringify(layout)); } catch (e) {}
+    pushLayout();
+  }, 150);
+}
+async function pushLayout() {
+  if (layoutOnDaemon === false) return;
+  try {
+    const r = await api('PUT', '/api/layout', { layout, by: CLIENT });
+    if (r && typeof r.rev === 'number') layoutRev = Math.max(layoutRev, r.rev);
+  } catch (e) {
+    if (e.status === 404) layoutOnDaemon = false;   // an older daemon: the browser store carries on alone
+  }
+}
+// What hello brought. Theirs wins when they have one; when they have none and this browser does, it
+// is handed over — that is the migration, and it happens once.
+function takeLayout(m) {
+  if (!m || typeof m.layout !== 'object' || m.layout === null) { layoutOnDaemon = false; return; }
+  layoutOnDaemon = true;
+  layoutRev = Math.max(layoutRev, m.layout_rev || 0);
+  if (Object.keys(m.layout).length) { layout = m.layout; placeAll(); }
+  else if (Object.keys(layout).length) pushLayout();
+}
+// Another browser saved. **Not while a hand is down here** — our own save follows the release and has
+// the last word anyway, and moving the window under a hand is the one thing that must not happen.
+function layoutArrived(m) {
+  if (!m || typeof m.layout !== 'object' || m.layout === null || m.by === CLIENT) return;
+  if (typeof m.rev === 'number') { if (m.rev <= layoutRev) return; layoutRev = m.rev; }
+  if (document.querySelector('.tile.drag')) return;
+  layout = m.layout;
+  placeAll();
+}
+// Put every live window where the store says. Text size is left to the next open — it needs the
+// terminal rebuilt, and a size somebody else set is not worth that mid-session.
+function placeAll() {
+  for (const t of tiles.values()) {
+    const r = layout[t.id];
+    if (!r || !Number.isFinite(r.x) || !Number.isFinite(r.y)) continue;
+    const w = r.w >= MIN_W ? r.w : t.el.offsetWidth, h = r.h >= MIN_H ? r.h : t.el.offsetHeight;
+    Object.assign(t.el.style, { left: r.x + 'px', top: r.y + 'px', width: w + 'px', height: h + 'px' });
+    if (r.z) { t.el.style.zIndex = String(r.z); zTop = Math.max(zTop, r.z); }
+    t.fitted = false;
+    if (t.visible()) t.refit();
+  }
+  paintGroups();
+  renderMinimap();
+  refreshOff();
+  paintTidy();
 }
 // List group fold — that browser's taste, not a property of the session (protocol.md "없는 것"). Same place as the theme.
 function loadGroups() {
@@ -473,7 +529,9 @@ class Tile {
     if (saved && saved.g) layout[s.id].g = saved.g;   // groups survive a reload, like the position
     saveLayout();
     cvScroll.appendChild(e);
-    paintGroups();      // a group survives a reload, so a restored tile has to come back wearing it
+    // The frame is painted by upsert, **after** this tile is in `tiles` — painted from here it cannot
+    // see itself, so the second member of a restored pair drew nothing and the group came back
+    // unframed in every browser but the one that made it (measured 2026-09-14).
 
     // xterm — the browser does the terminal emulation (AGENTS.md principle 1)
     this.term = new Terminal({
@@ -878,7 +936,8 @@ class Tile {
       overId = null; overSince = 0; armed = null; overSide = null; overSideAtDrop = null;
       for (const id of party) { const t = tiles.get(id); if (t) t.el.classList.add('drag'); }
       this.el.classList.add('drag');
-      if (m === 'move') { clearInterval(holdTimer); holdTimer = setInterval(hold, 60); }
+      // Every frame, not every 60ms: at 60ms the ring moved in visible steps ("조금 끊기는 거 같아").
+      if (m === 'move') { clearInterval(holdTimer); holdTimer = setInterval(hold, 16); }
       ev.currentTarget.setPointerCapture(ev.pointerId);
       ev.preventDefault();
     };
@@ -1250,7 +1309,7 @@ function paintUndo() {
 // Membership rides in the same store as the position (⑩ provisional, `palmar-tiles`) — and lands in
 // the same undecided as the coordinates do (③, #2). A group is an id, kept on each member.
 const GROUP_LEAD_MS = 280;      // quiet moment after the overlap before the gauge starts
-const GROUP_HOLD_MS = 900;      // and this long filling, over another window, and they join
+const GROUP_HOLD_MS = 1500;     // and this long filling, over another window, and they join
 const OVER_TAKE = 0.20;         // this much of the dragged window covered before it takes a target
 const OVER_KEEP = 0.05;         // and it holds that target until this little is left
 
@@ -1394,7 +1453,7 @@ function setGauge(id, pct) {
     return;
   }
   t.el.classList.add('arming');
-  t.el.style.setProperty('--p', Math.min(100, Math.round(pct)));
+  t.el.style.setProperty('--p', Math.min(100, pct).toFixed(1));   // not rounded: whole percents are steps
 }
 
 function undoJoin(changed) {
@@ -3082,6 +3141,7 @@ function upsert(s) {
     tiles.set(s.id, t);
     t.off = false;
     refreshOff();    // a window another browser opened can land off-screen — the viewport is measured once in there
+    if (layout[s.id] && layout[s.id].g) paintGroups();   // now it can be seen — see the Tile constructor
   } else {
     const wasVisible = !t.el.classList.contains('other');
     t.update(s);
@@ -3089,6 +3149,7 @@ function upsert(s) {
     if (on !== wasVisible) {          // ⑪ the session moved canvas — it arrives in a single session frame
       t.el.classList.toggle('other', !on);
       if (on) t.refit(); else { t.off = false; syncMax(); }   // the expanded window went to somebody else's canvas
+      paintGroups();                                          // a group lives on one canvas — its frame moves with it
     }
   }
   renderTabs();      // the dot is computed — recount when status or canvas changes
@@ -3177,6 +3238,7 @@ function connectEvents() {
       // One toast, not two: a protocol mismatch is the louder half of the same news, and the second call
       // would overwrite the first in the same strip.
       if (!checkProtocol(m)) checkVersion(m);
+      takeLayout(m);                       // before the sessions are placed, so they land where the daemon says
       setCanvases(m.canvases || []); reconcile(m.sessions || []);
       renderRestore(m.restore);
     }
@@ -3185,6 +3247,7 @@ function connectEvents() {
     else if (m.t === 'canvas' && m.c) putCanvas(m.c);           // created or renamed
     else if (m.t === 'canvases' && m.cs) setCanvases(m.cs);     // the order changed — all of them, in order
     else if (m.t === 'canvas_gone' && m.id) dropCanvas(m.id);   // canvases follows right behind
+    else if (m.t === 'layout') layoutArrived(m);                 // another browser moved something
   };
   ws.onclose = () => {
     if (eventsWs !== ws) return;
@@ -3491,7 +3554,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // hand can comfortably drag into place one at a time.
                   pushAside, applyPush, hits, firstFree,
                   // Groups: the model is testable without a hand, the gesture needs one.
-                  groupOf, groupRect, joinGroups, leaveGroup, paneOver, joinPreview, setGauge, arrangeGroup,
+                  groupOf, groupRect, joinGroups, leaveGroup, paneOver, joinPreview, setGauge, arrangeGroup, paintGroups,
                   // Undo: one way back for everything that moves a window.
                   undoMark, undoLast, undoDepth: () => undoStack.length,
                   // Path joining is platform-shaped and the platform it gets wrong has no Chrome
@@ -3502,6 +3565,9 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   checkVersion, daemonSeen: () => daemonSeen,
                   // The switch's state, read-only — a test flips the real checkbox and checks this followed.
                   pushOn: () => pushOn,
+                  // The layout store: saveLayout pushes it to the daemon, client is who this page is
+                  // to the daemon — a test with two browsers needs to tell the two apart.
+                  saveLayout, client: () => CLIENT, layoutOnDaemon: () => layoutOnDaemon,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
                   lastOutAt, renderList,

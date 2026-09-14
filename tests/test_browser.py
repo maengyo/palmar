@@ -1296,7 +1296,7 @@ class Grouping(unittest.TestCase):
         # **Both facts in one round trip.** Asking twice let the group form between the questions, so
         # the highlight was gone by the time the second one arrived and the gesture looked invisible.
         lit = False
-        for _ in range(14):
+        for _ in range(20):
             st = self.b.ev("""(()=>{const P=window.palmar;
               const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
               return {lit: document.querySelectorAll('.tile.joining, .tile.joinready, .tile.arming').length > 0,
@@ -1349,7 +1349,7 @@ class Grouping(unittest.TestCase):
             self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
         jitter = [(0, 0), (9, -7), (-8, 6), (11, 4), (-6, -9), (7, 8), (-10, 3)]
         best, n = 0, 1
-        for k in range(14):
+        for k in range(22):
             time.sleep(0.12)
             dx, dy = jitter[k % len(jitter)]
             self.send(type="mouseMoved", x=tx + dx, y=ty + dy, buttons=1)
@@ -1389,6 +1389,25 @@ class Grouping(unittest.TestCase):
                 return
         self.fail("the window never went away")
 
+    def test_the_frame_is_back_after_a_reload(self):
+        """The membership came back and the frame did not: paintGroups ran from the Tile constructor,
+        before the tile was in `tiles`, so the second member of a restored pair could not see itself
+        and drew nothing. Every browser but the one that made the group opened on it unframed."""
+        self.bench("""put('g1', 40, 40, 240, 200); put('g2', 292, 40, 240, 200);
+                      P.joinGroups(by('g1').id, by('g2').id); P.saveLayout(); return 1;""")
+        time.sleep(0.6)                                # the save is debounced, and it has to land first
+        self.b.ev("location.reload()")
+        for _ in range(40):
+            time.sleep(0.25)
+            if self.b.ev("!!(window.palmar && [...window.palmar.tiles.values()].some(t=>t.s.name==='g2'))"):
+                break
+        time.sleep(0.5)
+        r = self.b.ev("""(()=>{const P=window.palmar;
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          return {n: P.groupOf(by('g1').id).length, boxes: document.querySelectorAll('.gbox').length};})()""")
+        self.assertEqual(r["n"], 2, "the group did not survive the reload")
+        self.assertEqual(r["boxes"], 1, "the group came back without its frame")
+
     def test_a_still_hand_still_counts(self):
         """**A hold that only advances while you move is not a hold.** The whole block ran on
         pointermove, so the one gesture it exists for — putting a window down on another and keeping it
@@ -1403,7 +1422,7 @@ class Grouping(unittest.TestCase):
         for i in (1, 2, 3):
             self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
         best = 0
-        for _ in range(16):                       # nothing is sent in here: the hand has stopped
+        for _ in range(26):                       # nothing is sent in here: the hand has stopped
             time.sleep(0.12)
             best = max(best, self.b.ev("""(()=>{const e=document.querySelector('.tile.arming');
               return e ? Number(e.style.getPropertyValue('--p')) : 0;})()"""))
@@ -1605,7 +1624,7 @@ class Grouping(unittest.TestCase):
         for i in (1, 2, 3):
             self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
         self.send(type="mouseMoved", x=tx + 1, y=ty, buttons=1)
-        for _ in range(16):
+        for _ in range(26):
             time.sleep(0.12)
             if self.b.ev("!!document.querySelector('.tile.joinready')"):
                 break
@@ -1638,7 +1657,7 @@ class Grouping(unittest.TestCase):
         for i in (1, 2, 3):
             self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
         box = None
-        for _ in range(16):
+        for _ in range(26):
             time.sleep(0.12)
             self.send(type="mouseMoved", x=tx + 1, y=ty, buttons=1)
             box = self.b.ev("""(()=>{const g=document.querySelector('.ghost');
@@ -1749,7 +1768,7 @@ class Grouping(unittest.TestCase):
                   ghost: !!document.querySelector('.ghost'),
                   mine: e ? e.querySelector('.tb .name').textContent : null};})()"""
         seen = []
-        for _ in range(16):        # the quiet lead-in comes first, then the 900ms fill
+        for _ in range(26):        # the quiet lead-in comes first, then the 900ms fill
             time.sleep(0.12)
             self.send(type="mouseMoved", x=tx + 1, y=ty, buttons=1)
             seen.append(self.b.ev(look))
@@ -1818,7 +1837,7 @@ class Grouping(unittest.TestCase):
         for i in (1, 2, 3):
             self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
         ready = False
-        for _ in range(12):
+        for _ in range(20):
             ready = ready or self.b.ev("!!document.querySelector('.tile.joinready')")
             if ready:
                 break
@@ -2100,3 +2119,88 @@ class Undoing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OneBoardForEveryBrowser(unittest.TestCase):
+    """③, decided 2026-09-14. Grouping in Safari and switching to Chrome landed on a board with no
+    groups and every window somewhere else — the board was in `localStorage`, which is per browser.
+    It is the daemon's now: a second browser is a fresh Chrome profile here, with nothing of its own,
+    and it has to open on the first one's board and follow its moves without reloading."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.a = Browser().start()
+        cls.a.open(cls.d.url)
+        cls.a.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          for (const n of ['g1','g2'])
+            await fetch('/api/sessions?token='+T,{method:'POST',
+              headers:{'content-type':'application/json'},
+              body:JSON.stringify({cwd:%s,name:n})});})()""" % json.dumps(cls.d.home))
+        time.sleep(4)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.a.stop()
+        cls.d.stop()
+
+    JS = Grouping.JS
+
+    def bench(self, b, body):
+        return b.ev("(()=>{" + self.JS + "\n" + body + "})()")
+
+    def board(self):
+        return self.d.get("/api/layout")["layout"]
+
+    def wait_for(self, fn, what, secs=6):
+        end = time.time() + secs
+        while time.time() < end:
+            v = fn()
+            if v:
+                return v
+            time.sleep(0.2)
+        self.fail("gave up waiting for " + what)
+
+    def test_the_daemon_is_told_where_things_are(self):
+        self.assertTrue(self.a.ev("window.palmar.layoutOnDaemon()"), "the page did not find the endpoint")
+        self.bench(self.a, "put('g1', 333, 222, 300, 240); P.saveLayout(); return 1;")
+        g1 = self.a.ev("[...window.palmar.tiles.values()].find(t=>t.s.name==='g1').id")
+        r = self.wait_for(lambda: (lambda L: L.get(g1) if L.get(g1, {}).get("x") == 333 else None)(self.board()),
+                          "the daemon to hear about the move")
+        self.assertEqual([r["x"], r["y"], r["w"], r["h"]], [333, 222, 300, 240])
+
+    def test_a_second_browser_opens_on_the_same_board(self):
+        self.bench(self.a, "put('g1', 480, 96, 280, 220); put('g2', 60, 400, 280, 220); P.saveLayout(); return 1;")
+        g1 = self.a.ev("[...window.palmar.tiles.values()].find(t=>t.s.name==='g1').id")
+        self.wait_for(lambda: self.board().get(g1, {}).get("x") == 480, "the save")
+        b = Browser().start()
+        self.addCleanup(b.stop)
+        b.open(self.d.url)
+        at = self.wait_for(lambda: self.bench(b, "const t = by('g1'); return t && at('g1')[0] === 480 ? at('g1') : null;"),
+                           "the second browser to show the window where the first put it")
+        self.assertEqual(at, [480, 96])
+
+    def test_an_open_browser_follows_without_reloading(self):
+        b = Browser().start()
+        self.addCleanup(b.stop)
+        b.open(self.d.url)
+        self.wait_for(lambda: self.bench(b, "return by('g2') ? 1 : 0;"), "the second browser to open")
+        self.bench(self.a, "put('g2', 700, 300, 260, 200); P.saveLayout(); return 1;")
+        at = self.wait_for(lambda: self.bench(b, "return at('g2')[0] === 700 ? at('g2') : null;"),
+                           "the second browser to follow the move")
+        self.assertEqual(at, [700, 300])
+        # The element slides there over 350ms — the store is written at once, the window arrives after.
+        got = self.wait_for(lambda: self.bench(b, "const e = by('g2').el; return e.offsetLeft === 700 ? [e.offsetLeft, e.offsetTop] : null;"),
+                            "the window itself to arrive", secs=3)
+        self.assertEqual(got, [700, 300], "the store moved but the window did not")
+
+    def test_a_group_is_a_group_everywhere(self):
+        self.bench(self.a, """put('g1', 40, 40, 240, 200); put('g2', 292, 40, 240, 200);
+                              P.joinGroups(by('g1').id, by('g2').id); P.saveLayout(); return 1;""")
+        b = Browser().start()
+        self.addCleanup(b.stop)
+        b.open(self.d.url)
+        n = self.wait_for(lambda: self.bench(b, "return by('g1') && P.groupOf(by('g1').id).length === 2 ? 2 : 0;"),
+                          "the group to appear in the second browser")
+        self.assertEqual(n, 2)
+        self.assertEqual(b.ev("document.querySelectorAll('.gbox').length"), 1, "grouped in the store, unframed on screen")
