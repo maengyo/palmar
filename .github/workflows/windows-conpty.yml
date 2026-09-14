@@ -61,6 +61,8 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -Command "$t=$null;$e=$null;[System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'install.ps1').Path,[ref]$t,[ref]$e)|Out-Null;if($e){$e|ForEach-Object{'{0}: {1}' -f $_.Extent.StartLineNumber,$_.Message}}else{'parses clean on 5.1'}"
           echo --- run
           powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Check
+          echo --- and with a python named outright
+          powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Check -Python "%pythonLocation%\python.exe"
 
       # No pip install of anything: this half of the port is ctypes against kernel32, which is the
       # whole point of writing it.

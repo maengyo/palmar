@@ -115,15 +115,21 @@ function Try-Python {
   # Store install from the stub that opens the Store. The version it prints can.
   param([string]$Exe, [string[]]$Pre = @())
   if (-not $Exe -or -not (Test-Path -LiteralPath $Exe)) { return $null }
+  # **`--version`, and no -c.** Windows PowerShell 5.1 mangles arguments containing quotes on their
+  # way to a native program -- PowerShell 7 fixed that, which is why a Mac could not see it. The
+  # -c snippet this used to send arrived at python with its quotes eaten, died of a SyntaxError, and
+  # came back here as "did not answer with a version" (user, 2026-09-14). `--version` needs no
+  # quoting at all, so there is nothing left to mangle.
   try {
-    $out = & $Exe @Pre '-c' 'import sys;print("%d.%d" % sys.version_info[:2])' 2>$null
+    $out = & $Exe @Pre '--version' 2>&1
   } catch { return $null }
-  if ($LASTEXITCODE -ne 0 -or -not $out) { return $null }
-  $v = ("$out".Trim() -split "`n")[-1].Trim()
-  $parts = $v -split '\.'
-  if ($parts.Count -lt 2) { return $null }
-  try { $maj = [int]$parts[0]; $min = [int]$parts[1] } catch { return $null }
-  return [pscustomobject]@{ Exe = $Exe; Pre = $Pre; Version = $v; Major = $maj; Minor = $min }
+  if (-not $out) { return $null }
+  # "Python 3.13.1". Old versions printed it on stderr, hence 2>&1 rather than 2>$null.
+  $m = [regex]::Match(($out | Out-String), 'Python\s+(\d+)\.(\d+)(\.(\d+))?')
+  if (-not $m.Success) { return $null }
+  $maj = [int]$m.Groups[1].Value
+  $min = [int]$m.Groups[2].Value
+  return [pscustomobject]@{ Exe = $Exe; Pre = $Pre; Version = "$maj.$min"; Major = $maj; Minor = $min }
 }
 
 function Find-Python {
