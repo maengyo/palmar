@@ -230,6 +230,33 @@ if wall("import palmar.daemon", _import):
             loop.close()
     wall("the loop can wait for output (step 2)", _reader)
 
+    def _cwd():
+        """**Where a pane is *now*, not where it was opened.** Restoring a workspace writes
+        `cwd_of(pid) or s.cwd`, and with no answer on Windows every restored terminal came back in
+        the folder it was first opened in rather than the one you had cd-ed to (user, 2026-09-14).
+
+        Read out of the process's own PEB, which is why this is checked against a directory the pane
+        is told to move to rather than the one it started in -- starting there would pass even if the
+        code returned the creation cwd by accident."""
+        p = D["pane"]
+        want = os.path.join(BOX, "cwd-probe")
+        os.makedirs(want, exist_ok=True)
+        p.pty.write(("cd '%s'" % want + chr(13)).encode())
+        seen = None
+        end = time.time() + 8
+        while time.time() < end:
+            time.sleep(0.4)
+            seen = d.cwd_of(p.pid)
+            if seen and os.path.normcase(os.path.normpath(seen)) == os.path.normcase(want):
+                break
+        say("    asked for", want)
+        say("    cwd_of says", repr(seen))
+        if seen is None:
+            raise RuntimeError("cwd_of returned None -- a restored pane would lose its directory")
+        if os.path.normcase(os.path.normpath(seen)) != os.path.normcase(want):
+            raise RuntimeError("cwd_of did not follow the cd: %r" % seen)
+    wall("cwd_of follows a cd", _cwd)
+
     def _threaded():
         """**Step 2, through the daemon's own path.** start_reading has to put a thread on it, the
         bytes have to arrive in `pending` on the loop, and stop_reading has to park the thread rather

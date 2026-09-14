@@ -1011,5 +1011,48 @@ class StoppingTrustsTheAddress(unittest.TestCase):
         self.assertIn("도는 데몬이 없다", r.stdout)
 
 
+class WhereAPaneIsNow(unittest.TestCase):
+    """`cwd_of` — the directory a pane is in **now**, not the one it was opened in.
+
+    Restoring a workspace writes `cwd_of(pid) or s.cwd`, so where this returns nothing every restored
+    terminal comes back in the folder it was first opened in. On Windows that was every terminal
+    (user, 2026-09-14): there is no /proc and nothing like proc_pidinfo, so it is read out of the
+    process's own PEB instead.
+
+    Tested by moving the pane somewhere it did **not** start, because starting there would pass even
+    if the creation cwd were being returned by accident."""
+
+    def test_it_follows_a_cd(self):
+        from palmar import daemon as dm
+        box = tempfile.mkdtemp(prefix="palmar-cwd-")
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        want = os.path.join(box, "moved")
+        os.makedirs(want)
+        pty = __import__("palmar.posixpty", fromlist=["PosixPty"]).PosixPty() \
+            if sys.platform != "win32" else None
+        if pty is None:
+            self.skipTest("this class drives a POSIX pty; the Windows path is dev/win-daemon-probe.py")
+        pty.spawn(["/bin/sh"], cwd=box, rows=24, cols=80)
+        self.addCleanup(pty.close)
+        self.addCleanup(pty.kill)
+        time.sleep(0.4)
+        pty.write(("cd '%s'\n" % want).encode())
+        seen = None
+        end = time.time() + 10
+        while time.time() < end:
+            time.sleep(0.3)
+            seen = dm.cwd_of(pty.pid)
+            if seen and os.path.realpath(seen) == os.path.realpath(want):
+                break
+        self.assertIsNotNone(seen, "cwd_of said nothing — a restored pane would lose its directory")
+        self.assertEqual(os.path.realpath(seen), os.path.realpath(want),
+                         "it reported where the pane started, not where it is")
+
+    def test_an_unknown_pid_is_not_an_error(self):
+        """It is asked about panes that may have just died, from the restore path. None, never a raise."""
+        from palmar import daemon as dm
+        self.assertIsNone(dm.cwd_of(2 ** 30))
+
+
 if __name__ == "__main__":
     unittest.main()

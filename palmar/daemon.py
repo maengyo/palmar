@@ -1618,7 +1618,94 @@ def cwd_of(pid: int):
             return os.readlink("/proc/%d/cwd" % pid)
         except OSError:
             return None
+    if sys.platform == "win32":
+        return _cwd_of_win(pid)
     return None
+
+
+#: Windows has no /proc and nothing like proc_pidinfo. A process's current directory lives in its own
+#: memory — PEB → RTL_USER_PROCESS_PARAMETERS → CurrentDirectory — and reading it needs
+#: PROCESS_VM_READ, which you have for your own processes and nobody else's. That is the same
+#: boundary as everything else here (README, "what palmar does not protect you from").
+#:
+#: **The offsets are the fragile part.** They are stable for x64 across Windows 10 and 11 and widely
+#: relied on, but they are not contract — so every step is checked and any failure means `None`,
+#: which is the answer this function has always had for a platform it cannot ask. Falling back to the
+#: folder a pane was opened in is a worse answer, never a wrong one.
+_NTDLL = [False]
+_PEB_PROCESS_PARAMETERS = 0x20          # PEB.ProcessParameters, x64
+_RUPP_CURRENT_DIRECTORY = 0x38          # RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath, x64
+
+
+def _cwd_of_win(pid: int):
+    import ctypes
+    from ctypes import wintypes
+    if ctypes.sizeof(ctypes.c_void_p) != 8:
+        return None                     # 32-bit Python cannot read a 64-bit process's PEB
+    if _NTDLL[0] is False:
+        try:
+            nt = ctypes.WinDLL("ntdll", use_last_error=True)
+            nt.NtQueryInformationProcess.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                                     wintypes.ULONG, ctypes.POINTER(wintypes.ULONG)]
+            nt.NtQueryInformationProcess.restype = ctypes.c_long
+            _NTDLL[0] = nt
+        except Exception:
+            _NTDLL[0] = None
+    nt = _NTDLL[0]
+    if not nt:
+        return None
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.ReadProcessMemory.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p,
+                                      ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+    k32.ReadProcessMemory.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
+
+    PROCESS_QUERY_INFORMATION, PROCESS_VM_READ = 0x0400, 0x0010
+    h = k32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
+    if not h:
+        return None
+    try:
+        def at(addr, size):
+            buf = (ctypes.c_ubyte * size)()
+            n = ctypes.c_size_t(0)
+            if not k32.ReadProcessMemory(h, ctypes.c_void_p(addr), buf, size, ctypes.byref(n)):
+                return None
+            return bytes(buf[:n.value]) if n.value == size else None
+
+        # PROCESS_BASIC_INFORMATION: the PEB address is the second pointer-sized field.
+        pbi = (ctypes.c_ubyte * 48)()
+        got = wintypes.ULONG(0)
+        if nt.NtQueryInformationProcess(h, 0, pbi, 48, ctypes.byref(got)) != 0:
+            return None
+        peb = int.from_bytes(bytes(pbi[8:16]), "little")
+        if not peb:
+            return None
+        raw = at(peb + _PEB_PROCESS_PARAMETERS, 8)
+        if not raw:
+            return None
+        params = int.from_bytes(raw, "little")
+        if not params:
+            return None
+        # UNICODE_STRING: Length, MaximumLength (USHORT each), then the buffer pointer.
+        us = at(params + _RUPP_CURRENT_DIRECTORY, 16)
+        if not us:
+            return None
+        length = int.from_bytes(us[0:2], "little")
+        buf_at = int.from_bytes(us[8:16], "little")
+        if not length or not buf_at or length > 4096:
+            return None
+        text = at(buf_at, length)
+        if not text:
+            return None
+        out = text.decode("utf-16-le", "replace").rstrip("\\")
+        return out or None
+    except Exception:
+        return None
+    finally:
+        k32.CloseHandle(h)
 
 
 def write_private(path: Path, data: bytes, mode: int) -> None:
