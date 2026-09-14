@@ -574,5 +574,61 @@ class TheHomeLock(unittest.TestCase):
         locking.release(fd)
 
 
+class ReadingTheLockLine(unittest.TestCase):
+    """`_read_lock_line` — getting the pid out of run/lock even when its first byte is locked.
+
+    A daemon from before 2026-09-14 locks byte 0 on Windows, where that lock is *mandatory*: the one
+    byte the pid line starts with cannot be read while it runs, so `--stop` was refused by the daemon
+    it was trying to stop (user, 2026-09-14). Its lock covers exactly one byte, so everything after it
+    still reads and the leading "p" can be put back.
+
+    Tolerance for one old build, not a format. The first read simply works for anything newer."""
+
+    def lock_line(self, text):
+        d = tempfile.mkdtemp(prefix="palmar-lockline-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        path = os.path.join(d, "lock")
+        with open(path, "wb") as fh:
+            fh.write(text)
+        fd = os.open(path, os.O_RDWR)
+        self.addCleanup(os.close, fd)
+        return fd
+
+    def test_the_ordinary_read(self):
+        fd = self.lock_line(b"pid 4242 http://127.0.0.1:8801\n")
+        got, why = D._read_lock_line(fd)
+        self.assertIsNone(why)
+        self.assertEqual(got.split()[:2], ["pid", "4242"])
+
+    def test_it_reads_around_a_locked_first_byte(self):
+        """Simulated by making the first read fail the way a mandatory lock does."""
+        fd = self.lock_line(b"pid 4242 http://127.0.0.1:8801\n")
+        real = os.read
+        state = {"first": True}
+
+        def refuse_once(f, n):
+            if state["first"]:
+                state["first"] = False
+                raise PermissionError(13, "Permission denied")
+            return real(f, n)
+
+        with mock.patch.object(D.os, "read", refuse_once):
+            got, why = D._read_lock_line(fd)
+        self.assertIsNone(why, "it gave up instead of reading past the locked byte")
+        self.assertEqual(got.split()[:2], ["pid", "4242"])
+
+    def test_it_gives_up_rather_than_invent_a_pid(self):
+        """If what follows is not a pid line, saying so beats signalling a number we guessed."""
+        fd = self.lock_line(b"something else entirely\n")
+
+        def always_refuse(f, n):
+            raise PermissionError(13, "Permission denied")
+
+        with mock.patch.object(D.os, "read", always_refuse):
+            got, why = D._read_lock_line(fd)
+        self.assertIsNone(got)
+        self.assertIsInstance(why, OSError)
+
+
 if __name__ == "__main__":
     unittest.main()

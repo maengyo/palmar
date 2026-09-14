@@ -1728,6 +1728,31 @@ def daemon_answers(url: str) -> bool:
         return False
 
 
+def _read_lock_line(fd):
+    """The pid line out of run/lock. `(text, None)` or `(None, why)`.
+
+    **A daemon from before 2026-09-14 locks byte 0, and that lock is mandatory on Windows** — so the
+    one byte the pid line starts with cannot be read while it runs, and `--stop` was refused by the
+    daemon it was trying to stop. Its lock covers exactly one byte, so everything after it still
+    reads: `id 1234 http://…` is enough to find the pid, and the leading `p` is put back.
+
+    This is tolerance for one old build, not a format. Newer daemons lock far past any content and
+    the first read simply works."""
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        return os.read(fd, 256).decode("utf-8", "replace"), None
+    except OSError as e:
+        first = e
+    try:
+        os.lseek(fd, 1, os.SEEK_SET)
+        rest = os.read(fd, 256).decode("utf-8", "replace")
+    except OSError:
+        return None, first
+    if rest.startswith("id "):
+        return "p" + rest, None
+    return None, first
+
+
 def stop_daemon() -> int:
     """`palmar --stop` — stop the daemon that has this HOME, and its shells with it.
 
@@ -1770,13 +1795,14 @@ def stop_daemon() -> int:
                 return 0
             # The lock is free and the address still answers. An older build locked a different byte.
             print("palmar: 잠금은 비었는데 주소가 응답한다 — run/lock 의 pid 로 멈춰 본다")
-        try:
-            os.lseek(fd, 0, os.SEEK_SET)
-            line = os.read(fd, 256).decode("utf-8", "replace").split()
-        except OSError as e:
-            print(f"palmar: run/lock 을 못 읽었다 — {e}")
+        raw, why = _read_lock_line(fd)
+        if raw is None:
+            print(f"palmar: run/lock 을 못 읽었다 — {why}")
+            if answering:
+                print(f"        그런데 {said.split('/?')[0]} 는 응답한다. 작업 관리자에서 그 python 을 끝내라.")
             return 1
         # "pid 1234 http://127.0.0.1:8801" — the address is there for --doctor; only the pid matters here.
+        line = raw.split()
         if len(line) < 2 or line[0] != "pid" or not line[1].isdigit():
             print(f"palmar: run/lock 의 내용을 알아볼 수 없다 ({' '.join(line)[:60]})")
             return 1
