@@ -930,5 +930,46 @@ class StatusMustNotCostBytes(unittest.TestCase):
             self.assertIn(name, assigned, "ConPty never sets %s -- the daemon reads it" % name)
 
 
+class StoppingTrustsTheAddress(unittest.TestCase):
+    """`--stop` must not call a running daemon dead because the lock looks free.
+
+    **It did.** The lock was the only authority, and it is a good one -- held for exactly as long as
+    the daemon lives, where a pid can be stale or reused. But it is indirect: a daemon from an older
+    build holds a different byte, so --stop took the lock, concluded nothing was running, and said so
+    while the daemon went on serving (user, 2026-09-14). The address answering is direct evidence,
+    and app/ has always trusted it over the file."""
+
+    def test_it_stops_a_daemon_whose_lock_looks_free(self):
+        from tests.helpers import PYTHON, REPO
+        with Daemon() as d:
+            self.assertTrue(d.get("/api/sessions") is not None)
+            # **Make the lock observably free without touching the daemon.** Replacing the file
+            # leaves the daemon holding its descriptor on the old one, so what --stop can see is a
+            # lock nobody holds and an address that still answers -- which is the Windows case, where
+            # an older build holds a different byte, reproduced here deterministically.
+            lock = os.path.join(d.home, ".palmar", "run", "lock")
+            with open(lock, "rb") as fh:
+                had = fh.read()
+            os.remove(lock)
+            with open(lock, "wb") as fh:
+                fh.write(had)             # same pid line, new file, no lock on it
+            r = subprocess.run([PYTHON, "-m", "palmar", "--stop"], cwd=REPO,
+                               env=dict(os.environ, HOME=d.home, PYTHONPATH=REPO),
+                               capture_output=True, text=True, timeout=60)
+            self.assertNotIn("도는 데몬이 없다", r.stdout,
+                             "it called a running daemon dead: %r" % r.stdout)
+
+    def test_it_still_says_so_when_nothing_runs(self):
+        """The ordinary case has to stay ordinary -- no address, no lock, one sentence."""
+        from tests.helpers import PYTHON, REPO
+        home = tempfile.mkdtemp(prefix="palmar-nostop-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        r = subprocess.run([PYTHON, "-m", "palmar", "--stop"], cwd=REPO,
+                           env=dict(os.environ, HOME=home, PYTHONPATH=REPO),
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr[-300:])
+        self.assertIn("도는 데몬이 없다", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

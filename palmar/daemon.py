@@ -1731,19 +1731,30 @@ def daemon_answers(url: str) -> bool:
 def stop_daemon() -> int:
     """`palmar --stop` — stop the daemon that has this HOME, and its shells with it.
 
-    **The lock is the authority, not the pid file.** A pid alone can be stale or, worse, reused by
-    something else by the time we read it; the flock is held by a live daemon for exactly as long as
-    it lives. So: if we can take the lock, nothing is running and there is nothing to stop. If we
-    cannot, whatever holds it is a palmard and the pid written inside it is that daemon's.
+    **A daemon that answers is running, whatever the lock says.** The lock used to be the only
+    authority here, and it is a good one — held by a live daemon for exactly as long as it lives, where
+    a pid can be stale or reused. But it is indirect: a daemon from an older build holds a *different*
+    byte, and `--stop` then took the lock, concluded nothing was running, and said so while the daemon
+    went on serving (user, 2026-09-14). The address answering is direct evidence, and `app/` has always
+    trusted it over the file. So the lock decides only when nothing answers.
 
     SIGTERM, not SIGKILL — the daemon has a shutdown path and that is where the restore file gets
-    written (protocol.md). Killing it outright would throw away the workspace it is about to save."""
+    written (protocol.md). Killing it outright would throw away the workspace it is about to save.
+    **On Windows SIGTERM is TerminateProcess**, which is a SIGKILL by another name, so a console
+    control event goes instead: the daemon is started in its own process group for exactly that."""
     path = RUN_DIR / "lock"
+    # Ask the address first. It is the one check that cannot be fooled by which byte a build locks.
+    try:
+        said = URL_FILE.read_text("utf-8").strip()
+    except OSError:
+        said = ""
+    answering = said.startswith("http://") and daemon_answers(said)
     try:
         fd = os.open(str(path), os.O_RDWR | NOFOLLOW)
     except FileNotFoundError:
-        print("palmar: 도는 데몬이 없다")
-        return 0
+        print("palmar: 도는 데몬이 없다" if not answering else
+              "palmar: 주소는 응답하는데 run/lock 이 없다 — 그 데몬은 palmar 가 만든 것이 아니거나 파일이 지워졌다")
+        return 0 if not answering else 1
     except OSError as e:
         print(f"palmar: run/lock 을 못 열었다 — {e}")
         return 1
@@ -1754,8 +1765,11 @@ def stop_daemon() -> int:
             pass                                    # held — a daemon is alive, which is the point
         else:
             unlock_fd(fd)
-            print("palmar: 도는 데몬이 없다")
-            return 0
+            if not answering:
+                print("palmar: 도는 데몬이 없다")
+                return 0
+            # The lock is free and the address still answers. An older build locked a different byte.
+            print("palmar: 잠금은 비었는데 주소가 응답한다 — run/lock 의 pid 로 멈춰 본다")
         try:
             os.lseek(fd, 0, os.SEEK_SET)
             line = os.read(fd, 256).decode("utf-8", "replace").split()
@@ -1768,7 +1782,14 @@ def stop_daemon() -> int:
             return 1
         pid = int(line[1])
         try:
-            os.kill(pid, signal.SIGTERM)
+            if sys.platform == "win32":
+                # **Not SIGTERM.** os.kill with anything but a console event is TerminateProcess on
+                # Windows — abrupt, and the restore snapshot never gets written. CTRL_BREAK_EVENT
+                # reaches the group `detached_no_fork` puts it in, and arrives as SIGBREAK, which the
+                # daemon handles alongside SIGINT and SIGTERM.
+                os.kill(pid, signal.CTRL_BREAK_EVENT)
+            else:
+                os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
             print("palmar: 그 데몬은 이미 없다")
             return 0
@@ -3010,7 +3031,12 @@ async def main(port: int, open_page: bool = True) -> None:
         if not stop.done():
             stop.set_result(None)
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    stop_signals = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGBREAK"):
+        # Windows only. It is what a console CTRL_BREAK arrives as, and that is how `--stop` reaches
+        # a detached daemon there without resorting to TerminateProcess.
+        stop_signals.append(signal.SIGBREAK)
+    for sig in stop_signals:
         try:
             loop.add_signal_handler(sig, _stop_now)
         except (NotImplementedError, AttributeError, ValueError):
