@@ -882,31 +882,37 @@ class PushAside(unittest.TestCase):
         self.assertFalse(r["over"], "they are still overlapping after the drop: " + repr(r))
         self.assertTrue(r["toast"], "nothing told the user a window had been moved")
         self.assertIn("moved 1 window", r["words"])
-        self.assertTrue(r["undo"], "the toast has no undo")
+        # **No undo of its own any more.** The drag already took a snapshot, so one Ctrl Z puts the
+        # move and the push back together — which is what a person means by "undo that". The toast
+        # says which key rather than carrying a button that outlives nothing (2026-09-14).
+        self.assertIn("Z undoes it", r["words"])
 
-    def test_undo_puts_it_back(self):
-        """decisions.md asks for the undo by name. What it restores is the pushed windows, not the one
-        the hand placed — putting that back would undo the drag itself, which nobody asked for."""
+    def test_one_undo_puts_back_the_move_and_the_push(self):
+        """**One way back for the whole gesture.** decisions.md asked for an undo by name, and the
+        first one lived in the toast — which meant looking up a second too late left no way back at
+        all (user, 2026-09-14). The drag takes a snapshot before it starts, so Ctrl Z returns the
+        window you moved *and* whatever it pushed, in one press. Undoing only half of a gesture is
+        not what anyone means by undo."""
         self.bench("put('a',60,60,240,200); put('b',340,60,240,200); put('c',60,400,240,200); return 1;")
         before = self.b.ev("""(()=>{const P=window.palmar,L=P.layout();
-          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n); const r=L[by('b').id];
-          return [r.x, r.y];})()""")
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          return {a:[L[by('a').id].x,L[by('a').id].y], b:[L[by('b').id].x,L[by('b').id].y]};})()""")
         self.drag("a", 220, 0)
         moved = self.b.ev("""(()=>{const P=window.palmar,L=P.layout();
-          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n); const r=L[by('b').id];
-          return [r.x, r.y];})()""")
-        self.assertNotEqual(moved, before, "b never moved, so there is no undo to test")
-        self.b.ev("document.querySelector('.toast .undo').click()")
-        time.sleep(0.5)
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          return {a:[L[by('a').id].x,L[by('a').id].y], b:[L[by('b').id].x,L[by('b').id].y]};})()""")
+        self.assertNotEqual(moved["a"], before["a"], "the drag did not move anything")
+        self.assertNotEqual(moved["b"], before["b"], "nothing was pushed, so there is no push to undo")
+        self.b.ev("window.palmar.undoLast()")
+        time.sleep(0.4)
         after = self.b.ev("""(()=>{const P=window.palmar,L=P.layout();
-          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n); const r=L[by('b').id];
-          const a=L[by('a').id];
-          return {b:[r.x,r.y], a:[a.x,a.y],
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          return {a:[L[by('a').id].x,L[by('a').id].y], b:[L[by('b').id].x,L[by('b').id].y],
                   saved: JSON.parse(localStorage.getItem('palmar-tiles')||'{}')[by('b').id]};})()""")
-        self.assertEqual(after["b"], before, "undo did not put b back where it was")
-        self.assertEqual([after["saved"]["x"], after["saved"]["y"]], before,
-                         "undo moved it on screen but left the old position saved")
-        self.assertGreater(after["a"][0], 200, "undo dragged the window back too")
+        self.assertEqual(after["b"], before["b"], "the pushed window did not go back")
+        self.assertEqual(after["a"], before["a"], "the window I dragged did not go back")
+        self.assertEqual([after["saved"]["x"], after["saved"]["y"]], before["b"],
+                         "it moved on screen but left the old position saved")
 
     def test_growing_a_window_pushes_its_neighbour(self):
         """Resize goes through the same moment a drag does — the hand lets go, then the overlap is
@@ -1335,6 +1341,97 @@ class Grouping(unittest.TestCase):
         self.assertEqual([r["a"], r["b"]], [1, 1], "alt-drag did not take it out of the group")
         self.assertEqual(after["b"], before["b"], "the one left behind moved anyway")
 
+    def test_moving_away_before_letting_go_cancels_it(self):
+        """**Armed, not done.** It used to join in the middle of the drag, so carrying on somewhere
+        else left you grouped to a window you had moved away from (user, 2026-09-14). The hold arms
+        it; the release commits it."""
+        self.bench("put('g1',60,60,240,200); put('g2',360,60,240,200); put('g3',60,400,240,200); return 1;")
+        x, y = self.press("g1")
+        tx, ty = self.press("g2")
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
+        ready = False
+        for _ in range(12):
+            ready = ready or self.b.ev("!!document.querySelector('.tile.joinready')")
+            if ready:
+                break
+            time.sleep(0.18)
+            self.send(type="mouseMoved", x=tx + 1, y=ty, buttons=1)
+        self.assertTrue(ready, "it never armed, so this proves nothing")
+        # Still holding: carry on somewhere empty and let go there.
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=tx, y=ty + 260 * i / 3, buttons=1)
+        self.send(type="mouseReleased", x=tx, y=ty + 260, clickCount=1, buttons=0)
+        time.sleep(0.5)
+        n = self.b.ev("""(()=>{const P=window.palmar;
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          return P.groupOf(by('g1').id).length;})()""")
+        self.assertEqual(n, 1, "it grouped anyway after the hand moved on")
+
+    def test_grouping_lines_them_up(self):
+        """A group that leaves everyone where they were is a colour, not a group. Sizes are the
+        user's, so members are lined up rather than resized (AGENTS.md)."""
+        r = self.bench("""
+          put('g1', 40, 40, 200, 160);
+          put('g2', 700, 380, 200, 160);   // far apart and out of line
+          P.joinGroups(by('g1').id, by('g2').id);
+          P.arrangeGroup(P.groupOf(by('g1').id));
+          return {a: at('g1'), b: at('g2')};
+        """)
+        a, b = r["a"], r["b"]
+        self.assertEqual(a[1], b[1], "they are not on one row: %r %r" % (a, b))
+        self.assertLess(abs(a[0] - b[0]) + abs(a[1] - b[1]), 700,
+                        "they are still scattered: %r %r" % (a, b))
+
+    def test_it_lays_a_group_out_across_before_down(self):
+        """**As wide as fits, with no empty cells.** The canvas grows downwards without limit and its
+        width is finite, so a group laid out across spends the space there is instead of the space
+        there always is. A log-of-the-ratio score was tried first and put three windows in a column
+        that ran off the bottom of the screen — right by its own measure, and the measure was wrong
+        for a group (2026-09-14)."""
+        r = self.bench("""
+          put('g1', 30, 30, 260, 190); put('g2', 600, 320, 260, 190); put('g3', 30, 320, 260, 190);
+          P.joinGroups(by('g1').id, by('g2').id);
+          P.joinGroups(by('g3').id, by('g1').id);
+          P.arrangeGroup(P.groupOf(by('g1').id));
+          return {a: at('g1'), b: at('g2'), c: at('g3')};
+        """)
+        tops = {r["a"][1], r["b"][1], r["c"][1]}
+        self.assertEqual(len(tops), 1, "three windows did not end up on one row: %r" % r)
+
+    def test_it_wraps_rather_than_running_off_the_side(self):
+        """Wide is preferred, not forced. Windows too wide to sit side by side have to wrap."""
+        r = self.bench("""
+          put('g1', 20, 20, 700, 160); put('g2', 20, 220, 700, 160);
+          P.joinGroups(by('g1').id, by('g2').id);
+          P.arrangeGroup(P.groupOf(by('g1').id));
+          return {a: at('g1'), b: at('g2'), room: document.querySelector('.cv-scroll').clientWidth};
+        """)
+        self.assertNotEqual(r["a"][1], r["b"][1],
+                            "two 700px windows were put side by side in %dpx: %r" % (r["room"], r))
+
+    def test_the_frame_is_one_rectangle_behind_them(self):
+        """One frame, not a tint on each — and it has to cover the members it names."""
+        r = self.bench("""
+          put('g1', 60, 60, 200, 160); put('g2', 300, 60, 200, 160);
+          P.joinGroups(by('g1').id, by('g2').id);
+          P.arrangeGroup(P.groupOf(by('g1').id));
+          const boxes = [...document.querySelectorAll('.gbox')];
+          const r0 = P.groupRect(P.groupOf(by('g1').id));
+          const b = boxes[0];
+          return {n: boxes.length,
+                  boxL: parseInt(b.style.left), boxT: parseInt(b.style.top),
+                  boxW: parseInt(b.style.width), boxH: parseInt(b.style.height),
+                  rect: r0, pointer: getComputedStyle(b).pointerEvents};
+        """)
+        self.assertEqual(r["n"], 1, "a group drew %d frames" % r["n"])
+        self.assertLessEqual(r["boxL"], r["rect"]["x"])
+        self.assertLessEqual(r["boxT"], r["rect"]["y"])
+        self.assertGreaterEqual(r["boxL"] + r["boxW"], r["rect"]["x"] + r["rect"]["w"])
+        self.assertGreaterEqual(r["boxT"] + r["boxH"], r["rect"]["y"] + r["rect"]["h"])
+        self.assertEqual(r["pointer"], "none", "the frame would swallow drags")
+
     def test_a_group_survives_a_reload(self):
         """Membership rides with the position, so it comes back the same way (③ provisional)."""
         self.bench("P.joinGroups(by('g1').id, by('g2').id); return 1;")
@@ -1348,6 +1445,112 @@ class Grouping(unittest.TestCase):
           const by=(x)=>[...P.tiles.values()].find(t=>t.s.name===x);
           return by('g1') ? P.groupOf(by('g1').id).length : -1;})()""")
         self.assertEqual(n, 2, "the group did not come back after a reload")
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class Undoing(unittest.TestCase):
+    """One way back for everything that moves a window.
+
+    Push-aside came with an undo in its toast and grouping came with another, and neither outlived
+    the toast — so a person who looked up a second too late had no way back at all ("돌이킬 수가
+    없네", 2026-09-14). One stack is less to learn and less to build, and it is what `Ctrl Z` means
+    everywhere else.
+
+    **Whole-canvas snapshots, not inverse operations.** An inverse has to be written once per
+    operation and is wrong in a different way each time."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+        cls.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          for (const n of ['u1','u2'])
+            await fetch('/api/sessions?token='+T,{method:'POST',
+              headers:{'content-type':'application/json'},
+              body:JSON.stringify({cwd:%s,name:n})});})()""" % json.dumps(cls.d.home))
+        time.sleep(5)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def bench(self, body):
+        js = """
+          const P = window.palmar, L = P.layout();
+          const by = (n) => [...P.tiles.values()].find((t) => t.s.name === n);
+          const put = (n,x,y,w,h) => { const t=by(n);
+            L[t.id]=Object.assign({},L[t.id],{x:x,y:y,w:w,h:h});
+            t.el.style.transition='none';
+            t.el.style.left=x+'px'; t.el.style.top=y+'px';
+            t.el.style.width=w+'px'; t.el.style.height=h+'px';
+            void t.el.offsetWidth; t.el.style.transition=''; };
+          const at = (n) => { const r=L[by(n).id]; return [r.x,r.y]; };
+        """
+        return self.b.ev("(()=>{" + js + "\n" + body + "})()")
+
+    def test_it_puts_a_move_back(self):
+        r = self.bench("""
+          put('u1', 100, 100, 200, 160);
+          P.undoMark('a test move');
+          put('u1', 500, 400, 200, 160);
+          const moved = at('u1');
+          P.undoLast();
+          return {moved: moved, back: at('u1')};
+        """)
+        self.assertEqual(r["moved"], [500, 400])
+        self.assertEqual(r["back"], [100, 100], "it did not put the window back")
+
+    def test_it_puts_a_group_back(self):
+        """Membership is part of the snapshot, so undoing a grouping ungroups."""
+        r = self.bench("""
+          put('u1', 60, 60, 200, 160); put('u2', 300, 60, 200, 160);
+          P.undoMark('a test grouping');
+          P.joinGroups(by('u1').id, by('u2').id);
+          const grouped = P.groupOf(by('u1').id).length;
+          P.undoLast();
+          return {grouped: grouped, after: P.groupOf(by('u1').id).length,
+                  frames: document.querySelectorAll('.gbox').length};
+        """)
+        self.assertEqual(r["grouped"], 2)
+        self.assertEqual(r["after"], 1, "undo left them grouped")
+        self.assertEqual(r["frames"], 0, "the frame outlived the group it named")
+
+    def test_it_stops_at_the_bottom_rather_than_throwing(self):
+        r = self.bench("""
+          while (P.undoDepth()) P.undoLast();
+          return {left: P.undoDepth(), again: P.undoLast()};
+        """)
+        self.assertEqual(r["left"], 0)
+        self.assertFalse(r["again"], "undoing an empty stack claimed to have done something")
+
+    def test_the_button_says_whether_there_is_anything_to_undo(self):
+        """A button that does nothing when pressed is a button that lies — the same rule the tidy
+        button already follows."""
+        r = self.bench("""
+          while (P.undoDepth()) P.undoLast();
+          const off = document.getElementById('undo').disabled;
+          P.undoMark('something');
+          const on = document.getElementById('undo').disabled;
+          return {off: off, on: on};
+        """)
+        self.assertTrue(r["off"], "it offered an undo with nothing to undo")
+        self.assertFalse(r["on"], "it refused an undo that exists")
+
+    def test_ctrl_z_is_not_taken_from_a_terminal(self):
+        """Inside a terminal it belongs to whatever is running there — an editor's undo is not ours.
+        The same rule Esc follows, and Ctrl-C."""
+        depth = self.b.ev("""(()=>{const P=window.palmar;
+          P.undoMark('a test mark');
+          const before = P.undoDepth();
+          const t = [...P.tiles.values()][0];
+          const target = t.el.querySelector('.xterm') || t.el;
+          target.dispatchEvent(new KeyboardEvent('keydown',
+            {key:'z', ctrlKey:true, metaKey:true, bubbles:true, cancelable:true}));
+          return {before: before, after: P.undoDepth()};})()""")
+        self.assertEqual(depth["after"], depth["before"],
+                         "Ctrl Z inside a terminal undid a canvas change")
 
 
 if __name__ == "__main__":

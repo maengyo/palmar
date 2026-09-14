@@ -597,25 +597,31 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 }
 .tile.drag { transition: none; }
 /* ── groups ────────────────────────────────────────────────
-   A group is a set that travels together on one canvas. **A thin edge, not a fill** — the tile's own
-   border is what says "window" and the status dot is what says "state"; a group is a third thing and
-   it gets the least ink of the three. The hue comes from the group's id in JS, so two groups are
-   told apart without giving them names nobody asked to type. */
-.tile.grouped { border-color: color-mix(in srgb, var(--group) 55%, var(--line)); }
-.tile.grouped::after {
-  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px;
-  background: var(--group); opacity: .75; pointer-events: none;
+   **One frame behind them, not a tint on each.** A coloured border on every member said "these four
+   belong together" four times over and left the space between them looking like nothing — and a
+   group that owns no space is just a colour. The rectangle is drawn under the tiles, so it also
+   shows the shape the group actually occupies, which is what makes an untidy one look untidy.
+   It takes no pointer events: dragging, hit-testing and the resize grip are unchanged. */
+.gbox {
+  position: absolute; z-index: 0; pointer-events: none; border-radius: 14px;
+  background: color-mix(in srgb, var(--group) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--group) 42%, transparent);
+  transition: left .35s cubic-bezier(.2,.8,.2,1), top .35s cubic-bezier(.2,.8,.2,1),
+              width .35s cubic-bezier(.2,.8,.2,1), height .35s cubic-bezier(.2,.8,.2,1);
 }
-/* About to be joined. It has to be visible *before* the group forms — the gesture is holding still,
-   which from the inside looks exactly like nothing happening. */
-.tile.joining { border-color: var(--accent); }
-.tile.joining::before {
+/* The member keeps its own border — the frame says "group", the border still says "window". A hair
+   of the group's colour is enough to tell you which frame a window belongs to when two overlap. */
+.tile.grouped { border-color: color-mix(in srgb, var(--group) 30%, var(--line)); }
+
+/* Two moments, and they mean different things. **joining** is "counting" — the hold has begun.
+   **joinready** is "let go and these join" — without a moment that says *now*, a person releases
+   without knowing what they are about to get. */
+.tile.joining { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.tile.joinready { border-color: var(--accent); }
+.tile.joinready::before {
   content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent);
-  animation: joinpulse .9s ease-out;
-}
-@keyframes joinpulse { from { opacity: .25; } to { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .tile.joining::before { animation: none; opacity: 1; } }                 /* Behaviour: while dragging or resizing it follows instantly */
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 75%, transparent);
+}                 /* Behaviour: while dragging or resizing it follows instantly */
 .tile.focus { border-color: color-mix(in srgb, var(--accent) 60%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent), var(--shadow-2); }
 .tile.fresh { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
 /* A tile from another canvas. **The session and the websocket are both alive; it is only off the screen** —

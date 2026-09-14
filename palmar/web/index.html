@@ -117,8 +117,9 @@
       <dt><kbd>Ctrl</kbd><kbd>C</kbd></dt><dd>left alone — it is the terminal's interrupt</dd>
       <dt><kbd class="mod">Ctrl</kbd> + wheel</dt><dd>text size of the terminal under the pointer</dd>
       <dt>click <span class="ex">68×19</span></dt><dd>back to the default text size</dd>
-      <dt>hold a window over another</dt><dd>they become a group and move together — the one underneath lights up first</dd>
+      <dt>hold a window over another</dt><dd>it lights up, then goes solid — let go there and they become a group. Move away before letting go and nothing happens</dd>
       <dt><kbd class="mod">Alt</kbd> + drag</dt><dd>take one window out of its group</dd>
+      <dt><kbd class="mod">Ctrl</kbd><kbd>Z</kbd></dt><dd>undo the last thing that moved a window — a drag, a push, a group, a tidy. Not inside a terminal: there it belongs to what is running</dd>
       <dt>drag empty canvas</dt><dd>move the view</dd>
       <dt><kbd>Esc</kbd></dt><dd>leave an expanded terminal</dd>
       <dt>drag a rail edge</dt><dd>resize it · arrows when focused, <kbd>Shift</kbd> for bigger, <kbd>Home</kbd> resets</dd>
@@ -167,7 +168,8 @@
            push it away (the strip scrolls sideways, and inside it the button gets shoved to the end like ＋). -->
       <div class="cvbar">
         <div class="tabs" id="tabs" role="tablist" aria-label="canvases"></div>
-        <button class="tidy" id="tidy" type="button"
+        <button id="undo" class="tidy" disabled title="undo — nothing has moved yet">undo</button>
+      <button class="tidy" id="tidy" type="button"
                 title="tidy this canvas — pull the windows back to the corner">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" aria-hidden="true">

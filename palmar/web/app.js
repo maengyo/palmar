@@ -857,7 +857,7 @@ class Tile {
     let mode = null, sx = 0, sy = 0, ox = 0, oy = 0, ow = 0, oh = 0;
     // Group state for one drag: who moves with me, where each started, and the hold that makes a group.
     let party = [], starts = new Map(), solo = false;
-    let overId = null, overSince = 0, lastX = 0, lastY = 0, joined = null;
+    let overId = null, overSince = 0, lastX = 0, lastY = 0, armed = null;
     const down = (m) => (ev) => {
       // Buttons, input fields and the confirm strip on the title bar are not a drag (#31: .cl and .cfm joined here)
       // Only .sz.own is excluded — the ordinary size readout is part of the title bar and should drag, and it
@@ -868,10 +868,12 @@ class Tile {
       ({ x: ox, y: oy, w: ow, h: oh } = this.rect());
       // **Alt takes one window out of its group.** A group moves together, so there has to be a way to
       // mean "just this one" — and it is the same gesture that leaves it behind when you let go.
+      // One mark for the whole gesture — the move, whatever it pushes, and a group it forms.
+      undoMark(m === 'move' ? 'moving a window' : 'resizing a window', this.s.canvas);
       solo = !!(ev.altKey && m === 'move' && layout[this.id] && layout[this.id].g);
       party = (m === 'move' && !solo) ? groupOf(this.id) : [this.id];
       starts = new Map(party.map((id) => [id, { x: layout[id].x, y: layout[id].y }]));
-      overId = null; overSince = 0; joined = null;
+      overId = null; overSince = 0; armed = null;
       for (const id of party) { const t = tiles.get(id); if (t) t.el.classList.add('drag'); }
       this.el.classList.add('drag');
       ev.currentTarget.setPointerCapture(ev.pointerId);
@@ -895,8 +897,12 @@ class Tile {
           const nx2 = st.x + mdx, ny2 = st.y + mdy;
           t.el.style.left = nx2 + 'px';
           t.el.style.top = ny2 + 'px';
+          // **The store, so the frame can follow.** paintGroups reads the union out of `layout`,
+          // and a frame that stays behind while its windows move is worse than no frame.
+          layout[id] = Object.assign({}, r, { x: nx2, y: ny2 });
           mmSet(id, nx2, ny2, r.w, r.h);
         }
+        if (party.length > 1) paintGroups();
         // **The hold.** Still, over a window that is not already travelling with me, for long enough.
         // Movement resets it — a hand is never perfectly still, so "still" has a few pixels in it.
         const moved = Math.abs(ev.clientX - lastX) + Math.abs(ev.clientY - lastY);
@@ -904,20 +910,17 @@ class Tile {
         const under = paneUnder(ev.clientX, ev.clientY, party);
         if (!under || under !== overId || moved > GROUP_STILL) {
           if (overId) markHold(overId, false);
+          armed = null;                       // moved on — nothing is going to be joined
           overId = under; overSince = under ? Date.now() : 0;
           if (under) markHold(under, true);
-        } else if (overId && !joined && Date.now() - overSince >= GROUP_HOLD_MS) {
-          joined = joinGroups(this.id, overId);
-          markHold(overId, false);
-          party = groupOf(this.id);
-          // Whoever just joined starts from where they are — they are not being dragged, they are
-          // being joined to something that is.
-          for (const id of party) if (!starts.has(id)) starts.set(id, { x: layout[id].x, y: layout[id].y });
-          for (const id of party) { const t = tiles.get(id); if (t) t.el.classList.add('drag'); }
-          const n = party.length;
-          toast([{ b: 'grouped ' + n + (n > 1 ? ' windows' : ' window') },
-                 'they move together now — hold ' + (IS_MAC ? '⌥' : 'Alt') + ' while dragging to take one out',
-                 { a: 'undo', on: () => { undoJoin(joined); joined = null; } }]);
+        } else if (overId && Date.now() - overSince >= GROUP_HOLD_MS) {
+          // **Armed, not done.** It used to join here, in the middle of the drag, so carrying on
+          // somewhere else left you grouped to a window you had moved away from — "잡은 걸 놓지
+          // 않고 다시 다른 공간으로 옮기면 그룹핑이 취소가 되어야 자연스럽지" (2026-09-14). The hold
+          // arms it and the release commits it; moving away disarms it, which is what the reset
+          // branch above already does.
+          armed = overId;
+          markHold(overId, 'ready');
         }
       } else {
         const nw = Math.max(MIN_W, ow + dx), nh = Math.max(MIN_H, oh + dy);
@@ -933,11 +936,24 @@ class Tile {
       for (const id of party) { const t = tiles.get(id); if (t) t.el.classList.remove('drag'); }
       this.el.classList.remove('drag');
       if (solo) {
+        undoMark('leaving a group', this.s.canvas);
         const left = leaveGroup(this.id);
         solo = false;
-        if (left) toast([{ b: this.nameEl.textContent || 'window' }, 'left its group']);
+        if (left) toast([{ b: this.nameEl.textContent || 'window' }, 'left its group — ' + KMOD + 'Z puts it back']);
       }
       for (const id of party) { const t = tiles.get(id); if (t && t !== this) t.persist(); }
+      if (armed) {
+        undoMark('grouping', this.s.canvas);
+        joinGroups(this.id, armed);
+        const ids = groupOf(this.id);
+        arrangeGroup(ids);
+        for (const id of ids) { const t = tiles.get(id); if (t) t.persist(); }
+        paintGroups();
+        const n = ids.length;
+        toast([{ b: 'grouped ' + n + (n > 1 ? ' windows' : ' window') },
+               'they move together — ' + (IS_MAC ? '⌥' : 'Alt') + '-drag takes one out, ' + KMOD + 'Z undoes this']);
+        armed = null;
+      }
       paintTidy();          // moving a window creates or removes slack to close up
       if (was === 'size') this.refit();   // tell the PTY only when the resize is let go (spike D)
       this.persist();
@@ -1095,6 +1111,73 @@ function firstFree(w, h, canvasId) {
 // canvas grows without limit (⑩) that search cannot fail, so there is never anything to push. The other
 // half of the decision — a **new** terminal sits down and shoves — needs somewhere on screen for a person
 // to aim it, and there is no click-to-place yet. That is a person's call, not this file's.
+// ── undo (2026-09-14, 사용자) ───────────────────────────────────────────────
+// **One way back for everything that moves a window.** Push-aside came with an undo in its toast,
+// grouping came with another, and neither survived the toast going away — so a person who looked up
+// a second too late had no way back at all ("돌이킬 수가 없네"). A single stack is less to learn and
+// less to build: every operation that touches the layout takes a snapshot first, and `Ctrl Z` puts
+// the last one back.
+//
+// **Whole-canvas snapshots, not inverse operations.** An inverse has to be written once per
+// operation and is wrong in a different way each time; a snapshot of the twenty-odd numbers on a
+// canvas is small, and restoring it cannot be subtly wrong.
+const UNDO_MAX = 40;
+const undoStack = [];
+
+function layoutSnap(canvasId) {
+  const out = {};
+  for (const t of tiles.values()) {
+    if (t.s.canvas !== canvasId || !layout[t.id]) continue;
+    const r = layout[t.id];
+    out[t.id] = { x: r.x, y: r.y, w: r.w, h: r.h, g: r.g || null };
+  }
+  return out;
+}
+
+//: Call **before** the change, with a name for the toast. Returns nothing — a no-op when the canvas
+//: is unknown, which is the `current === null` case (a daemon that does not know canvases).
+function undoMark(label, canvasId) {
+  if (canvasId === undefined) canvasId = current;
+  undoStack.push({ label, canvas: canvasId, snap: layoutSnap(canvasId) });
+  if (undoStack.length > UNDO_MAX) undoStack.shift();
+  paintUndo();
+}
+
+function undoLast() {
+  const step = undoStack.pop();
+  if (!step) { toast(['nothing to undo on this canvas']); return false; }
+  for (const [id, was] of Object.entries(step.snap)) {
+    const t = tiles.get(id);
+    if (!t || !layout[id]) continue;
+    const next = Object.assign({}, layout[id], { x: was.x, y: was.y, w: was.w, h: was.h });
+    if (was.g) next.g = was.g; else delete next.g;
+    layout[id] = next;
+    // **Write the intended value; never read it back.** left/top are mid-transition numbers while
+    // the slide runs — the trap tidyCanvas and applyPush both carry a note about.
+    t.el.style.left = was.x + 'px';
+    t.el.style.top = was.y + 'px';
+    t.el.style.width = was.w + 'px';
+    t.el.style.height = was.h + 'px';
+  }
+  saveLayout();
+  paintGroups();
+  renderMinimap();
+  refreshOff();
+  paintTidy();
+  paintUndo();
+  toast([{ b: 'undid' }, step.label]);
+  return true;
+}
+
+function paintUndo() {
+  const b = document.getElementById('undo');
+  if (!b) return;
+  const n = undoStack.length;
+  b.disabled = !n;
+  b.title = n ? 'undo ' + undoStack[n - 1].label + ' (' + KMOD + 'Z)'
+              : 'undo — nothing has moved yet (' + KMOD + 'Z)';
+}
+
 // ── groups (2026-09-14, 사용자) ─────────────────────────────────────────────
 // **Hold a window still over another and they travel together.** Asked for as "끌어다가 다른
 // 터미널 위에 올려놓고 몇 초 이상 가만히 두면 그 두 터미널은 그룹화" — a lighter thing than a
@@ -1156,9 +1239,14 @@ function paneUnder(clientX, clientY, ignore) {
 
 //: The window says it is about to be joined. **Without this a group forms out of nowhere** — the
 //: gesture is "hold still", which from the inside is indistinguishable from "nothing is happening".
+//: Two states, because they mean different things. **`true`** is "counting" — the hold has started.
+//: **`'ready'`** is "let go and these join" — the hold is done and the release will commit it. Without
+//: the second there is no moment that says *now*, and a person lets go without knowing what they get.
 function markHold(id, on) {
   const t = tiles.get(id);
-  if (t) t.el.classList.toggle('joining', !!on);
+  if (!t) return;
+  t.el.classList.toggle('joining', on === true);
+  t.el.classList.toggle('joinready', on === 'ready');
 }
 
 function undoJoin(changed) {
@@ -1171,6 +1259,51 @@ function undoJoin(changed) {
   }
   saveLayout();
   paintGroups();
+}
+
+//: Lay a group's members out as one tidy block, from where the block already is.
+//:
+//: **A group that leaves everyone where they were is not a group, it is a colour.** The windows keep
+//: whatever sizes you gave them (palmar never resizes a window — AGENTS.md), so they are lined up by
+//: their tops on rows as wide as the widest member, which is the arrangement that looks deliberate
+//: without pretending to be a tiler ("딱딱 나름 정렬되게", 2026-09-14).
+function arrangeGroup(ids) {
+  const mine = ids.filter((id) => layout[id] && tiles.get(id));
+  if (mine.length < 2) return;
+  // Oldest first, so a group keeps the order things were opened in rather than the order they were
+  // dragged together in — the same rule the left list uses.
+  mine.sort((a, b) => ((tiles.get(a).s.created || 0) - (tiles.get(b).s.created || 0)));
+  const r = groupRect(mine);
+  const w = Math.max(...mine.map((id) => layout[id].w));
+  const h = Math.max(...mine.map((id) => layout[id].h));
+  // **As wide as fits, with no empty cells.** Two rules, in that order.
+  //
+  // *No empty cells*: three windows in two columns leaves a hole, and a group that reserves a square
+  // it does not use is exactly the "it takes up space of its own accord" this was meant to fix.
+  //
+  // *As wide as fits*: the canvas grows downwards without limit and its width is finite, so a group
+  // laid out across spends the space there is instead of the space there always is — and terminals
+  // are read side by side. A log-of-the-ratio score like arrangeCanvas's was tried first and put
+  // three windows in a column, which ran off the bottom of the screen and was right by its own
+  // measure. The measure was wrong for a group.
+  const room = Math.max(1, (cvScroll.clientWidth || 1) - GAP * 2);
+  let cols = 1;
+  for (let c = mine.length; c >= 1; c--) {
+    if (c * (w + GAP) - GAP > room) continue;        // this many across does not fit
+    if (c * Math.ceil(mine.length / c) !== mine.length) continue;   // it would leave a hole
+    cols = c;
+    break;
+  }
+  mine.forEach((id, i) => {
+    const x = Math.max(0, r.x + (i % cols) * (w + GAP));
+    const y = Math.max(0, r.y + Math.floor(i / cols) * (h + GAP));
+    const t = tiles.get(id);
+    layout[id] = Object.assign({}, layout[id], { x, y });
+    t.el.style.left = x + 'px';
+    t.el.style.top = y + 'px';
+  });
+  saveLayout();
+  paintGroups();     // the frame is the union of the members — it moved, so it has to be redrawn
 }
 
 function newGroupId() {
@@ -1212,20 +1345,53 @@ function leaveGroup(id) {
 
 //: The colour is derived from the id, so a group looks the same on every browser without the daemon
 //: knowing anything about groups (protocol.md "없는 것").
+//: **One frame drawn behind the members, not a tint on each.** A border on every window said "these
+//: four are related" four times and left the middle empty; a single translucent rectangle says it
+//: once and gives the group an edge you can see it keep ("큰 테두리의 사각형 안에… 반투명의 배경색",
+//: 2026-09-14). It sits under the tiles and takes no pointer events, so nothing about dragging,
+//: hit-testing or the resize grip changes.
+const GROUP_PAD = 10;
+
+function groupHue(g) {
+  let n = 0;
+  for (let i = 0; i < g.length; i++) n = (n * 31 + g.charCodeAt(i)) >>> 0;
+  return n % 360;
+}
+
 function paintGroups() {
-  const seen = new Map();
+  const want = new Map();
   for (const t of tiles.values()) {
     const g = layout[t.id] && layout[t.id].g;
     t.el.classList.toggle('grouped', !!g);
-    if (!g) { t.el.style.removeProperty('--group'); continue; }
-    if (!seen.has(g)) {
-      let n = 0;
-      for (let i = 0; i < g.length; i++) n = (n * 31 + g.charCodeAt(i)) >>> 0;
-      seen.set(g, (n % 360));
+    if (!g || !t.visible()) continue;
+    if (!want.has(g)) want.set(g, []);
+    want.get(g).push(t.id);
+  }
+  const keep = new Set();
+  for (const [g, ids] of want) {
+    if (ids.length < 2) continue;               // a group of one draws nothing
+    const r = groupRect(ids);
+    if (!r) continue;
+    keep.add(g);
+    let box = groupBoxes.get(g);
+    if (!box) {
+      box = el('div', 'gbox');
+      cvScroll.appendChild(box);
+      groupBoxes.set(g, box);
     }
-    t.el.style.setProperty('--group', 'hsl(' + seen.get(g) + ' 70% 55%)');
+    box.style.setProperty('--group', 'hsl(' + groupHue(g) + ' 70% 55%)');
+    box.style.left = Math.max(0, r.x - GROUP_PAD) + 'px';
+    box.style.top = Math.max(0, r.y - GROUP_PAD) + 'px';
+    box.style.width = (r.w + GROUP_PAD * 2) + 'px';
+    box.style.height = (r.h + GROUP_PAD * 2) + 'px';
+  }
+  for (const [g, box] of groupBoxes) {
+    if (keep.has(g)) continue;
+    box.remove();
+    groupBoxes.delete(g);
   }
 }
+const groupBoxes = new Map();
 
 const PUSH_ROUNDS = 20;                 // termcanvas's limit, the number decisions.md names
 
@@ -1318,6 +1484,7 @@ function applyPush(moves) {
     layout[m.id] = Object.assign({}, r, { x: m.x, y: m.y });
   }
   saveLayout();
+  paintGroups();     // a pushed group carries its frame with it
   renderMinimap();
   refreshOff();
   paintTidy();
@@ -1332,10 +1499,11 @@ function settle(anchorId) {
   const moves = pushAside(t.s.canvas, anchorId);
   if (!moves.length) return;
   applyPush(moves);
-  const back = moves.map((m) => ({ id: m.id, x: m.x0, y: m.y0 }));
+  // **No undo of its own any more.** The drag that caused it already took a snapshot, so one Ctrl Z
+  // puts back the move and the push together — which is what a person means by "undo that".
   toast([{ b: t.nameEl.textContent || 'window' },
          'moved ' + moves.length + (moves.length > 1 ? ' windows' : ' window') + ' aside',
-         { a: 'undo', on: () => applyPush(back) }]);
+         { d: KMOD + 'Z undoes it' }]);
 }
 
 // Lay a canvas out as a grid. **Only used when a batch arrives at once** — a restore. One at a time,
@@ -1430,6 +1598,14 @@ function setMax(tile, on) {
   setTimeout(() => { for (const t of targets) if (!t.closed) t.refit(); refreshOff(); }, 380);
 }
 addEventListener('keydown', (e) => {
+  // **Ctrl/⌘ Z, and only outside a terminal.** Inside one it belongs to whatever is running there —
+  // an editor's undo is not ours to take (the same rule Esc follows just below, and Ctrl-C above).
+  if ((e.key === 'z' || e.key === 'Z') && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+    if (e.target && e.target.closest && e.target.closest('.xterm, input, textarea')) return;
+    e.preventDefault();
+    undoLast();
+    return;
+  }
   if (e.key !== 'Escape' || !maxed) return;
   // Esc inside a terminal belongs to the app (vim·claude) — do not take it. Only Esc pressed on the canvas or a rail un-expands.
   if (e.target && e.target.closest && e.target.closest('.xterm')) return;
@@ -3034,7 +3210,9 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // hand can comfortably drag into place one at a time.
                   pushAside, applyPush, hits, firstFree,
                   // Groups: the model is testable without a hand, the gesture needs one.
-                  groupOf, groupRect, joinGroups, leaveGroup, paneUnder,
+                  groupOf, groupRect, joinGroups, leaveGroup, paneUnder, arrangeGroup,
+                  // Undo: one way back for everything that moves a window.
+                  undoMark, undoLast, undoDepth: () => undoStack.length,
                   // Path joining is platform-shaped and the platform it gets wrong has no Chrome
                   // here — so it is tested directly rather than by driving the rail.
                   joinDir,
@@ -3301,8 +3479,11 @@ function boot() {
     }
   }
   const tidyBtn = document.getElementById('tidy');
-  if (tidyBtn) tidyBtn.addEventListener('click', () => tidyCanvas(current));
+  if (tidyBtn) tidyBtn.addEventListener('click', () => { undoMark('tidying up'); tidyCanvas(current); });
   paintTidy();
+  const undoBtn = document.getElementById('undo');
+  if (undoBtn) undoBtn.addEventListener('click', () => undoLast());
+  paintUndo();
   window.palmar.tidyCanvas = tidyCanvas;
   loadRails();
   rzGrip(document.getElementById('rz-l'), 'l');

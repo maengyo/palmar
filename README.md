@@ -32,10 +32,14 @@ and nothing is resized: the sizes are yours, and the only thing palmar settles i
 **Nothing moves a window unless you did something.** A window you can see never jumps because a
 different one closed; tidying up is a button, not a habit the canvas has.
 
-**Windows that belong together can travel together.** Hold one still over another for a moment — the
-one underneath lights up first — and they become a group: dragging any of them moves them all, and a
-third can join the same way. `Alt`-drag takes one back out. A group is lighter than a canvas: a
-canvas is a different workbench, a group is a set that lives together on one.
+**Windows that belong together can travel together.** Hold one still over another — it lights up,
+then goes solid — and letting go there makes them a group: dragging any of them moves them all, and
+they line up as one tidy block inside a frame of their own. Move away before letting go and nothing
+happens. `Alt`-drag takes one back out. A group is lighter than a canvas: a canvas is a different
+workbench, a group is a set that lives together on one.
+
+**`Ctrl`/`⌘`+`Z` undoes the last thing that moved a window** — a drag, whatever it pushed, a group, a
+tidy. Not inside a terminal: there it belongs to whatever is running.
 
 **Canvases are tabs.** The daemon owns them, so every open browser sees the same tabs in the same
 order. A canvas can be removed only once it is empty — removing one must never end a process.
