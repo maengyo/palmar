@@ -303,7 +303,7 @@ def _serve():
         req = urllib.request.Request(base + "/api/sessions?token=" + token, headers={"Origin": base})
         with urllib.request.urlopen(req, timeout=20) as r:
             listed = _json.loads(r.read())
-        rows = listed.get("sessions", listed if isinstance(listed, list) else [])
+        rows = listed if isinstance(listed, list) else listed.get("sessions", [])
         if not any(x.get("id") == made.get("id") for x in rows):
             raise RuntimeError("the session was made but is not in the list")
         say("    it is in the list ·", len(rows), "session(s)")
