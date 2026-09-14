@@ -1101,5 +1101,71 @@ class JoiningPaths(unittest.TestCase):
         self.assertEqual(self.join("C:\\Users", "kim"), "C:\\Users\\kim")
 
 
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class ANewPaneFitsItsWindow(unittest.TestCase):
+    """A terminal must fill its window the moment it opens, not once something resizes it.
+
+    **What was wrong:** `fit()` ran in the same tick as `open()`, before the renderer had measured a
+    cell, so it worked out a size and did not apply it — and the flag was set to "fitted" regardless.
+    That flag is what the one "fit this pane later" path checks, so nothing ever tried again. The pane
+    stayed at xterm's 80x24 default inside a smaller box: measured 2026-09-14, propose said 67x19
+    while the terminal was 24 rows tall in a 20-row viewport, so three and a half rows sat below the
+    visible area. Scrolling to the bottom did not reach the cursor, and resizing the window was the
+    only way to see it (user report).
+
+    **Not Windows.** It reproduces here, on a Mac, with the same numbers."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser(scrollbars=True).start()
+        cls.b.open(cls.d.url)
+        cls.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          await fetch('/api/sessions?token='+T,{method:'POST',
+            headers:{'content-type':'application/json'},
+            body:JSON.stringify({cwd:%s,name:'fitme'})});})()""" % json.dumps(cls.d.home))
+        time.sleep(4)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def look(self):
+        return self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+          const vp=t.el.querySelector('.xterm-viewport');
+          const sc=t.el.querySelector('.xterm-screen');
+          return {rows:t.term.rows, cols:t.term.cols, fitted:t.fitted,
+                  want:t.fit.proposeDimensions(),
+                  vpH:vp.clientHeight, vpW:vp.clientWidth,
+                  scH:sc.offsetHeight, scW:sc.offsetWidth};})()""")
+
+    def test_the_last_row_is_inside_the_window(self):
+        """The symptom itself: rendered rows taller than the box means the bottom is unreachable."""
+        r = self.look()
+        self.assertLessEqual(r["scH"], r["vpH"] + 1,
+                             "the terminal draws %dpx of rows into a %dpx box — %r"
+                             % (r["scH"], r["vpH"], r))
+
+    def test_it_is_not_wider_than_the_window_either(self):
+        """The same miscount sideways, which is what puts a horizontal scrollbar over the last row."""
+        r = self.look()
+        self.assertLessEqual(r["scW"], r["vpW"] + 1,
+                             "the terminal draws %dpx wide into a %dpx box — %r"
+                             % (r["scW"], r["vpW"], r))
+
+    def test_it_took_the_size_it_worked_out(self):
+        r = self.look()
+        self.assertEqual([r["rows"], r["cols"]], [r["want"]["rows"], r["want"]["cols"]],
+                         "it is not the size it says it wants: %r" % r)
+
+    def test_the_flag_means_what_it_says(self):
+        """`fitted` gates the only path that fits a pane later. Setting it on a pane that did not fit
+        is worse than leaving it false — it removes the retry and leaves no trace."""
+        r = self.look()
+        self.assertTrue(r["fitted"])
+        self.assertEqual(r["rows"], r["want"]["rows"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -631,9 +631,17 @@ class Tile {
       }
     }, true);
     this.gl = tryWebgl(this.term, () => { this.gl = null; updateStatusBar(); });
-    // Measuring while hidden (another canvas) gives 0 columns — refit() measures when it becomes visible
+    // Measuring while hidden (another canvas) gives 0 columns — refit() measures when it becomes visible.
+    // **And not in this tick even when it is visible.** Straight after `open()` the renderer has not
+    // measured a cell yet, so `fit()` computes a size and leaves the terminal at its 80×24 default —
+    // while the old code set `fitted = true` regardless, which is the flag the one "fit this pane
+    // later" path checks. So it never ran and the pane stayed 24 rows tall inside a 20-row box:
+    // three and a half rows below the visible area, and scrolling to the bottom did not reach the
+    // cursor until something resized the window (measured 2026-09-14: propose 67×19, term 80×24,
+    // screen 384px in a 328px viewport). Next frame, once layout has happened.
     this.fitted = false;
-    if (this.visible()) { this.fit.fit(); this.fitted = true; }
+    this.fitTries = 0;
+    if (this.visible()) requestAnimationFrame(() => { if (!this.closed) this.refit(); });
 
     // Push out the character not committed yet. Called wherever the IME lets go.
     this.imeFlush = () => {
@@ -755,7 +763,17 @@ class Tile {
     const d = this.fit.proposeDimensions();
     if (!d || !d.cols || !d.rows) return;   // no size yet
     this.fit.fit();
-    this.fitted = true;
+    // **Believe the terminal, not the call.** `fit()` can work out a size and not apply it — the
+    // renderer has to have measured a cell first — and the flag used to be set either way, so a pane
+    // that never fitted was recorded as fitted and nothing tried again.
+    this.fitted = (this.term.rows === d.rows && this.term.cols === d.cols);
+    if (!this.fitted) {
+      // Bounded: a pane that cannot settle must not hold a frame callback for the rest of the
+      // session. Eight frames is well past the one or two this actually takes.
+      if (++this.fitTries <= 8) requestAnimationFrame(() => { if (!this.closed) this.refit(); });
+      return;
+    }
+    this.fitTries = 0;
     this.sendResize();   // "this is the only thing that changes rows·columns" — sent only when the window size changed
     this.showSize();
   }
