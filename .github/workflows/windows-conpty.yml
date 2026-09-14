@@ -25,6 +25,7 @@ on:
     paths:
       - "palmar/conpty.py"
       - "dev/conpty-check.py"
+      - "install.ps1"
       - ".github/workflows/windows-conpty.yml"
 
 jobs:
@@ -37,6 +38,26 @@ jobs:
 
       - name: what python is here
         run: python --version
+
+      # **Windows PowerShell 5.1, not PowerShell 7.** A Mac can only test install.ps1 against pwsh 7,
+      # and 5.1 is what a Windows machine has built in — `$IsWindows` does not exist there, native
+      # stderr behaves differently, and Join-Path takes two arguments and no more. The script errored
+      # out on a real 5.1 machine while the same file ran clean under 7.6 here (user, 2026-09-14), so
+      # the only way to stop guessing is to run it where it broke.
+      #
+      # `-Check` writes nothing, which is why this can run on every push without leaving anything on
+      # the runner. `continue-on-error` because the report is the point: a non-zero exit here should
+      # print what went wrong, not hide it behind a failed job.
+      - name: install.ps1 under PowerShell 5.1
+        continue-on-error: true
+        shell: cmd
+        run: |
+          echo --- version
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$PSVersionTable.PSVersion | Format-List"
+          echo --- parse
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$t=$null;$e=$null;[System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'install.ps1').Path,[ref]$t,[ref]$e)|Out-Null;if($e){$e|ForEach-Object{'{0}: {1}' -f $_.Extent.StartLineNumber,$_.Message}}else{'parses clean on 5.1'}"
+          echo --- run
+          powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Check
 
       # No pip install of anything: this half of the port is ctypes against kernel32, which is the
       # whole point of writing it.
