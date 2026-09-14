@@ -1351,10 +1351,12 @@ class Reaper:
         **Compares the session object, not the pid** — if that pid is reaped and reused during the grace,
         `pid in self.pids` becomes true again, and what dies then is someone else's (the new session's) shell."""
         if self.pids.get(s.pid) is s:
-            try:
-                os.kill(s.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            # **Through the pty, not os.kill.** signal.SIGKILL does not exist on Windows, and this runs
+            # from a call_later that `die` always schedules — so it was an AttributeError in a callback
+            # on every closed pane there (found by the source scan, 2026-09-14). The seam already has
+            # the right answer on both sides: a signal on POSIX, TerminateJobObject on Windows, which
+            # takes the whole tree rather than the shell alone.
+            s.pty.kill()
 
 
 # ── Canvases (protocol.md "캔버스", ⑪ ⑫) ──────────────────────────────────────────

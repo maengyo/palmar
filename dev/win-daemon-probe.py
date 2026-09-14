@@ -136,6 +136,16 @@ def _attrs():
     for name in sorted(os.listdir(os.path.join(repo, "palmar"))):
         if not name.endswith(".py"):
             continue
+        # **Skip what this platform refuses to import at all.** posixpty raises ImportError on
+        # Windows by design, so every POSIX name in it is expected and reporting them buries the
+        # ones that matter -- seven false alarms against one real find, the first time this ran.
+        try:
+            __import__("palmar." + name[:-3])
+        except ImportError:
+            say("    (skipping %s -- this platform does not import it)" % name)
+            continue
+        except Exception:
+            pass
         path = os.path.join(repo, "palmar", name)
         with open(path, encoding="utf-8") as fh:
             src = fh.read()
