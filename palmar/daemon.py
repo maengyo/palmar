@@ -1493,7 +1493,7 @@ def cwd_of(pid: int):
 def write_private(path: Path, data: bytes, mode: int) -> None:
     """Writes anew with mode. Writes a temp file and renames — never leaves a running shim half-written."""
     tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | NOFOLLOW, mode)
     try:
         os.fchmod(fd, mode)
         os.write(fd, data)
@@ -1609,7 +1609,7 @@ def stop_daemon() -> int:
     written (protocol.md). Killing it outright would throw away the workspace it is about to save."""
     path = RUN_DIR / "lock"
     try:
-        fd = os.open(str(path), os.O_RDWR | os.O_NOFOLLOW)
+        fd = os.open(str(path), os.O_RDWR | NOFOLLOW)
     except FileNotFoundError:
         print("palmar: 도는 데몬이 없다")
         return 0
@@ -1652,7 +1652,7 @@ def stop_daemon() -> int:
     while time.monotonic() < end:
         time.sleep(0.1)
         try:
-            fd = os.open(str(path), os.O_RDWR | os.O_NOFOLLOW)
+            fd = os.open(str(path), os.O_RDWR | NOFOLLOW)
         except OSError:
             print("palmar: 멈췄다")
             return 0
