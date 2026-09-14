@@ -305,10 +305,19 @@ def _serve():
     sock.close()
     env = dict(os.environ, HOME=home, USERPROFILE=home, PALMAR_WINDOWS_ANYWAY="1",
                PYTHONPATH=repo, PYTHONIOENCODING="utf-8")
+    # **The default, which now detaches on Windows too.** So this returns rather than staying, and
+    # what it prints is the address -- exactly what a person sees. The daemon it left behind is what
+    # the rest of this checks, and `--stop` at the end is what ends it.
     say("    starting a daemon on port", port)
-    proc = subprocess.Popen([sys.executable, "-m", "palmar", "--no-browser", "--port", str(port)],
-                            cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8", errors="replace")
+    started = subprocess.run([sys.executable, "-m", "palmar", "--no-browser", "--port", str(port)],
+                             cwd=repo, env=env, capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", timeout=90)
+    say("    it returned", started.returncode, "· said", repr((started.stdout or "").strip()[:70]))
+    if started.returncode != 0:
+        raise RuntimeError("palmar did not come back cleanly: %s" % (started.stderr or "").strip()[-300:])
+    if not (started.stdout or "").strip().startswith("http://"):
+        raise RuntimeError("the last line of stdout was not the address: %r" % started.stdout[-200:])
+    proc = None
     url_file = os.path.join(home, ".palmar", "run", "url")
     try:
         url = None
@@ -318,9 +327,7 @@ def _serve():
                 with open(url_file, encoding="utf-8") as fh:
                     url = fh.read().strip()
                 break
-            if proc.poll() is not None:
-                out, err = proc.communicate()
-                raise RuntimeError("it exited (%s): %s" % (proc.returncode, (err or out).strip()[-300:]))
+            # proc is None: the starter already returned and the daemon is on its own.
             time.sleep(0.3)
         if not url:
             raise RuntimeError("no run/url in 25s")
@@ -362,18 +369,78 @@ def _serve():
         if not any(x.get("id") == made.get("id") for x in rows):
             raise RuntimeError("the session was made but is not in the list")
         say("    it is in the list ·", len(rows), "session(s)")
+
+        # **Attach to the pane the way the page does.** The pane opens and the window is empty
+        # (user, 2026-09-14) -- bytes reach the ring, proved above, so the break is between the
+        # daemon and whoever attaches. This is that path: the /pty/<id> socket, its hello, and
+        # whether a single byte ever arrives.
+        sid = made.get("id")
+        import base64 as _b64
+        import socket as _socket
+        sock = _socket.create_connection(("127.0.0.1", port), timeout=15)
+        sock.settimeout(15)
+        key = _b64.b64encode(os.urandom(16)).decode()
+        sock.sendall(("GET /pty/%s?token=%s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nOrigin: %s\r\n"
+                      "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                      "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n"
+                      % (sid, token, port, base, key)).encode())
+        buf = b""
+        try:
+            while b"\r\n\r\n" not in buf:
+                part = sock.recv(4096)
+                if not part:
+                    raise RuntimeError("closed during the handshake")
+                buf += part
+        except Exception as e:
+            raise RuntimeError("the pane socket would not open: %s: %s" % (type(e).__name__, e))
+        head = buf.split(b"\r\n", 1)[0].decode("latin-1")
+        say("    ws /pty/<id> ->", head)
+        if "101" not in head:
+            raise RuntimeError("no upgrade: " + head)
+        # Read whatever it sends for a few seconds; text frames are the hello, binary is the terminal.
+        sock.settimeout(6)
+        seen_text = seen_bin = 0
+        got = buf.split(b"\r\n\r\n", 1)[1]
+        end2 = time.time() + 6
+        while time.time() < end2 and seen_bin == 0:
+            try:
+                more = sock.recv(65536)
+            except Exception:
+                break
+            if not more:
+                break
+            got += more
+            # Frame headers are enough to tell the two apart without a full parser.
+            for i in range(len(got) - 1):
+                op = got[i] & 0x0F
+                if got[i] & 0x80:
+                    if op == 1:
+                        seen_text += 1
+                    elif op == 2:
+                        seen_bin += 1
+            break
+        sock.close()
+        say("    after attaching: %d byte(s) back · text frames %d · binary %d"
+            % (len(got), seen_text, seen_bin))
+        if not got:
+            raise RuntimeError("the pane socket opened and said nothing -- this is the empty window")
+
+        # **Detached means no console of its own.** A process with one would take a Ctrl-C from the
+        # window it was started in, and die with it -- which is the whole thing this is for.
+        try:
+            import ctypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.GetConsoleProcessList.argtypes = [ctypes.POINTER(ctypes.c_ulong), ctypes.c_ulong]
+            k32.GetConsoleProcessList.restype = ctypes.c_ulong
+            buf = (ctypes.c_ulong * 64)()
+            n = k32.GetConsoleProcessList(buf, 64)
+            say("    this probe's console holds", n, "process(es) ·",
+                "the daemon is not one of them" if n <= 2 else "** something extra is attached")
+        except Exception as e:
+            say(HM, "could not ask about the console:", type(e).__name__, e)
     finally:
         subprocess.run([sys.executable, "-m", "palmar", "--stop"], cwd=repo, env=env,
                        capture_output=True, timeout=60)
-        try:
-            proc.wait(timeout=20)
-        except Exception:
-            proc.kill()
-        for pipe in (proc.stdout, proc.stderr):
-            try:
-                pipe.close()
-            except Exception:
-                pass
 
 
 wall("the whole daemon serves a page", _serve)

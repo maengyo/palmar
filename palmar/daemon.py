@@ -3285,6 +3285,62 @@ def announce(line: str) -> None:
     ANNOUNCE[0] = None
 
 
+def detached_no_fork(port: int, open_page: bool) -> int:
+    """The same promise where there is no `fork` — Windows.
+
+    **Start a second copy of ourselves, detached, and wait for it to answer.** `DETACHED_PROCESS`
+    gives it no console, so closing the one you typed in does not reach it; `CREATE_NEW_PROCESS_GROUP`
+    keeps a Ctrl-C in that console from being broadcast to it. Both are needed: either alone leaves
+    one of the two ways a terminal takes its children with it.
+
+    The address comes back by **waiting until the daemon answers**, not by reading run/url — a
+    `kill -9` leaves that file behind, so the file alone is not evidence the port is alive. That is
+    the same check `app/` already makes before reusing an address.
+
+    The POSIX side hands the address back over a pipe instead, because there a fork can simply keep
+    the write end. Passing a handle to a detached process on Windows is a different piece of work for
+    the same answer, and this one costs a poll."""
+    DETACHED_PROCESS = 0x00000008
+    CREATE_NEW_PROCESS_GROUP = 0x00000200
+    try:
+        ensure_private_dir(PALMAR_DIR)
+        logf = open(str(PALMAR_DIR / "log"), "ab")
+    except OSError as e:
+        print("palmar: 로그 파일을 못 열었다 — %s" % e, file=sys.stderr)
+        return 1
+    argv = [sys.executable, "-m", "palmar", "--foreground", "--port", str(port)]
+    if not open_page:
+        argv.append("--no-browser")
+    try:
+        child = subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, close_fds=True,
+            creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+    except OSError as e:
+        print("palmar: 떨어져 나온 데몬을 못 띄웠다 — %s" % e, file=sys.stderr)
+        return 1
+    finally:
+        logf.close()
+    end = time.monotonic() + STOP_WAIT_S * 3
+    while time.monotonic() < end:
+        try:
+            url = URL_FILE.read_text("utf-8").strip()
+        except OSError:
+            url = ""
+        if url.startswith("http://") and daemon_answers(url):
+            print(url, flush=True)
+            return 0
+        if child.poll() is not None:
+            # It is gone. Whatever it had to say went to the log, so point at that rather than
+            # inventing a reason — the same rule the POSIX side follows with its pipe.
+            print("palmar: 데몬이 떠 있지 못했다 (종료 %s)\n        무슨 일이 있었는지: %s"
+                  % (child.returncode, PALMAR_DIR / "log"), file=sys.stderr)
+            return 1
+        time.sleep(0.2)
+    print("palmar: %.0f초 안에 주소를 못 냈다 — %s 를 봐라"
+          % (STOP_WAIT_S * 3, PALMAR_DIR / "log"), file=sys.stderr)
+    return 1
+
+
 def detached(port: int, open_page: bool) -> int:
     """Start the daemon in its own session and come straight back.
 
@@ -3367,7 +3423,7 @@ def cli() -> None:
                     help="이 HOME 의 데몬을 멈춘다 (안의 셸도 같이 죽는다)")
     # **Detached is the default**, because the daemon outliving the terminal is the point of it
     # (principle 2). --foreground is for developing on it and for the tests, which have to be able to
-    # terminate what they started. Windows cannot fork; detaching there is part of #29 step 4.
+    # terminate what they started. Windows gets there a different way — see detached_no_fork.
     ap.add_argument("--foreground", action="store_true",
                     help="터미널에 붙은 채로 돈다 (Ctrl-C 로 멈춘다). 기본은 떨어져 나오는 것")
     args = ap.parse_args()
@@ -3375,8 +3431,10 @@ def cli() -> None:
         raise SystemExit(stop_daemon())
     if args.doctor:
         raise SystemExit(doctor(args.port))
-    if args.foreground or not hasattr(os, "fork"):
+    if args.foreground:
         asyncio.run(main(args.port, open_page=not args.no_browser))
-    else:
+    elif hasattr(os, "fork"):
         raise SystemExit(detached(args.port, open_page=not args.no_browser))
+    else:
+        raise SystemExit(detached_no_fork(args.port, open_page=not args.no_browser))
 
