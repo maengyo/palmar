@@ -1367,6 +1367,291 @@ class Grouping(unittest.TestCase):
         self.assertEqual(best, 100, "a jittering hand never filled the gauge: reached %s%%" % best)
         self.assertEqual(n, 2, "it never grouped, because the hand was not still enough")
 
+    def spawn(self, name):
+        """One extra window, so a test may close it without taking the class's fixtures with it."""
+        self.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          await fetch('/api/sessions?token='+T,{method:'POST',
+            headers:{'content-type':'application/json'},
+            body:JSON.stringify({cwd:%s,name:%s})});})()""" % (json.dumps(self.d.home), json.dumps(name)))
+        for _ in range(40):
+            time.sleep(0.25)
+            if self.b.ev("""[...window.palmar.tiles.values()].some(t=>t.s.name===%s)""" % json.dumps(name)):
+                return
+        self.fail("the extra window never arrived")
+
+    def close(self, name):
+        self.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          const t=[...window.palmar.tiles.values()].find(t=>t.s.name===%s);
+          await fetch('/api/sessions/'+t.id+'?token='+T,{method:'DELETE'});})()""" % json.dumps(name))
+        for _ in range(40):
+            time.sleep(0.25)
+            if not self.b.ev("""[...window.palmar.tiles.values()].some(t=>t.s.name===%s)""" % json.dumps(name)):
+                return
+        self.fail("the window never went away")
+
+    def test_a_still_hand_still_counts(self):
+        """**A hold that only advances while you move is not a hold.** The whole block ran on
+        pointermove, so the one gesture it exists for — putting a window down on another and keeping it
+        there — froze the gauge at whatever it had reached, and the stiller the hand the less it
+        filled. That is the other half of "게이지가 시간에 따라 올라가길 바랬는데" (2026-09-14): with no
+        events arriving, elapsed time was never read. A clock drives it now. Not one pointer event is
+        sent after it arrives."""
+        self.bench("put('g1',60,60,240,200); put('g2',360,60,240,200); put('g3',60,400,240,200); return 1;")
+        x, y = self.press("g1")
+        tx, ty = self.press("g2")
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
+        best = 0
+        for _ in range(16):                       # nothing is sent in here: the hand has stopped
+            time.sleep(0.12)
+            best = max(best, self.b.ev("""(()=>{const e=document.querySelector('.tile.arming');
+              return e ? Number(e.style.getPropertyValue('--p')) : 0;})()"""))
+            if best >= 100:
+                break
+        self.send(type="mouseReleased", x=tx, y=ty, clickCount=1, buttons=0)
+        time.sleep(0.5)
+        n = self.b.ev("""(()=>{const P=window.palmar;
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          return P.groupOf(by('g1').id).length;})()""")
+        self.assertEqual(best, 100, "the gauge stopped when the hand did: reached %s%%" % best)
+        self.assertEqual(n, 2, "a window held still on another never grouped")
+
+    def test_a_frame_belongs_to_the_canvas_that_is_showing(self):
+        """**The frames are drawn into the scroller, not into a canvas**, and .tile.other only hides the
+        windows — so one canvas's group shape stayed on screen over the next canvas's windows, which is
+        how the residue was reported as following the user around (2026-09-14: "다른 캔버스에도 그
+        잔상이 남아 있는 경우가 많았어")."""
+        self.bench("""put('g1', 60, 60, 240, 200); put('g2', 320, 60, 240, 200);
+                      P.joinGroups(by('g1').id, by('g2').id); return 1;""")
+        here = self.b.ev("document.querySelectorAll('.gbox').length")
+        other = self.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          const r = await fetch('/api/canvases?token='+T,{method:'POST',
+            headers:{'content-type':'application/json'},
+            body:JSON.stringify({name:'second'})});
+          const c = await r.json();
+          window.palmar.switchCanvas(c.id);
+          return c.id;})()""")
+        time.sleep(0.6)
+        away = self.b.ev("document.querySelectorAll('.gbox').length")
+        self.b.ev("""(()=>{const P=window.palmar;
+          const first=[...P.tiles.values()].find(t=>t.s.name==='g1').s.canvas;
+          P.switchCanvas(first); return 1;})()""")
+        time.sleep(0.6)
+        back = self.b.ev("document.querySelectorAll('.gbox').length")
+        self.assertEqual(here, 1, "the pair never drew a frame, so this proves nothing")
+        self.assertEqual(away, 0, "the frame followed onto a canvas with none of its windows on it")
+        self.assertEqual(back, 1, "the frame did not come back with its windows")
+
+    def test_a_resized_group_closes_back_up(self):
+        """Grow a member and the others make room; shrink it back and they have to come back. Driven
+        through the grip, because the bug only existed in the release path: the group was arranged
+        correctly and then persist() read the positions back off elements that were still sliding, and
+        saved where they had been (user, 2026-09-14: "크기를 늘렸다가 줄이면 터미널끼리 붕떠있어")."""
+        self.bench("""put('g1',40,40,220,180); put('g2',272,40,220,180); put('g3',504,40,220,180);
+                      P.joinGroups(by('g1').id, by('g2').id);
+                      P.joinGroups(by('g3').id, by('g1').id);
+                      P.arrangeGroup(P.groupOf(by('g1').id)); return 1;""")
+        row = """const ids = P.groupOf(by('g1').id);
+                 const r = ids.map((id) => [L[id].x, L[id].y, L[id].w]).sort((a, b) => a[0] - b[0]);
+                 const gaps = []; for (let i=1;i<r.length;i++)
+                   gaps.push(r[i][1] === r[i-1][1] ? r[i][0] - (r[i-1][0] + r[i-1][2]) : 'wrapped');
+                 return {row: r, gaps: gaps};"""
+        def grip_drag(dx):
+            g = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name==='g1');
+              const r=t.el.querySelector('.grip').getBoundingClientRect();
+              return {x:r.left+r.width/2, y:r.top+r.height/2};})()""")
+            self.send(type="mousePressed", x=g["x"], y=g["y"], clickCount=1, buttons=1)
+            for i in (1, 2, 3, 4):
+                self.send(type="mouseMoved", x=g["x"] + dx * i / 4, y=g["y"], buttons=1)
+                time.sleep(0.04)
+            self.send(type="mouseReleased", x=g["x"] + dx, y=g["y"], clickCount=1, buttons=0)
+            time.sleep(1.1)
+        start = self.bench(row)
+        grip_drag(200)
+        grown = self.bench(row)
+        grip_drag(-200)
+        back = self.bench(row)
+        self.assertEqual(start["gaps"], [12, 12], "the bench did not start tidy: %r" % start)
+        self.assertGreater(grown["row"][0][2], 220, "the resize never happened: %r" % grown)
+        self.assertEqual(grown["gaps"], [12, 12], "growing one left the group spread out: %r" % grown)
+        self.assertEqual(back["gaps"], [12, 12], "shrinking it back left them floating: %r" % back)
+
+    def test_closing_a_member_takes_the_frame_with_it(self):
+        """**The frame outlived every window that explained it.** Closing a window dropped its entry
+        from the store and nothing redrew the frames, so the coloured shape stayed on screen — and
+        because it lives in the scroller rather than on a canvas, it showed on every other canvas too,
+        and survived closing the rest of the board (user, 2026-09-14: "나머지 터미널을 다 지워도
+        잔상이 남아"). A pair that loses one member also stops being a group."""
+        self.spawn('gx')
+        self.bench("""put('g1', 60, 60, 240, 200); put('gx', 320, 60, 240, 200);
+                      P.joinGroups(by('g1').id, by('gx').id); return 1;""")
+        before = self.b.ev("document.querySelectorAll('.gbox').length")
+        self.close('gx')
+        after = self.b.ev("""(()=>{const P=window.palmar;
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          return {boxes: document.querySelectorAll('.gbox').length,
+                  cells: document.querySelectorAll('.gcell').length,
+                  marked: document.querySelectorAll('.tile.grouped').length,
+                  still: P.groupOf(by('g1').id).length};})()""")
+        self.assertEqual(before, 1, "the pair never drew a frame, so this proves nothing")
+        self.assertEqual([after["boxes"], after["cells"]], [0, 0],
+                         "the frame outlived the group: %r" % after)
+        self.assertEqual(after["still"], 1, "the one left behind is still in a group of one")
+        self.assertEqual(after["marked"], 0, "a window is still wearing the group mark")
+
+    def test_a_group_closes_up_when_a_member_goes(self):
+        """"그룹화된 터미널 안에서는 하나의 터미널의 크기가 줄어들거나 사라져도 같은 그룹끼리는 항상
+        맞닿아 있게" (2026-09-14) — a group that keeps a hole where a window used to be is a group
+        that has come apart."""
+        self.spawn('gx')
+        self.bench("""put('g1', 60, 60, 200, 160); put('gx', 272, 60, 200, 160);
+                      put('g2', 484, 60, 200, 160);
+                      P.joinGroups(by('g1').id, by('gx').id);
+                      P.joinGroups(by('g2').id, by('g1').id);
+                      P.arrangeGroup(P.groupOf(by('g1').id)); return 1;""")
+        self.close('gx')
+        r = self.bench("""const ids = P.groupOf(by('g1').id);
+          const row = ids.map((id) => [L[id].x, L[id].y, L[id].w]).sort((a, b) => a[0] - b[0]);
+          return {n: ids.length, row: row};""")
+        self.assertEqual(r["n"], 2, "the group did not survive losing one member: %r" % r)
+        a, b = r["row"]
+        self.assertEqual(b[0] - (a[0] + a[2]), 12,
+                         "the group kept the hole where the closed window had been: %r" % r["row"])
+
+    def test_brushing_a_window_is_not_aiming_at_it(self):
+        """**Two thresholds, not one.** Any overlap at all used to count, so at a window's edge the
+        answer flickered between that window and nothing as the hand moved, and every flicker restarted
+        the hold — which made the gauge look as though it rose with how deeply the windows overlapped
+        rather than with time (user, 2026-09-14). A fifth of the dragged window has to be covered before
+        it counts as aiming, and once aimed it is held until almost nothing is left."""
+        r = self.bench("""
+          const a = by('g1').id;
+          put('g2', 360, 300, 240, 200);
+          const look = (x, y, cur) => { put('g1', x, y, 240, 200);
+                                        const h = P.paneOver(a, [a], cur); return h && h.id; };
+          const b = by('g2').id;
+          return {brush: look(588, 300, null),      // 12px of 240 — a brush
+                  aimed: look(420, 300, null),      // 180px of 240 — plainly on it
+                  kept:  look(570, 300, b) === b,   // slid back too far to take up, but already held
+                  gone:  look(598, 300, b)};        // and now there is nothing left to hold
+        """)
+        self.assertIsNone(r["brush"], "a brush past counted as aiming at it")
+        self.assertIsNotNone(r["aimed"], "plainly over it and it found nothing")
+        self.assertTrue(r["kept"], "it dropped a target it was already holding")
+        self.assertIsNone(r["gone"], "it held a target that is no longer under it")
+
+    def test_a_member_wears_its_group_colour(self):
+        """**The tint has to be on the window itself.** .tile.grouped reads --group, and --group was set
+        on the frame — a sibling of the windows, not an ancestor — so the declaration was invalid and
+        the border fell back to currentColor. It did change colour on joining, which is why it read as
+        working; it was never the group's colour."""
+        r = self.bench("""
+          put('g1', 60, 60, 240, 200); put('g2', 320, 60, 240, 200);
+          const lone = getComputedStyle(by('g3').el).borderTopColor;
+          P.joinGroups(by('g1').id, by('g2').id);
+          P.paintGroups ? P.paintGroups() : null;
+          const a = by('g1').el, b = by('g2').el;
+          return {set: a.style.getPropertyValue('--group'),
+                  same: a.style.getPropertyValue('--group') === b.style.getPropertyValue('--group'),
+                  border: getComputedStyle(a).borderTopColor, lone: lone,
+                  text: getComputedStyle(a).color};
+        """)
+        self.assertTrue(r["set"], "no group colour was put on the window")
+        self.assertTrue(r["same"], "two members of one group wear different colours")
+        self.assertNotEqual(r["border"], r["lone"], "a member's border is the ordinary one")
+        self.assertNotEqual(r["border"], r["text"],
+                            "the border fell back to the text colour, so the mix is still invalid")
+
+    def test_a_big_window_can_still_aim_at_a_small_one(self):
+        """**The share is of the smaller of the two.** Read against the dragged window alone, a big
+        window could never take a small one as a target at all — a default-sized pane would need more
+        overlap than a minimum-sized window has area to give, so it would sit squarely on top of one and
+        find nothing. Every other test here uses two windows of one size, where the two readings are the
+        same number and the mistake is invisible."""
+        r = self.bench("""
+          const a = by('g1').id;
+          put('g2', 400, 300, 230, 130);          // small
+          put('g1', 380, 280, 520, 360);          // big, laid over most of it
+          const on = P.paneOver(a, [a], null);
+          put('g1', 610, 280, 520, 360);          // barely touching its right edge
+          const off = P.paneOver(a, [a], null);
+          return {on: on && on.id, off: off, small: L[by('g2').id].w * L[by('g2').id].h,
+                  big: L[a].w * L[a].h};
+        """)
+        self.assertLess(r["small"], r["big"] * 0.2,
+                        "the two windows are not lopsided enough to prove anything: %r" % r)
+        self.assertIsNotNone(r["on"], "a big window laid over a small one found nothing")
+        self.assertIsNone(r["off"], "it took a target it was only touching the edge of")
+
+    def test_nothing_starts_until_the_quiet_moment_passes(self):
+        """**Carrying one window across another must offer nothing.** The gauge and the landing box
+        both wait out a beat first, so only staying starts them (user, 2026-09-14: "겹쳐진 후 일정시간이
+        지나고 나서 게이지가 올라가야 해"). The target still lights up at once — that is what says the
+        hold has something to hold on to."""
+        self.bench("put('g1',60,60,240,200); put('g2',360,60,240,200); put('g3',60,400,240,200); return 1;")
+        x, y = self.press("g1")
+        tx, ty = self.press("g2")
+        # **Timed inside the page.** Asking from here costs a round trip, and under a loaded machine
+        # that trip alone outlasts the lead-in — the first answer then arrives after the gauge has
+        # already started and the test reads as a failure. The page keeps its own timeline instead.
+        self.b.ev("""(()=>{window.__t=[];window.__i=setInterval(()=>{
+            const a=document.querySelector('.tile.arming');
+            window.__t.push([performance.now(), !!a, !!document.querySelector('.ghost'),
+                             !!document.querySelector('.tile.joining, .tile.joinready'),
+                             a ? Number(a.style.getPropertyValue('--p')) : 0]);}, 20);return 1;})()""")
+        stale = self.b.ev("document.querySelectorAll('.tile.joinready, .tile.joining, .tile.arming').length")
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
+        self.send(type="mouseMoved", x=tx + 1, y=ty, buttons=1)
+        for _ in range(16):
+            time.sleep(0.12)
+            if self.b.ev("!!document.querySelector('.tile.joinready')"):
+                break
+        self.send(type="mouseReleased", x=tx + 1, y=ty, clickCount=1, buttons=0)
+        line = self.b.ev("(()=>{clearInterval(window.__i);return window.__t;})()")
+        first = lambda k: next((r[0] for r in line if r[k]), None)
+        lit, gauge, ghost = first(3), first(1), first(2)
+        digest = "%d samples over %dms, %d lit, top gauge %s, joinready at start: %s" % (
+            len(line), (line[-1][0] - line[0][0]) if line else 0,
+            sum(1 for r in line if r[3]), max([r[4] for r in line] or [0]), stale)
+        self.assertIsNotNone(lit, "the target never lit up at all — " + digest)
+        self.assertIsNotNone(gauge, "the gauge never started at all — " + digest)
+        self.assertIsNotNone(ghost, "the landing box never appeared")
+        self.assertGreaterEqual(gauge - lit, 200,
+                                "the gauge started %dms after they touched, with no quiet moment"
+                                % (gauge - lit))
+        self.assertGreaterEqual(ghost, gauge - 40,
+                                "the landing box appeared before the gauge did")
+
+    def test_it_lands_where_the_preview_said_it_would(self):
+        """**The preview was telling the truth and something else undid it.** arrangeGroup writes the
+        store directly; persist() reads the position back off the element, and a tile slides for 350ms,
+        so persisting right after arranging saved a number from the middle of that slide — the old
+        position (user, 2026-09-14: "예상 범위가 보이지만 실제로는 그 부분에 붙질 않아"). applyPush
+        already carried the rule: write the intended value, never read it back."""
+        self.bench("put('g1',60,60,240,200); put('g2',420,60,240,200); put('g3',60,420,240,200); return 1;")
+        x, y = self.press("g1")
+        tx, ty = self.press("g2")
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
+        box = None
+        for _ in range(16):
+            time.sleep(0.12)
+            self.send(type="mouseMoved", x=tx + 1, y=ty, buttons=1)
+            box = self.b.ev("""(()=>{const g=document.querySelector('.ghost');
+              if (!g) return null; const s=g.style;
+              return [parseInt(s.left), parseInt(s.top)];})()""")
+            if box and self.b.ev("!!document.querySelector('.tile.joinready')"):
+                break
+        self.assertIsNotNone(box, "no landing box was ever shown")
+        self.send(type="mouseReleased", x=tx + 1, y=ty, clickCount=1, buttons=0)
+        time.sleep(0.8)
+        at = self.bench("return at('g1');")
+        self.assertEqual(at, box, "it was shown %r and landed at %r" % (box, at))
+
     def test_the_notch_of_an_L_belongs_to_nobody(self):
         """**The outline is not the shape.** The frame draws an ㄱ, and the corner it leaves open is
         real space — but the push took the group's bounding box, so a window put in that corner was
@@ -1464,8 +1749,8 @@ class Grouping(unittest.TestCase):
                   ghost: !!document.querySelector('.ghost'),
                   mine: e ? e.querySelector('.tb .name').textContent : null};})()"""
         seen = []
-        for _ in range(6):
-            time.sleep(0.15)
+        for _ in range(16):        # the quiet lead-in comes first, then the 900ms fill
+            time.sleep(0.12)
             self.send(type="mouseMoved", x=tx + 1, y=ty, buttons=1)
             seen.append(self.b.ev(look))
         filling = [s for s in seen if s["pct"] is not None]

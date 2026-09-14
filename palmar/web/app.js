@@ -859,6 +859,7 @@ class Tile {
     let party = [], starts = new Map(), solo = false;
     let overId = null, overSince = 0, armed = null, overSide = null;
     let overSideAtDrop = null;   // the side the hold was armed on, read once on release
+    let holdTimer = null;       // the clock behind the hold, so a still hand still counts
     const down = (m) => (ev) => {
       // Buttons, input fields and the confirm strip on the title bar are not a drag (#31: .cl and .cfm joined here)
       // Only .sz.own is excluded — the ordinary size readout is part of the title bar and should drag, and it
@@ -877,8 +878,61 @@ class Tile {
       overId = null; overSince = 0; armed = null; overSide = null; overSideAtDrop = null;
       for (const id of party) { const t = tiles.get(id); if (t) t.el.classList.add('drag'); }
       this.el.classList.add('drag');
+      if (m === 'move') { clearInterval(holdTimer); holdTimer = setInterval(hold, 60); }
       ev.currentTarget.setPointerCapture(ev.pointerId);
       ev.preventDefault();
+    };
+    // **The hold.** Overlapping a window that is not already travelling with me, for long enough.
+    //
+    // **Leaving resets it, not moving.** This used to also reset on any movement past a few pixels, on
+    // the theory that a hold is a window held still — and a hand cannot hold still. On a real mouse the
+    // gauge flickered near zero and never filled, so there was no gauge, no preview, and a gesture that
+    // seemed to need one exact pixel (user, 2026-09-14, on Windows). Every test had sent the same
+    // coordinate twice and so had never moved at all. The dwell alone keeps a window you are only
+    // crossing from arming: nobody spends 900ms on the way past.
+    //
+    // **And a clock drives it, not only the hand.** It used to run on pointermove alone, so the one
+    // gesture it is for — putting a window down on another and keeping it there — froze the gauge at
+    // whatever it had reached, and the stiller the hand the less it filled. A hold that only advances
+    // while you move is not a hold.
+    const hold = () => {
+      // The clock outlives nothing: a window closed mid-drag stops it here rather than in dispose(),
+      // which cannot see this closure.
+      if (this.closed) { clearInterval(holdTimer); holdTimer = null; return; }
+      if (mode !== 'move') return;
+      const hit = paneOver(this.id, party, overId);
+      const under = hit && hit.id;
+      if (under !== overId) {
+        if (overId) markHold(overId, false);
+        setGauge(this.id, 0);
+        showGhost(null);
+        armed = null;                       // moved on — nothing is going to be joined
+        overId = under; overSince = under ? Date.now() : 0;
+        overSide = hit && hit.side;
+        if (under) markHold(under, true);
+      } else if (overId) {
+        // **The side is latched once armed.** Centre-to-centre flips on a pixel near the diagonal, and
+        // the drop reads overSideAtDrop — so without this the preview and the landing can disagree.
+        overSide = overSideAtDrop || hit.side;
+        // **A quiet moment first.** Landing on a window starts nothing for a beat, so carrying one
+        // across another shows no gauge and offers no landing spot — only staying does ("겹쳐진 후
+        // 일정시간이 지나고 나서 게이지가 올라가야 해", 2026-09-14). The target still lights up at
+        // once, which is what says the hold has something to hold on to.
+        const pct = (Date.now() - overSince - GROUP_LEAD_MS) / GROUP_HOLD_MS * 100;
+        setGauge(this.id, pct);                        // 0 or less takes the ring off
+        showGhost(pct > 0 ? joinPreview(overId, overSide, this.id) : null);
+      }
+      if (overId && Date.now() - overSince >= GROUP_LEAD_MS + GROUP_HOLD_MS) {
+        // **Armed, not done.** It used to join here, in the middle of the drag, so carrying on
+        // somewhere else left you grouped to a window you had moved away from — "잡은 걸 놓지
+        // 않고 다시 다른 공간으로 옮기면 그룹핑이 취소가 되어야 자연스럽지" (2026-09-14). The hold
+        // arms it and the release commits it; moving away disarms it, which is what the reset
+        // branch above already does.
+        armed = overId;
+        overSideAtDrop = overSide;
+        markHold(overId, 'ready');
+        setGauge(this.id, 100);
+      }
     };
     const move = (ev) => {
       if (!mode) return;
@@ -904,41 +958,7 @@ class Tile {
           mmSet(id, nx2, ny2, r.w, r.h);
         }
         if (party.length > 1) paintGroups();
-        // **The hold.** Overlapping a window that is not already travelling with me, for long enough.
-        //
-        // **Leaving resets it, not moving.** This used to also reset on any movement past a few pixels,
-        // on the theory that a hold is a window held still — and a hand cannot hold still. On a real
-        // mouse the gauge flickered near zero and never filled, so there was no gauge, no preview, and
-        // a gesture that seemed to need one exact pixel (user, 2026-09-14, on Windows). Every test had
-        // sent the same coordinate twice and so had never moved at all. The dwell alone is enough to
-        // keep a window you are only crossing from arming: nobody spends 900ms on the way past.
-        const hit = paneOver(this.id, party);
-        const under = hit && hit.id;
-        if (under !== overId) {
-          if (overId) markHold(overId, false);
-          setGauge(this.id, 0);
-          showGhost(null);
-          armed = null;                       // moved on — nothing is going to be joined
-          overId = under; overSince = under ? Date.now() : 0;
-          overSide = hit && hit.side;
-          if (under) markHold(under, true);
-        } else if (overId) {
-          overSide = hit.side;
-          const pct = (Date.now() - overSince) / GROUP_HOLD_MS * 100;
-          setGauge(this.id, pct);
-          showGhost(joinPreview(overId, overSide, this.id));
-        }
-        if (overId && Date.now() - overSince >= GROUP_HOLD_MS) {
-          // **Armed, not done.** It used to join here, in the middle of the drag, so carrying on
-          // somewhere else left you grouped to a window you had moved away from — "잡은 걸 놓지
-          // 않고 다시 다른 공간으로 옮기면 그룹핑이 취소가 되어야 자연스럽지" (2026-09-14). The hold
-          // arms it and the release commits it; moving away disarms it, which is what the reset
-          // branch above already does.
-          armed = overId;
-          overSideAtDrop = overSide;
-          markHold(overId, 'ready');
-          setGauge(this.id, 100);
-        }
+        hold();
       } else {
         const nw = Math.max(MIN_W, ow + dx), nh = Math.max(MIN_H, oh + dy);
         this.el.style.width = nw + 'px';
@@ -949,6 +969,7 @@ class Tile {
     const up = () => {
       if (!mode) return;
       const was = mode; mode = null;
+      clearInterval(holdTimer); holdTimer = null;
       if (overId) { markHold(overId, false); overId = null; }
       setGauge(this.id, 0);
       showGhost(null);
@@ -961,6 +982,15 @@ class Tile {
         if (left) toast([{ b: this.nameEl.textContent || 'window' }, 'left its group — ' + KMOD + 'Z puts it back']);
       }
       for (const id of party) { const t = tiles.get(id); if (t && t !== this) t.persist(); }
+      paintTidy();          // moving a window creates or removes slack to close up
+      if (was === 'size') this.refit();   // tell the PTY only when the resize is let go (spike D)
+      this.persist();
+      // **Everything below arranges, and arranging writes the store directly.** persist() reads the
+      // position back off the element, and .tile slides for 350ms, so a persist that follows an
+      // arrangement reads a number from the middle of that slide and saves the *old* position —
+      // the same trap applyPush documents ("write the intended value; never read it back"). That is
+      // why a window did not land where its preview said and why a resized group stayed spread out:
+      // the layout was correct for one frame and then overwritten (measured 2026-09-14).
       if (armed) {
         undoMark('grouping', this.s.canvas);
         // **Put it on the side it was carried to before arranging.** arrangeGroup reads the order out
@@ -973,26 +1003,19 @@ class Tile {
         }
         joinGroups(this.id, armed);
         const ids = groupOf(this.id);
-        arrangeGroup(ids);
-        for (const id of ids) { const t = tiles.get(id); if (t) t.persist(); }
+        arrangeGroup(ids);          // writes layout and saves; nothing may read the DOM back after it
         paintGroups();
         const n = ids.length;
         toast([{ b: 'grouped ' + n + (n > 1 ? ' windows' : ' window') },
                'they move together — ' + (IS_MAC ? '⌥' : 'Alt') + '-drag takes one out, ' + KMOD + 'Z undoes this']);
         armed = null;
       }
-      paintTidy();          // moving a window creates or removes slack to close up
-      if (was === 'size') this.refit();   // tell the PTY only when the resize is let go (spike D)
-      this.persist();
       // **Resizing inside a group re-lays the group out.** Growing a member pushed the others away
       // and shrinking it left the hole behind, because push-aside only ever resolves overlap and
       // never pulls anything back — which is right for the canvas ("밀어내기를 타일링으로 바꾸지
       // 마라") and wrong inside a group, where the whole point is a block that stays a block
       // (user, 2026-09-14). Sizes are still the user's; only the positions are set.
-      if (was === 'size' && groupOf(this.id).length > 1) {
-        arrangeGroup(groupOf(this.id));
-        for (const id of groupOf(this.id)) { const t = tiles.get(id); if (t && t !== this) t.persist(); }
-      }
+      if (was === 'size' && groupOf(this.id).length > 1) arrangeGroup(groupOf(this.id));
       settle(this.id);                    // whatever it landed on gets out of the way (decisions.md "새 창이 옆을 민다")
       renderMinimap();                    // the world may have grown — take the scale again
       refreshOff();
@@ -1103,6 +1126,7 @@ function tidyCanvas(canvasId) {
   renderMinimap();
   refreshOff();
   paintTidy();
+  paintGroups();   // every window on the canvas just moved, and the frame is drawn from where they are
   return true;
 }
 
@@ -1225,13 +1249,23 @@ function paintUndo() {
 //
 // Membership rides in the same store as the position (⑩ provisional, `palmar-tiles`) — and lands in
 // the same undecided as the coordinates do (③, #2). A group is an id, kept on each member.
-const GROUP_HOLD_MS = 900;      // over another window this long and they join
+const GROUP_LEAD_MS = 280;      // quiet moment after the overlap before the gauge starts
+const GROUP_HOLD_MS = 900;      // and this long filling, over another window, and they join
+const OVER_TAKE = 0.20;         // this much of the dragged window covered before it takes a target
+const OVER_KEEP = 0.05;         // and it holds that target until this little is left
 
+//: **A group lives on one canvas** — "a canvas is a different workbench, a group is a set that lives
+//: together on one". Membership is a single field in the store and the daemon may move a session to
+//: another canvas without touching it, which left the moved window still in the party: dragged
+//: invisibly from a canvas it is no longer on, and packed into a block it cannot be seen in.
 function groupOf(id) {
   const g = layout[id] && layout[id].g;
   if (!g) return [id];
+  const me = tiles.get(id);
+  const cv = me && me.s.canvas;
   const out = [];
-  for (const t of tiles.values()) if (layout[t.id] && layout[t.id].g === g) out.push(t.id);
+  for (const t of tiles.values())
+    if (layout[t.id] && layout[t.id].g === g && (!cv || t.s.canvas === cv)) out.push(t.id);
   return out.length ? out : [id];
 }
 
@@ -1269,10 +1303,23 @@ function blockOf(ids) {
 //: to reach another window was to put your top edge on it, and every group grew upwards
 //: (user, 2026-09-14). It also meant a member sticking out of a ragged group could not be aimed at,
 //: because the pointer never got near it. The rectangle knows all of that; the pointer never did.
-function paneOver(id, ignore) {
+//:
+//: **It has to hold on to the one it found.** Any overlap at all used to count, so at the edge of a
+//: window the answer flickered between that window and nothing as the hand moved, and every flicker
+//: restarted the hold. The gauge then climbed only as fast as the overlap was deep enough to keep
+//: the answer steady — which is exactly how it was reported: "게이지가 시간에 따라 올라가길 바랬는데
+//: 지금은 얼마나 터미널이 많이 겹치느냐에 따라 게이지가 올라가는 것 같아" (2026-09-14). So there are
+//: two thresholds, not one: a fifth of the dragged window has to be over something before it is taken
+//: as a target, and once taken it is kept until almost nothing is left of the overlap. `current` is
+//: the target already being held.
+function paneOver(id, ignore, current) {
   const me = layout[id];
   if (!me) return null;
-  let best = null, bestArea = 0;
+  // **A share of the smaller of the two, not of the one in your hand.** Measured against the dragged
+  // window alone, a big window could never take a small one as a target at all: a default 520x360 pane
+  // would need 37,000px² of overlap and a window at the minimum size has only 24,000px² to give. Every
+  // test used two windows of one size, where the two readings are the same number.
+  let best = null, bestArea = 0, curArea = 0, bestOf = 1, curOf = 1;
   for (const t of tiles.values()) {
     if (ignore && ignore.indexOf(t.id) >= 0) continue;
     if (!t.visible() || t.s.canvas !== tiles.get(id).s.canvas) continue;
@@ -1282,9 +1329,16 @@ function paneOver(id, ignore) {
     const h = Math.min(me.y + me.h, r.y + r.h) - Math.max(me.y, r.y);
     if (w <= 0 || h <= 0) continue;
     const area = w * h;
-    if (area > bestArea) { bestArea = area; best = t.id; }
+    const of = Math.max(1, Math.min(me.w * me.h, r.w * r.h));   // the smaller window is the measure
+    if (t.id === current) { curArea = area; curOf = of; }
+    if (area > bestArea) { bestArea = area; best = t.id; bestOf = of; }
   }
+  // Stay with the one already held unless it has nearly slid off, or something else is clearly more
+  // covered — "clearly" so that two candidates a few pixels apart cannot trade the hold back and forth.
+  let held = false;
+  if (curArea >= curOf * OVER_KEEP && bestArea < curArea * 1.5) { best = current; bestArea = curArea; held = true; }
   if (!best) return null;
+  if (!held && bestArea < bestOf * OVER_TAKE) return null;   // only brushing it, and not already held
   // **The side is where the hand is carrying it**, measured centre to centre and taken on the axis
   // it has moved furthest along — so nudging it rightwards means "to the right", not "slightly down".
   const r = layout[best];
@@ -1429,19 +1483,27 @@ function joinGroups(a, b) {
   return changed;
 }
 
+// A group of one is not a group. Both ways out of a group end here — walking away from it, and being
+// closed — so that neither can leave a window wearing a colour and a promise that means nothing.
+// Returns what is left of the group, which is what a caller has to close up.
+function dissolveIfAlone(g) {
+  const rest = [...tiles.values()].filter((t) => layout[t.id] && layout[t.id].g === g);
+  if (rest.length === 1) {
+    const only = Object.assign({}, layout[rest[0].id]);
+    delete only.g;
+    layout[rest[0].id] = only;
+    return [];
+  }
+  return rest.map((t) => t.id);
+}
+
 function leaveGroup(id) {
   if (!layout[id] || !layout[id].g) return null;
   const was = layout[id].g;
   const left = Object.assign({}, layout[id]);
   delete left.g;
   layout[id] = left;
-  // A group of one is not a group. If only one member is left, it stops being one too.
-  const rest = [...tiles.values()].filter((t) => layout[t.id] && layout[t.id].g === was);
-  if (rest.length === 1) {
-    const only = Object.assign({}, layout[rest[0].id]);
-    delete only.g;
-    layout[rest[0].id] = only;
-  }
+  dissolveIfAlone(was);
   saveLayout();
   paintGroups();
   return was;
@@ -1467,6 +1529,11 @@ function paintGroups() {
   for (const t of tiles.values()) {
     const g = layout[t.id] && layout[t.id].g;
     t.el.classList.toggle('grouped', !!g);
+    // **The tint has to be on the window itself.** .tile.grouped reads --group, and --group was set on
+    // the frame — a sibling of the windows, not an ancestor — so the whole declaration was invalid and
+    // the border fell back to currentColor. It did change colour, which is why it read as working; it
+    // was never the group's colour.
+    if (!g) t.el.style.removeProperty('--group');
     if (!g || !t.visible()) continue;
     if (!want.has(g)) want.set(g, []);
     want.get(g).push(t.id);
@@ -1493,8 +1560,11 @@ function paintGroups() {
     const cells = box.children;
     for (let i = cells.length; i < ids.length; i++) box.appendChild(el('div', 'gcell'));
     while (box.children.length > ids.length) box.lastChild.remove();
+    const hue = 'hsl(' + groupHue(g) + ' 70% 55%)';
     ids.forEach((id, i) => {
       const q = layout[id];
+      const t = tiles.get(id);
+      if (t) t.el.style.setProperty('--group', hue);
       const c = box.children[i];
       c.style.left = Math.max(0, q.x - GROUP_PAD) + 'px';
       c.style.top = Math.max(0, q.y - GROUP_PAD) + 'px';
@@ -2110,6 +2180,12 @@ function applyCanvas() {
   renderList();
   renderMinimap();
   refreshOff();
+  // **The frames belong to the canvas that is showing.** They are drawn into the scroller, not into a
+  // canvas, and .tile.other only hides the windows — so without this the shape of one canvas's group
+  // stays on screen over the next one's windows, which is how the residue was reported as following
+  // the user from canvas to canvas (2026-09-14). paintGroups skips a tile that is not visible, so one
+  // call both takes the old canvas's frames away and brings this one's back.
+  paintGroups();
 }
 function switchCanvas(id) {
   if (!canvases.has(id) || id === current) return;
@@ -3036,8 +3112,25 @@ function remove(id) {
   if (rowConfirm === id && activeConfirm) activeConfirm.cancel();
   rowConfirm = rowConfirm === id ? null : rowConfirm;
   if (activeConfirm && !document.contains(activeConfirm.row)) activeConfirm.cancel();
+  // **A closed window leaves its group properly.** Dropping the entry was not enough: the frame is
+  // drawn from live tiles but only *redrawn* when something asks, and nothing asked here — so the
+  // coloured shape stayed on screen, showed on every other canvas too (the frame lives in the scroller,
+  // not in a canvas), and outlived every window on the board (user, 2026-09-14). A pair that loses one
+  // member also has to stop being a group, and what is left of a bigger one closes up, because a group
+  // that stays touching is the whole of what a group is.
+  const wasG = layout[id] && layout[id].g;
+  // **One way back, even for this.** Closing a window closes its group up, which moves windows nobody
+  // asked to move — and the rule is that everything which moves a window can be undone. It is the one
+  // carve-out from "my window must not move because somebody else's closed": inside the group only,
+  // never a window outside it, because a group that keeps a hole has come apart.
+  if (wasG) undoMark('closing a window', wasIn);
   delete layout[id];   // an id is never reused — leave it and it piles up
+  if (wasG) {
+    const rest = dissolveIfAlone(wasG);
+    if (rest.length > 1) arrangeGroup(rest);
+  }
   saveLayout();
+  paintGroups();
   if (focused === id) focused = null;
   // If it is on, close up automatically. Otherwise **only light the button** to say there is slack to close up —
   // it moves windows, so nothing moves unless it was asked for.
@@ -3054,6 +3147,18 @@ function reconcile(list) {
   // Place the ones with a remembered position first, so a new one does not take that slot
   const ordered = [...list].sort((a, b) => (layout[a.id] ? 0 : 1) - (layout[b.id] ? 0 : 1) || a.created - b.created);
   for (const s of ordered) upsert(s);
+  // **The store outlives the browser; the sessions do not.** remove() is the only thing that drops an
+  // entry, and on a fresh load `sessions` is empty, so nothing ever reaches it for a pane that died
+  // while the page was shut. The entries themselves are harmless — an id is never reused — but `g` is
+  // not: the survivor of a pair whose partner died in the meantime came back still wearing its group,
+  // marked as grouped, in a group of one, with no frame to explain it.
+  let dropped = false;
+  for (const id of Object.keys(layout)) if (!seen.has(id)) { delete layout[id]; dropped = true; }
+  if (dropped) {
+    for (const g of new Set(Object.values(layout).map((r) => r.g).filter(Boolean))) dissolveIfAlone(g);
+    saveLayout();
+    paintGroups();
+  }
   refreshOff();
 }
 
@@ -3375,7 +3480,9 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   cvGroups: () => cvCollapsed, closing: () => [...closing],
                   // On screen the handle appears only when removal is possible, so the path that gets refused
                   // (#18's 409) can only be exercised from the console. The daemon blocks it anyway, so having it here adds no risk.
-                  removeCanvas, watchInput, newTerminal, newCanvas,
+                  // switchCanvas because the frames are drawn into the scroller rather than into a
+                  // canvas, so what happens to them on a switch is a thing a test has to be able to ask.
+                  removeCanvas, watchInput, newTerminal, newCanvas, switchCanvas,
                   // Auto-tidy only runs on a pane disappearing, and that moment is hard to create from outside.
                   // Expose **the same function** the button calls, unchanged.
                   tidyCanvas,

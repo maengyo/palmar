@@ -164,6 +164,15 @@ class Browser:
             [self.exe, "--headless=new", "--remote-debugging-port=%d" % self.port,
              "--user-data-dir=" + self.profile, "--no-first-run", "--no-default-browser-check",
              "--disable-gpu",
+             # **Timers must run at the rate they ask for.** A page Chrome considers backgrounded has
+             # its timers throttled to about one a second, and harder again after five minutes — and a
+             # headless run with more than one tab open backgrounds the one under test. A test that
+             # times a 280ms window then passes on its own and fails inside a long run (measured
+             # 2026-09-14: six ticks from a 20ms interval across two seconds). The page drives its own
+             # hold on a timer, so this is not only the test's problem.
+             "--disable-background-timer-throttling",
+             "--disable-backgrounding-occluded-windows",
+             "--disable-renderer-backgrounding",
              *([] if self.scrollbars else ["--hide-scrollbars"]),
              "--window-size=%d,%d" % self.size, "--force-device-scale-factor=1", "about:blank"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -190,6 +199,17 @@ class Browser:
         if script:
             self.ws.call("Page.addScriptToEvaluateOnNewDocument", {"source": script})
         self.ws.call("Page.navigate", {"url": url})
+        # **The tab has to be the one in front.** Chrome throttles timers in a hidden page to about one
+        # a second, and harder still after five minutes hidden — and every class here opens its own tab
+        # on top of the about:blank the browser started with, so the page under test was the hidden one.
+        # A short interval then does not run at the rate it asks for, which made a test that times a
+        # 280ms window pass on its own and fail inside a long run (measured 2026-09-14: six samples from
+        # a 20ms interval over two seconds). It also matters for the page itself, which drives its own
+        # hold on a timer.
+        try:
+            self.ws.call("Page.bringToFront")
+        except Exception:
+            pass                     # not fatal: only timing-sensitive tests care
         time.sleep(settle)
         return self
 
