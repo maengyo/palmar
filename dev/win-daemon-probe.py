@@ -132,7 +132,11 @@ if wall("import palmar.daemon", _import):
     say("    Pty =", getattr(d, "Pty", None).__name__ if getattr(d, "Pty", None) else "?")
 
     wall("setup_palmar_dir (dirs, shim, 0700)", lambda: d.setup_palmar_dir())
-    wall("acquire_single_instance_lock", lambda: d.acquire_single_instance_lock())
+    # **Not called separately.** setup_palmar_dir already takes it, and LOCK_FH keeps that descriptor
+    # open for the daemon's life -- so asking again in the same process is asking for a lock we are
+    # holding, and being refused is correct. That refusal was read here as "Windows cannot lock" for
+    # three rounds; the four-variant check above is what showed msvcrt was never the problem.
+    say("    the lock: taken inside setup_palmar_dir above, and still held")
 
     def _spawn():
         # The real constructor, with the real shell -- this is where pty.fork used to be and where

@@ -68,6 +68,29 @@ WSL 안에서는 이미 된다. 이 문서는 **WSL 없이 윈도우에서 직�
 3. 잠금·신호
 4. 거부 해제 + 윈도우 CI 에서 데몬 전체
 
+### 2026-09-14 에 넘은 벽들 — 기계가 준 순서대로
+
+데몬이 **윈도우에서 import 되고, `~/.palmar` 를 만들고, 잠금을 잡고, pane 을 열고, 바이트를 받는다.**
+남은 것은 **읽기 경로 하나**다.
+
+| 벽 | 무엇이었나 |
+|---|---|
+| `fcntl` | 유일하게 import 자체가 안 되던 것 → `palmar/locking.py` |
+| `os.getuid` ×2 | 권한 모델이 다르다 → `POSIX_PERMS`. **흉내 내지 않고 건너뛴다** |
+| `$SHELL` 없음 | `CreateProcessW` 실패 → 경계의 `default_shell()` 을 쓴다 |
+| `os.O_NOFOLLOW` ×3 | 윈도우에 없는 플래그 → `locking.NOFOLLOW` |
+| `os.fchmod` | 없다 → `POSIX_PERMS` 안에서만 |
+| **콘솔 인코딩** | 윈도우 콘솔이 cp1252 라 **한국어 메시지를 찍는 순간 죽었다.** stdout/stderr 를 UTF-8 로 |
+| `add_signal_handler` | Proactor 에 없다 → `signal.signal` + `call_soon_threadsafe` |
+| `SIGCHLD` | **아예 없다** → pane 의 죽음은 콘솔 EOF 로 안다 |
+| `die()` 의 회수 루프 | **블로킹 읽기에서 영영 안 돌아온다** — 판 하나를 6분 타임아웃으로 날렸다 |
+
+**세 번 헤맨 자리: 잠금.** `acquire_single_instance_lock` 이 `PermissionError` 로 실패해서 세 판 동안
+`msvcrt.locking` 을 의심했다. **네 가지 변형을 러너에 물어보니 전부 됐다**(빈 파일 0번 바이트 포함).
+원인은 **탐침이 그걸 두 번 부른 것**이었다 — `setup_palmar_dir` 이 안에서 이미 잡고 `LOCK_FH` 가
+데몬이 사는 동안 쥐고 있으니, 같은 프로세스가 다시 잡으려다 거부당하는 게 맞다.
+**교훈: "안 된다" 를 세 판 의심하기 전에, 되는 것부터 물어봐라.**
+
 ### 1단계 — 한 일 (2026-09-14)
 
 `daemon.py` 에서 **`self.master` 가 0개**가 됐다. `Pane` 은 이제 `self.pty` 하나만 쓴다.
