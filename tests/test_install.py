@@ -212,6 +212,25 @@ class InstallPs1(unittest.TestCase):
         self.assertIn("looked in", r.stdout, "it gave up without saying where it looked")
         self.assertIn("-Python", r.stdout, "it does not offer the way out for a Python it missed")
 
+    def test_one_bad_step_does_not_take_the_report_down(self):
+        """**`$ErrorActionPreference = 'Stop'` was the bug.** On Windows PowerShell 5.1 a *native*
+        command writing one line to stderr becomes a terminating NativeCommandError under it, so
+        `wsl.exe -l -q` on a machine with no distribution killed the whole report — on a diagnostic,
+        which is the one kind of script that must never stop at its first surprise.
+
+        Checked at the source rather than by simulating a failure, because the failure needs Windows:
+        the preference must not be Stop, and the calls that can throw must sit inside Step."""
+        with open(self.SCRIPT, encoding="utf-8") as fh:
+            body = fh.read()
+        self.assertNotIn("$ErrorActionPreference = 'Stop'", body,
+                         "a diagnostic must not stop at its first surprise")
+        self.assertIn("function Step", body, "no per-step guard")
+        for risky in ("asking wsl what it has", "looking for Python", "reading the execution policy"):
+            self.assertIn("Step '%s'" % risky, body, "%s is not guarded" % risky)
+        # And a step that fails has to name itself and its line, because this report gets read aloud
+        # off a machine nothing can be copied from.
+        self.assertIn("ScriptLineNumber", body, "a failed step does not say where it failed")
+
     def test_a_python_can_be_named_outright(self):
         """The escape hatch, for the machine that knows better than the search."""
         r = self.run_ps("-Check", "-Python", sys.executable)

@@ -31,10 +31,30 @@ param(
   [string]$Python
 )
 
-$ErrorActionPreference = 'Stop'
+# **Not 'Stop'.** This is a diagnostic, and a diagnostic that dies on its first surprise reports
+# nothing. Worse, on Windows PowerShell 5.1 a *native* command writing a single line to stderr is
+# turned into a terminating NativeCommandError under 'Stop' — so `wsl.exe -l -q` on a machine with
+# no distribution installed took the whole report down with it (user, 2026-09-14). Each step is
+# guarded on its own instead, the same shape dev/conpty-check.py uses.
+$ErrorActionPreference = 'Continue'
+$script:Trouble = @()
+
 function Say  { param($m) Write-Host $m }
 function Warn { param($m) Write-Host $m -ForegroundColor Yellow }
 function Die  { param($m) Write-Host "install: $m" -ForegroundColor Red; exit 1 }
+
+function Step {
+  # One line when a step falls over, with the line number — **because this report is often read
+  # aloud off a machine nothing can be copied from.** A PowerShell stack trace cannot be.
+  param([string]$What, [scriptblock]$Do)
+  try { & $Do }
+  catch {
+    $line = $_.InvocationInfo.ScriptLineNumber
+    $msg = ($_.Exception.Message -split "`n")[0]
+    Say ("  ! {0} — line {1}: {2}" -f $What, $line, $msg)
+    $script:Trouble += $What
+  }
+}
 
 if (-not $Prefix) {
   if ($env:LOCALAPPDATA) { $Prefix = Join-Path $env:LOCALAPPDATA 'palmar' }
@@ -59,23 +79,24 @@ Say ("  PowerShell   {0} ({1})" -f $PSVersionTable.PSVersion, $PSVersionTable.PS
 # usually MachinePolicy or UserPolicy set by a group policy — and **-ExecutionPolicy Bypass still works
 # against those**, since it is not a security boundary (Microsoft says so outright). If you are reading
 # this, the bypass already worked.
-try {
+Step 'reading the execution policy' {
   Get-ExecutionPolicy -List | ForEach-Object {
     if ($_.ExecutionPolicy -ne 'Undefined') { Say ("  policy       {0} = {1}" -f $_.Scope, $_.ExecutionPolicy) }
   }
-} catch { Say '  policy       (could not read)' }
+}
 
 $onWindows = $true
 if ($null -ne (Get-Variable -Name IsWindows -Scope Global -ErrorAction SilentlyContinue)) { $onWindows = $IsWindows }
 Say ("  os           {0}" -f $(if ($onWindows) { 'Windows' } else { 'not Windows — this script is for Windows' }))
 
 if ($onWindows) {
-  $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
-  if ($wsl) {
+  Step 'asking wsl what it has' {
+    $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
+    if (-not $wsl) { Say '  wsl          not installed'; return }
     $distros = & wsl.exe -l -q 2>$null
     $names = ($distros | Where-Object { $_ -and $_.Trim() } | ForEach-Object { $_.Trim() }) -join ', '
     if ($names) { Say ("  wsl          {0}" -f $names) } else { Say '  wsl          present, no distribution installed' }
-  } else { Say '  wsl          not installed' }
+  }
 }
 
 # ── 2. a Python new enough ───────────────────────────────────────────────────
@@ -188,14 +209,23 @@ function Find-Python {
   return $null
 }
 
-if ($Python) {
-  $found = Try-Python -Exe $Python
-  if ($found) { Say ("  python       {0}  ({1})  via -Python" -f $found.Exe, $found.Version) }
-  else        { Say ("  python       -Python {0} did not answer with a version" -f $Python) }
-} else {
-  $found = Find-Python
+$found = $null
+Step 'looking for Python' {
+  if ($Python) {
+    $script:found = Try-Python -Exe $Python
+    if ($script:found) { Say ("  python       {0}  ({1})  via -Python" -f $script:found.Exe, $script:found.Version) }
+    else               { Say ("  python       -Python {0} did not answer with a version" -f $Python) }
+  } else {
+    $script:found = Find-Python
+  }
 }
+$found = $script:found
 Say ("  checkout     {0}" -f $(if ($src) { $src } else { 'not run from one' }))
+if ($script:Trouble.Count) {
+  Say ''
+  Warn ("  {0} step(s) had trouble: {1}" -f $script:Trouble.Count, ($script:Trouble -join '; '))
+  Say  '  The rest of the report above is still good. Read the ! line out and it can be fixed.'
+}
 Say ''
 
 # ── 3. the part that is not ready ────────────────────────────────────────────
