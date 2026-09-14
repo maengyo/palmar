@@ -522,5 +522,57 @@ class FirstStartIsNotAFault(unittest.TestCase):
                          "a fresh HOME was told something had gone wrong: %r" % said)
 
 
+class TheHomeLock(unittest.TestCase):
+    """One daemon per HOME, and the file it locks stays readable.
+
+    **The lock and the content cannot share a byte on Windows.** `msvcrt.locking` is a *mandatory*
+    byte-range lock where POSIX `flock` is advisory on the whole file, so locking byte 0 -- where the
+    pid line is written -- also locked that line against being read. `palmar --stop` reads the pid to
+    know whom to signal, and was refused by the daemon it was trying to stop (user, 2026-09-14).
+
+    Four variants were measured on a runner before this was written, and the one that works was
+    among them. It was written the other way anyway, which is the part worth remembering."""
+
+    def lockfile(self):
+        d = tempfile.mkdtemp(prefix="palmar-lockbyte-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        path = os.path.join(d, "lock")
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(lambda: os.close(fd) if fd else None)
+        return path, fd
+
+    def test_the_pid_line_is_still_readable_while_locked(self):
+        """What --stop and --doctor both need."""
+        from palmar import locking
+        path, fd = self.lockfile()
+        locking.take(fd)
+        os.write(fd, b"pid 4242 http://127.0.0.1:8801\n")
+        os.lseek(fd, 0, os.SEEK_SET)
+        self.assertIn(b"pid 4242", os.read(fd, 256))
+        with open(path, "rb") as other:          # and from a second descriptor, which is the real case
+            self.assertIn(b"pid 4242", other.read(256))
+        locking.release(fd)
+
+    def test_it_still_excludes_a_second_holder(self):
+        """Moving the byte must not have made it stop being a lock."""
+        from palmar import locking
+        path, fd = self.lockfile()
+        locking.take(fd)
+        fd2 = os.open(path, os.O_RDWR)
+        try:
+            with self.assertRaises(OSError):
+                locking.take(fd2)
+        finally:
+            os.close(fd2)
+        locking.release(fd)
+
+    def test_releasing_twice_is_not_an_error(self):
+        from palmar import locking
+        _, fd = self.lockfile()
+        locking.take(fd)
+        locking.release(fd)
+        locking.release(fd)
+
+
 if __name__ == "__main__":
     unittest.main()

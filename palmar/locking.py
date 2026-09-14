@@ -8,9 +8,10 @@ take it non-blocking, and treat OSError as "somebody else has it, which is the a
 a daemon killed with SIGKILL must not leave a home locked forever. POSIX `flock` has always done
 this; that `msvcrt.locking` does too was measured on a runner (docs/windows.md, "jaen geot").
 
-**Not the same lock, and that is fine.** flock is advisory on the whole file; msvcrt.locking is a
-mandatory byte-range lock on the first byte. Nothing else opens this file for anything but these
-calls and a 256-byte read of the pid line, so the difference never shows.
+**Not the same lock, and the difference bites.** flock is advisory on the whole file; msvcrt.locking
+is *mandatory* on a byte range. That is why the Windows side locks a byte far past any content: on
+the first byte it also locked the pid line **against being read**, and `--stop`, which has to read
+that pid, was refused by the very daemon it was trying to stop.
 """
 from __future__ import annotations
 
@@ -20,13 +21,19 @@ import sys
 if sys.platform == "win32":
     import msvcrt
 
-    def take(fd: int) -> None:
-        """Take it, or raise OSError because somebody else holds it.
+    #: **Far past anything the file will ever hold, and that is the point.** `msvcrt.locking` is a
+    #: *mandatory* byte-range lock, where POSIX `flock` is advisory on the whole file. Locking byte 0
+    #: -- where the pid line lives -- meant the holder's own file could not be read by anyone else, so
+    #: `palmar --stop` came back "permission denied" while reading the pid it needed (user,
+    #: 2026-09-14). Locking a byte nothing will ever occupy keeps the exclusion and gives the content
+    #: back. A lock beyond end-of-file is allowed on Windows and still excludes a second holder --
+    #: measured on a runner, alongside three other variants, before this was written the wrong way.
+    LOCK_BYTE = 1 << 30
 
-        The lock is on **byte 0**, so the position has to be there and then put back -- the caller
-        reads and writes the pid line through the same descriptor."""
+    def take(fd: int) -> None:
+        """Take it, or raise OSError because somebody else holds it."""
         at = os.lseek(fd, 0, os.SEEK_CUR)
-        os.lseek(fd, 0, os.SEEK_SET)
+        os.lseek(fd, LOCK_BYTE, os.SEEK_SET)
         try:
             msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
         finally:
@@ -34,7 +41,7 @@ if sys.platform == "win32":
 
     def release(fd: int) -> None:
         at = os.lseek(fd, 0, os.SEEK_CUR)
-        os.lseek(fd, 0, os.SEEK_SET)
+        os.lseek(fd, LOCK_BYTE, os.SEEK_SET)
         try:
             msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
         except OSError:
