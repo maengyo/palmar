@@ -317,6 +317,11 @@ class ConPty:
         """Bytes to the child. Returns how many went, like os.write."""
         if self._in_w is None or not data:
             return 0
+        # **bytes, not bytearray.** The daemon's input queue is a bytearray and `os.write` takes one
+        # happily, so the POSIX side never had to care. ctypes will not convert a bytearray to LPVOID
+        # and raises ArgumentError -- which is not an OSError, so it went straight up through the
+        # websocket handler and closed the connection on the first keystroke (2026-09-14).
+        data = bytes(data)
         put = wintypes.DWORD(0)
         if not kernel32.WriteFile(self._in_w, data, len(data), byref(put), None):
             code = ctypes.get_last_error()

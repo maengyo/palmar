@@ -799,18 +799,31 @@ class Session:
         `call_soon_threadsafe`; `self.closed` is only read, and the Event is the one thing both
         sides write. Getting that wrong is a data race in the pane buffers, so it is kept this narrow."""
         loop = self._loop
-        while not self.closed:
-            self._can_read.wait()
-            if self.closed:
-                return
-            try:
-                chunk = self.pty.read(65536)
-            except OSError:
-                chunk = b""             # the console is gone — same as EOF, and die() says which
-            if not chunk:
-                loop.call_soon_threadsafe(self._read_eof)
-                return
-            loop.call_soon_threadsafe(self._read_gave, chunk)
+        why = "closed"
+        try:
+            while not self.closed:
+                self._can_read.wait()
+                if self.closed:
+                    return
+                try:
+                    chunk = self.pty.read(65536)
+                except OSError:
+                    chunk = b""         # the console is gone — same as EOF, and die() says which
+                if not chunk:
+                    why = "eof"
+                    loop.call_soon_threadsafe(self._read_eof)
+                    return
+                loop.call_soon_threadsafe(self._read_gave, chunk)
+        except BaseException as e:
+            # **A thread that dies quietly takes the pane's output with it and says nothing** — the
+            # window just stops filling, which is indistinguishable from a shell that went quiet.
+            # Anything that is not an OSError from read() lands here, and the log is where a person
+            # can find it (2026-09-14).
+            why = "%s: %s" % (type(e).__name__, e)
+            loop.call_soon_threadsafe(log, "session %s: reader thread stopped — %s" % (self.id, why))
+        finally:
+            if why not in ("closed", "eof"):
+                self.reading = False
 
     def _read_gave(self, chunk: bytes) -> None:
         """On the loop again. The tail of `_on_readable`, minus the draining — the thread did that."""

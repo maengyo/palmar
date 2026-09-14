@@ -483,6 +483,16 @@ def _serve():
         after = after if isinstance(after, list) else after.get("sessions", [])
         row = next((x for x in after if x.get("id") == sid), None)
         say("    the session now:", _json.dumps(row, ensure_ascii=False) if row else "**gone**")
+        # **The daemon's own log.** Detached, it is the only place the daemon can still say anything,
+        # and a reader thread that stopped now writes there.
+        try:
+            with open(os.path.join(home, ".palmar", "log"), encoding="utf-8", errors="replace") as fh:
+                tail = fh.read().strip().splitlines()[-12:]
+            say("    ~/.palmar/log, last %d line(s):" % len(tail))
+            for line in tail:
+                say("      |", line[:160])
+        except OSError as e:
+            say(HM, "no log to read:", e)
         if not seen_bin:
             raise RuntimeError("12s attached and not one terminal byte -- this is the empty window")
         if not echoed:
