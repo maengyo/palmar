@@ -1463,6 +1463,54 @@ class Grouping(unittest.TestCase):
         top = [p for p in r["at"] if p[1] == rows[0]]
         self.assertEqual(len(top), 2, "the top row is not full: %r" % r["at"])
 
+    def test_growing_a_member_does_not_land_it_on_its_group_mates(self):
+        """**A group is one block to the outside world**, so the ordinary push cannot see an overlap
+        *between its own members* — and growing one is exactly what makes one. Reported and then
+        measured (user, 2026-09-14): a member dragged out to 390px sat on top of the one beside it.
+        The group is sorted out among itself first, then the canvas."""
+        self.bench("""put('g1',40,40,240,180); put('g2',300,40,240,180); put('g3',40,260,240,180);
+                      P.joinGroups(by('g1').id, by('g2').id);
+                      P.joinGroups(by('g3').id, by('g1').id);
+                      P.arrangeGroup(P.groupOf(by('g1').id)); return 1;""")
+        grip = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name==='g1');
+          const r=t.el.querySelector('.grip').getBoundingClientRect();
+          return {x:r.left+r.width/2, y:r.top+r.height/2};})()""")
+        x, y = grip["x"], grip["y"]
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x + 150 * i / 3, y=y + 120 * i / 3, buttons=1)
+        self.send(type="mouseReleased", x=x + 150, y=y + 120, clickCount=1, buttons=0)
+        time.sleep(0.8)
+        r = self.b.ev("""(()=>{const P=window.palmar, L=P.layout();
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          const ids = P.groupOf(by('g1').id);
+          const bad = [];
+          for (let i=0;i<ids.length;i++) for (let j=i+1;j<ids.length;j++)
+            if (P.hits(L[ids[i]], L[ids[j]])) bad.push([i,j]);
+          return {grew: L[by('g1').id].w, bad: bad,
+                  at: ids.map((id)=>[L[id].x, L[id].y, L[id].w, L[id].h])};})()""")
+        self.assertGreater(r["grew"], 240, "the resize never happened, so this proves nothing")
+        self.assertEqual(r["bad"], [],
+                         "members of one group are overlapping after a resize: %r" % r["at"])
+
+    def test_the_group_still_holds_together_after_that(self):
+        """Sorting a group out among itself must not scatter it — the members move, the group stays."""
+        self.bench("""put('g1',40,40,200,160); put('g2',260,40,200,160);
+                      P.joinGroups(by('g1').id, by('g2').id);
+                      P.arrangeGroup(P.groupOf(by('g1').id)); return 1;""")
+        r = self.b.ev("""(()=>{const P=window.palmar, L=P.layout();
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          const id = by('g1').id;
+          L[id] = Object.assign({}, L[id], {w: 420});      // grown onto its mate
+          by('g1').el.style.width = '420px';
+          P.applyPush(P.pushAside(by('g1').s.canvas, id, {only: P.groupOf(id), solo: true}));
+          return {n: P.groupOf(id).length,
+                  over: P.hits(L[id], L[by('g2').id]),
+                  frames: document.querySelectorAll('.gbox').length};})()""")
+        self.assertEqual(r["n"], 2, "the group came apart")
+        self.assertFalse(r["over"], "they are still overlapping")
+        self.assertEqual(r["frames"], 1, "the frame did not survive")
+
     def test_a_group_survives_a_reload(self):
         """Membership rides with the position, so it comes back the same way (③ provisional)."""
         self.bench("P.joinGroups(by('g1').id, by('g2').id); return 1;")

@@ -1428,13 +1428,21 @@ function shove(p, r, dir) {
 // Resolve every overlap on one canvas while holding `anchorId` still — the window the hand just placed is
 // the one that keeps its position, everything else gets out of its way. Returns the moves it takes, which
 // is also what undo needs; [] when nothing overlapped.
-function pushAside(canvasId, anchorId) {
-  const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
+//: `opts.only` — consider just these windows. `opts.solo` — every window is its own block, group or
+//: not. Together they mean "sort this group out among itself", which is what a **resize** needs:
+//: growing one member makes it overlap its own group-mates, and the ordinary run treats the whole
+//: group as one block, so nobody resolved that (user, 2026-09-14 — measured: a member grown to 390px
+//: sat on top of the one beside it).
+function pushAside(canvasId, anchorId, opts) {
+  opts = opts || {};
+  const only = opts.only ? new Set(opts.only) : null;
+  const mine = [...tiles.values()].filter(
+    (t) => t.s.canvas === canvasId && layout[t.id] && (!only || only.has(t.id)));
   if (mine.length < 2) return [];
   // **Blocks, not windows.** A group travels together, so it is pushed together — one rectangle for
   // the whole set. Without this a push could walk between two members and take the group apart, which
   // is the one thing a group is for (2026-09-14).
-  const key = (id) => (layout[id] && layout[id].g) || id;
+  const key = (id) => (opts.solo ? id : ((layout[id] && layout[id].g) || id));
   const members = new Map();          // block key → the ids inside it
   for (const t of mine) {
     const k = key(t.id);
@@ -1501,9 +1509,19 @@ function settle(anchorId) {
   if (!pushOn) return;                  // the switch in the shortcuts panel
   const t = tiles.get(anchorId);
   if (!t) return;
-  const moves = pushAside(t.s.canvas, anchorId);
+  // **Inside the group first, then the canvas.** A group is one block to the outside world, so the
+  // ordinary run cannot see an overlap *between its own members* — which is exactly what growing one
+  // of them makes. Sorting the group out first also settles its outer shape, so the run after it
+  // works from the rectangle the group really ends up with.
+  const mates = groupOf(anchorId);
+  const inner = mates.length > 1
+    ? pushAside(t.s.canvas, anchorId, { only: mates, solo: true })
+    : [];
+  if (inner.length) applyPush(inner);
+  const outer = pushAside(t.s.canvas, anchorId);
+  if (outer.length) applyPush(outer);
+  const moves = inner.concat(outer);
   if (!moves.length) return;
-  applyPush(moves);
   // **No undo of its own any more.** The drag that caused it already took a snapshot, so one Ctrl Z
   // puts back the move and the push together — which is what a person means by "undo that".
   toast([{ b: t.nameEl.textContent || 'window' },
