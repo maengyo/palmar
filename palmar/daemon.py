@@ -37,6 +37,18 @@ import sys
 # lives behind palmar/posixpty.py (palmar/conpty.py on Windows) and this file talks to an object.
 # What still pins the daemon to POSIX is the rest of the list in docs/windows.md — `flock`, the signal
 # handlers, `os.kill`/`waitpid`, and `add_reader`, which has no Windows equivalent at all.
+# **Windows consoles are not UTF-8 by default.** They are cp1252 or another code page, and every
+# sentence palmar prints for a person is Korean — so the first refusal it tried to print died with
+# UnicodeEncodeError instead (measured on a runner, 2026-09-14). Reconfiguring is one line and has
+# to happen before anything can print. errors="replace" so a console that still cannot show a
+# character loses the character rather than the message.
+if sys.platform == "win32":                      # pragma: no cover - Windows console encoding
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 if sys.platform == "win32" and not os.environ.get("PALMAR_WINDOWS_ANYWAY"):
     raise SystemExit(
         "palmar does not run natively on Windows yet.\n"
@@ -1495,7 +1507,8 @@ def write_private(path: Path, data: bytes, mode: int) -> None:
     tmp = path.with_name(path.name + ".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | NOFOLLOW, mode)
     try:
-        os.fchmod(fd, mode)
+        if POSIX_PERMS:
+            os.fchmod(fd, mode)   # a no-op on Windows anyway; see POSIX_PERMS
         os.write(fd, data)
     finally:
         os.close(fd)

@@ -45,6 +45,14 @@ def wall(name, fn):
         return False
 
 
+# The daemon's sentences are Korean and a Windows console is not UTF-8 -- printing the first refusal
+# killed this probe before it could report it (2026-09-14). It has to survive what it is reporting on.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 if sys.platform != "win32":
     raise SystemExit("win-daemon-probe runs on Windows. This is " + sys.platform)
 
