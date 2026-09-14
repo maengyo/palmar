@@ -22,113 +22,47 @@ Close the browser tab and the sessions keep running.
 
 **Terminals have a place, and keep it.** Pick a folder in the right rail, press *Open terminal
 here*, and a shell opens on the canvas at that path. Drag the title bar to move it, the corner to
-resize it — the shell's rows and columns follow, so a wider window is really a wider terminal.
-The canvas grows as you add windows; scroll to reach the rest.
+resize it — the shell's rows and columns follow, so a wider window is really a wider terminal. The
+canvas grows as you add windows; scroll, or use the minimap bottom-right, to reach the rest.
 
-**Windows do not overlap.** Drop one on another and the one that was there slides out of the way — by
-exactly the overlap, the shortest way out, carrying on to a third if it has to. Nothing is tiled and
-nothing is resized: the sizes are yours, and the only thing palmar settles is the overlap. A line at
-the bottom says how many moved and offers to undo it. **Push windows aside** in the shortcuts panel
-turns it off — then windows may sit on top of each other, and clicking one brings it to the front.
+**Windows do not overlap.** Drop one on another and the one that was there slides out of the way —
+by exactly the overlap, the shortest way out, carrying on to a third if it has to. Nothing is tiled
+and nothing is resized: the sizes are yours, and the only thing palmar settles is the overlap.
 
-**Canvases are tabs.** A strip above the canvas holds them. **＋** makes one and asks for its name;
-double-click a tab to rename it, drag to reorder. A tab carries one small dot when something in
-that canvas wants you, and nothing else. Every open browser sees the same tabs in the same order,
-because the daemon owns them, not the page.
+**Nothing moves a window unless you did something.** A window you can see never jumps because a
+different one closed; tidying up is a button, not a habit the canvas has.
 
-A canvas can be removed, **but only when it is empty** — the × appears on the tab you are on once
-the last terminal there is closed, and not before. Removing a canvas must never end a process, so
-there is no version of it that kills what is inside.
+**Canvases are tabs.** The daemon owns them, so every open browser sees the same tabs in the same
+order. A canvas can be removed only once it is empty — removing one must never end a process.
 
-**The left list is never filtered by canvas.** Everything you have running is in it, wherever it
-lives. It groups by canvas and folds, but folding can never hide the thing you are needed for: a
-folded group still draws its waiting rows, and its header says how many of the sessions it hid are
-asking for you. The order never changes — it is the tab order — so nothing moves under your hand. A row from another canvas
-carries a small badge — click it and palmar switches to that canvas and brings you to the window.
+**The left list is never filtered by canvas.** Everything running is in it, wherever it lives,
+waiting longest at the top. Folding a group can never hide the thing you are needed for. It also
+names terminals that claim to be working but have printed nothing for a while — nothing else can
+tell you that, and palmar can because it owns the pty.
 
-**One terminal can fill the canvas.** The expand box blows a window up to the whole canvas, and its
-rows and columns genuinely grow — this is not a camera. **Esc** brings you back. The rails stay
-while you are zoomed in, because you still need to see who is waiting.
-
-**Sessions outlive the browser.** The daemon owns the PTYs; the page is a client that attaches and
-detaches. Close the tab, reopen the URL, and everything is where you left it. Closing a terminal in
-the UI, on the other hand, really ends it — there is an **×** on the window and on the list row, and
-each unfolds a confirmation in place rather than a native dialog. A second open browser drops the
-window at the same moment.
-
-**What to do next.** The lights say which terminal wants you; the right rail says which one first.
-It lists what is waiting, **longest wait at the top**, because a terminal that has been asking for
-twenty minutes is not the same as one that just asked. Below that it names terminals that claim to
-be working but have printed nothing for a while — nothing else tells you that, and palmar can
-because it owns the pty. When nothing wants you it says so, and shows what happened while you were
-away instead.
-
-**A minimap** sits bottom-right for the canvas you are on. Click or drag in it to move the viewport.
-
-**Nothing moves a window unless you did something.** Dropping a window on another moves that one —
-you aimed it there, it slides rather than jumps, and the undo is right there. What never happens is a
-window moving because of something you did not do: closing the last terminal at the bottom shrinks the
-canvas on its own, but closing the one at the top leaves the space above the rest, because taking that
-space back means moving windows that are sitting in plain sight.
-The button on the tab bar does it when you ask: everything slides back to the corner keeping its
-spacing, and it greys out when there is nothing to close up. If you would rather it happened by
-itself, **Tidy automatically** in the shortcuts panel turns that on.
-
-**Copy and paste.** Select with the mouse, then `Ctrl+Shift+C` (`⌘C` on a Mac); paste with
-`Ctrl+Shift+V` (`⌘V`), or the browser's own paste. **`Ctrl+C` is left alone** — in a terminal that
-is the interrupt, and taking it away because something happened to be selected would stop the wrong
-thing. The shortcut is shown once, the first time you select something.
-
-**Search** with `Ctrl K` (`⌘K` on a Mac) reaches every session and folder by name, path, or agent.
-
-**Text size, per terminal.** `Ctrl`/`⌘` + wheel over a terminal changes that one's text size. The
-window keeps its size, so the rows and columns change with it — smaller text puts more of a log in
-the same box, larger text makes one pane easy to read across the room. The size readout in its
-title bar turns into the reset. `Ctrl −` still zooms everything at once, since that is the
-browser's own.
+**Sessions outlive the browser.** The daemon owns the PTYs; the page attaches and detaches. Close
+the tab, reopen the address, and everything is where you left it. Closing a terminal *in the UI*
+really ends it, and asks first.
 
 ## Install
 
-palmar is the Python standard library and a vendored copy of xterm.js — there is nothing to build
-and no dependency to fetch. So installing it is mostly a matter of putting it where your shell can
-find it, and Python is the only thing you need already (macOS ships `/usr/bin/python3`; most Linux
-has one). Either way is one line:
+palmar is the Python standard library and a vendored copy of xterm.js — nothing to build, nothing
+to fetch. Python is the only thing you need already (macOS ships `/usr/bin/python3`; most Linux has
+one):
 
 ```
-git clone https://github.com/maengyo/palmar && sh palmar/install.sh   # from a checkout
+git clone https://github.com/maengyo/palmar && sh palmar/install.sh
 ```
 
-`install.sh` checks your Python, drops a `palmar` launcher in `~/.local/bin`, and changes nothing
-else — no root, no `~/.palmar` touched, the daemon never started.
+That drops a `palmar` launcher in `~/.local/bin` and changes nothing else — no root, no `~/.palmar`
+touched, the daemon never started. Or skip it and run the checkout directly with `python3 -m palmar`.
 
-**`palmar` prints the address and comes straight back.** The daemon goes into a session of its own,
-so closing the terminal does not take it — nor your shells — with it. Run it again and it hands you
-the same address instead of starting a second one; `palmar --stop` is how it ends, and
-`palmar --foreground` keeps it attached with `Ctrl-C` if that is what you want.
+> A public one-line `curl … | sh` and a PyPI package are coming — the repository is private for now.
+> `install.sh` already knows how to fetch from them: set `PALMAR_PYPI` or `PALMAR_TARBALL`.
 
-**On Windows** there is `install.ps1`, run with the policy bypassed for this one process — no
-administrator, no setting changed:
-
-```
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Check   # look; it writes nothing
-powershell -ExecutionPolicy Bypass -File .\install.ps1          # then it asks before writing
-```
-
-**It does not give you a working palmar yet.** The daemon exits on Windows because `fcntl`, `pty`
-and `termios` are not there — the native port is #29, and until it lands the launcher prints that.
-What works today is the daemon inside WSL with any Windows browser pointed at the address it
-prints. What `-Check` is good for now is the report: which Python is real (it skips the Microsoft
-Store's zero-length `python.exe`), what the execution policy is in every scope, and whether WSL is
-there. Prefer to read it first? `curl`
-it to a file and run it by hand; it is short. Or skip it entirely and run the checkout directly:
-
-```
-python3 -m palmar
-```
-
-> A public one-line `curl … | sh` and a PyPI package (`uvx palmar`) are coming — the repository is
-> private for now. When they land, `install.sh` already knows how to fetch from them: set
-> `PALMAR_PYPI` or `PALMAR_TARBALL` and it will.
+**Windows**: not yet natively — run the daemon inside WSL and browse from Windows. `install.ps1`
+reports what a Windows machine has and installs the launcher for when the port lands; see
+[`docs/windows.md`](docs/windows.md).
 
 ## Running it
 
@@ -136,83 +70,48 @@ python3 -m palmar
 palmar
 ```
 
-It opens your browser and prints the address on its last line —
-`http://127.0.0.1:8801/?k=…`. Bookmark it if you like: the key stays the same across restarts, so
-the bookmark keeps working. Lost it? `cat ~/.palmar/run/url`. `--no-browser` prints and opens
-nothing.
+It prints the address on its last line — `http://127.0.0.1:8801/?k=…` — opens your browser, and
+**comes straight back**. The daemon goes into a session of its own, so closing the terminal does not
+take it, or your shells, with it. The key stays the same across restarts, so a bookmark keeps
+working; lost it, `cat ~/.palmar/run/url`. That key is what stops any other process on the machine
+from asking the daemon for the page and reading your session token out of it.
 
-The key is what stops any other process on the machine from asking the daemon for the page and
-reading your session token out of it.
-
-There is nothing to install and nothing to build. palmar uses only the Python standard library, and
-xterm.js is vendored in the repo, so no dependency is fetched — at install time or at runtime. It
-binds `127.0.0.1` and nothing else.
-
-Stop it with `Ctrl-C`, or from anywhere:
-
-```
-palmar --stop
-```
-
-That stops the daemon for your home **and the shells inside it**. It goes out the clean way, so the
-workspace is saved and offered back the next time you start. Closing a browser tab or the app window
-does not stop it — the daemon is what holds your terminals, which is why they survive.
+Run `palmar` again and it hands you the same address rather than starting a second daemon.
+`palmar --stop` ends it and the shells inside it, saving the workspace to be offered back next time.
+`--foreground` keeps it attached to the terminal with `Ctrl-C`, and `--no-browser` opens nothing.
 
 ### In a window instead
 
-There is also a **741 KB** program that shows the same thing in its own window, with no browser
-around it — see [`app/`](app/README.md). It is the system's own webview (WKWebView on macOS,
-WebKitGTK on Linux and **WSLg**, WebView2 on Windows), so nothing is shipped twice, and it is not
-Electron: being heavy is the thing this project is avoiding.
+There is also a **741 KB** program that shows the same thing in its own window — see
+[`app/`](app/README.md). It uses the webview the OS already has (WKWebView, WebKitGTK, WebView2),
+so nothing is shipped twice, and it is not Electron. CI builds a Linux x86-64 binary and a macOS
+universal one, so Rust is a build dependency and not a runtime one.
 
-```
-cd app && cargo build --release && ./target/release/palmar-app
-```
-
-**Rust is a build dependency, not a runtime one**, and there is somewhere to get a built one — CI
-produces a Linux x86-64 binary and a macOS universal binary (Intel and Apple silicon in one file,
-macOS 11 and up). See [`app/`](app/README.md) for which command downloads which.
-
-**Pick whichever you prefer — you are not meant to run both.** But if you do, it works:
-there is one daemon per home, whichever you start first brings it up, and the other attaches to it.
-Run `palmar` while the window is already open and it opens the page on that same daemon instead of
-refusing. A terminal opened in either shows up in the other, live. Closing either one leaves the
-daemon — and your shells — running.
-
-The window has been run on macOS and, since 2026-09-11, on WSLg. Setting WSLg up for the first
-time — fonts, the input method, and what the failures look like — is written out in
-[`docs/wslg.md`](docs/wslg.md) (Korean).
+**Pick whichever you prefer.** Both at once also works: one daemon per home, whichever starts first
+brings it up, and a terminal opened in either shows up in the other, live.
 
 ## Status lights, without configuring anything
 
 A light is only worth having if it is right, and if it works for the agent you actually run.
 
 **Agents already say when they are busy — in the window title.** They animate a spinner into it
-while they think and drop it when they stop. palmar owns the PTY, so it sees that stream and reads
-the state straight off it. Nothing to install, no config file, no permission to grant, and it works
-for an agent palmar has never been taught about.
+while they think and drop it when they stop. palmar owns the PTY, so it reads that straight off the
+stream: nothing to install, no config file, and it works for an agent palmar has never been taught
+about. It keeps no table of spinner characters, because any such table is wrong the day a new agent
+appears — **it watches the churn instead**: a title that changes twice in three seconds is a
+spinner by definition. Spinning is *working*; spinning that stops is *done*; a title that never
+spun stays *idle*, so an editor parked in a pane is not mistaken for a finished job.
 
-It does not keep a table of spinner characters, because every agent draws its own and any such
-table would be wrong the day a new one appears. **It watches the churn instead**: a title that
-changes twice in three seconds is a spinner by definition. Spinning is *working*; spinning that
-stops is *done*; a title that never spun stays *idle*, so a text editor parked in a pane is not
-mistaken for a finished job.
+**An agent that sets no title still lights up**, from what is running and whether it is printing.
+The honest limit is an agent that thinks for a long time in complete silence — indistinguishable
+from finished.
 
-**An agent that sets no title at all still lights up.** palmar falls back to what is running and
-whether it is printing: nothing running means idle, printing means working, and printing that stops
-means it wants you. The first of those is what keeps an ordinary shell prompt dark. The honest limit
-is an agent that thinks for a long time in complete silence — that is indistinguishable from finished.
+**Where an agent offers hooks, palmar uses those instead**, because a hook can tell an approval
+prompt from a finished turn. They attach themselves: every shell palmar opens gets a small shim in
+front of `PATH`, so there is still nothing to set up. zsh and bash.
 
-**Where an agent offers hooks, palmar uses those instead**, because a hook is exact where a title
-is inferred — it can tell an approval prompt from a finished turn. Hooks attach themselves: every
-shell palmar opens gets a small shim in front of `PATH`, so there is still nothing for you to set
-up. This works in zsh and bash.
-
-**Notifications reach you when palmar does not have the screen.** The browser tab counts what wants
-you, the favicon carries a dot, and the bell in the top bar turns on real notifications. It is off
-until you turn it on, it asks for permission on that click and never on load, it fires only when a
-terminal *becomes* one that wants you, several at once arrive as one notification, and clicking it
-takes you to that terminal.
+**Notifications** are off until you turn on the bell in the top bar. They fire only when a terminal
+*becomes* one that wants you, arrive as one when several do at once, and take you there on a click.
 
 ## Built on
 
@@ -251,20 +150,18 @@ no port to take.
 
 ## What is not built yet
 
-- **A new window does not push anything.** It lands in the first free slot instead, which on a canvas
-  that grows without limit always exists. Pushing is what your own hand sets off, by dropping or
-  resizing a window onto another.
-- **No button moves a terminal between canvases.** The daemon does it and every open browser
-  follows along — where the handle belongs on screen is not settled.
-- **A daemon restart still ends every shell.** What comes back is where you were: the canvases
-  return on their own, and the terminals are offered — each with the name you gave it and the folder
-  it was in, including one you had `cd`-ed to. One click reopens them. The shells themselves cannot
-  be handed to a new daemon, and palmar does not pretend otherwise.
+- **A new window does not push anything.** It lands in the first free slot, which on a canvas that
+  grows without limit always exists. Pushing is what your own hand sets off.
+- **No button moves a terminal between canvases.** The daemon can; where the handle belongs on
+  screen is not settled.
+- **A daemon restart still ends every shell.** What comes back is where you were — canvases return
+  on their own, terminals are offered with their name and folder, one click reopens them. The shells
+  themselves cannot be handed over, and palmar does not pretend otherwise.
 - **fish shells do not get the hook shim.** Title-based status still works there.
 - **A settings panel**, and a command palette behind the search box.
-- **Native Windows.** The daemon is POSIX to the bone — `pty.fork`, `tcgetpgrp`, `flock`, signals,
-  `0600` — and does not even import there. ConPTY reaches all of it through `ctypes`, so no
-  dependency is needed, but it is a port of the daemon rather than a switch. WSL works meanwhile.
+- **Native Windows.** The daemon is POSIX to the bone — `pty.fork`, `tcgetpgrp`, `flock`, signals —
+  so it is a port rather than a switch. ConPTY reaches all of it through `ctypes`, so no dependency
+  is needed. WSL works meanwhile; progress is in [`docs/windows.md`](docs/windows.md).
 
 ## How it works
 
@@ -289,12 +186,9 @@ no port to take.
 └────────────────────────────────────────────────┘
 ```
 
-palmar opens shells and nothing else — it has no list of tools and no opinion about what you run.
-The daemon holds the PTYs, the canvases, and the status; the browser holds where the windows sit.
-
-The wire format between them is written down in [`docs/protocol.md`](docs/protocol.md): every
-endpoint, both WebSockets, the flow control, the ring buffer, and how status is decided. The daemon
-implements that document and nothing beyond it.
+palmar opens shells and nothing else — no list of tools, no opinion about what you run. The wire
+format between the two halves is written down in [`docs/protocol.md`](docs/protocol.md), and the
+daemon implements that document and nothing beyond it.
 
 ## Development
 
