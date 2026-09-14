@@ -43,17 +43,35 @@ class PosixPty:
     def spawn(self, argv, env=None, cwd=None, rows: int = 24, cols: int = 80) -> None:
         """Fork a shell into a new pty. `argv` is a list; **the caller chooses it and no client
         ever can** (#14, principle 4)."""
+        env = os.environ if env is None else env
         pid, master = pty.fork()
         if pid == 0:                             # child — never returns
+            # A directory can go away between the request and the fork; falling back to $HOME opens a
+            # usable shell instead of failing the pane outright.
+            for d in (cwd, env.get("HOME")):
+                if not d:
+                    continue
+                try:
+                    os.chdir(d)
+                    break
+                except OSError:
+                    continue
             try:
-                if cwd:
-                    os.chdir(cwd)
+                os.execvpe(argv[0], argv, env)
             except OSError:
-                pass
-            try:
-                os.execvpe(argv[0], argv, env if env is not None else os.environ)
-            except Exception:
-                os._exit(127)
+                # **Say it on the terminal the pane is already showing.** Without this the window opens
+                # and closes with nothing written in it, and nobody learns which program was missing.
+                os.write(2, ("palmar: cannot exec %s\n" % argv[0]).encode())
+            os._exit(127)
+        # **This fd must not pass down to the next pane.** The master `pty.fork()` hands back arrives with
+        # the inheritable flag on (unlike `os.open` or sockets, it is not CLOEXEC). Leave it and a later
+        # pane's shell inherits the masters of every pane opened before it — with five panes the last shell
+        # holds four. Measured 2026-09-09: writing one line into `/dev/fd/*` from the last pane made panes
+        # 0, 1, 2 and 3 each run that line **with their own $PANE value**. That is past reading someone
+        # else's pane — it is **putting keys into someone else's shell**, which means answering another
+        # agent's approval prompt for them. As a bonus, closing a pane does not release the pty while a
+        # later pane still holds a copy.
+        os.set_inheritable(master, False)
         self.pid, self.master = pid, master
         self.resize(rows, cols)
         # Non-blocking, because the loop hands us readability and we drain until it says no more.

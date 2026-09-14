@@ -53,20 +53,38 @@ WSL 안에서는 이미 된다. 이 문서는 **WSL 없이 윈도우에서 직�
 
 `daemon.py` 3,097줄 중 플랫폼에 묶인 **41곳**. 위험한 쪽(PTY·판)은 **판 테스트 29개**가 지킨다.
 
-| 무엇 | 곳 | 어떻게 |
-|---|---|---|
-| `self.master` 직접 사용 | 15 | 경계 객체로 |
-| `add_reader`/`add_writer` | 5 | **제일 큰 조각** — 윈도우는 스레드, 배압은 스레드가 읽기를 멈춰서 |
-| `fcntl` (flock 등) | 8 | `msvcrt.locking` |
-| 신호 | 6 | `signal.signal` · `TerminateJobObject` |
-| `os.kill`/`waitpid` | 7 | Job + `GetExitCodeProcess` |
-| 시작 거부 | 1 | `daemon.py` 맨 위의 `sys.platform == "win32"` |
+| 무엇 | 곳 | 어떻게 | |
+|---|---|---|---|
+| ~~`self.master` 직접 사용~~ | ~~15~~ | 경계 객체로 | **됐다 (09-14)** |
+| `add_reader`/`add_writer` | 5 | **제일 큰 조각** — 윈도우는 스레드, 배압은 스레드가 읽기를 멈춰서 | |
+| `fcntl` (flock 등) | 8 | `msvcrt.locking` | |
+| 신호 | 6 | `signal.signal` · `TerminateJobObject` | |
+| `os.kill`/`waitpid` | 7 | Job + `GetExitCodeProcess` | |
+| 시작 거부 | 1 | `daemon.py` 맨 위의 `sys.platform == "win32"` | |
 
 **쪼개는 순서** — 각 단계가 **그 단계만으로 시험을 다 통과해야** 한다:
-1. PTY 를 경계 위로 (POSIX 만, 동작 변화 0, 테스트 29개가 지킴)
+1. ~~PTY 를 경계 위로~~ **됐다 (2026-09-14)** — 아래를 봐라
 2. 읽기 경로에 스레드 모델 추가 (POSIX 는 그대로)
 3. 잠금·신호
 4. 거부 해제 + 윈도우 CI 에서 데몬 전체
+
+### 1단계 — 한 일 (2026-09-14)
+
+`daemon.py` 에서 **`self.master` 가 0개**가 됐다. `Pane` 은 이제 `self.pty` 하나만 쓴다.
+
+- `pty.fork`·`os.read`·`os.write`·`os.close`·`os.tcgetpgrp`·`TIOCSWINSZ` 가 전부 `palmar/posixpty.py`
+  안으로 들어갔다. `daemon.py` 에서 **`import pty` 와 `import termios` 가 사라졌고**, `set_winsize`
+  헬퍼도 지웠다(경계 안에 같은 것이 있다).
+- **fd 상속 차단(`os.set_inheritable`)도 경계 안으로 옮겼다.** 이건 2026-09-09 의 보안 고침이라
+  — 안 옮기면 윈도우 쪽 `spawn` 에는 그 보장이 없는 채로 남는다. 주석도 통째로 같이 옮겼다.
+- `fg_is_shell` 만 **번역이 필요했다.** 경계는 "모른다" 를 `None` 으로 주는데(윈도우엔 포그라운드
+  프로세스 그룹이 아예 없다), 데몬의 이 호출은 예전부터 **모르는 것을 `False`** 로 읽어 왔다.
+  `bool()` 한 번으로 맞췄다 — 동작을 바꾸지 않으려고.
+- **동작 변화 0.** 시험 162개가 3.9 와 3.13 둘 다에서 통과한다.
+
+**남은 것 중 제일 큰 조각은 2단계다.** `add_reader` 는 윈도우에 대응물이 없다 — 소켓이어도
+`NotImplementedError` 다(잰 것, 위 표). 읽기가 스레드로 가야 하고, **배압을 그 스레드가 읽기를
+멈추는 것으로** 표현해야 한다. POSIX 는 지금 모양 그대로 둔다(`blocking = False` 가 그 분기다).
 
 ## 어떻게 시험하나
 

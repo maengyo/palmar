@@ -23,11 +23,15 @@ from __future__ import annotations
 import argparse
 import sys
 
-# **A platform we do not support must not be a traceback.** `fcntl`, `pty` and `termios` do not
-# exist on Windows, so importing them there kills the process before a line of palmar runs and the
-# person sees an ImportError stack instead of a sentence. The check has to sit **above** the import
-# block for that reason — and above the Python-version check below, which was equally unreachable.
-# The daemon is POSIX to the bone (pty.fork, tcgetpgrp, flock, signals, 0600); the native port is #29.
+# **A platform we do not support must not be a traceback.** `fcntl` does not exist on Windows, so
+# importing it there kills the process before a line of palmar runs and the person sees an ImportError
+# stack instead of a sentence. The check has to sit **above** the import block for that reason — and
+# above the Python-version check below, which was equally unreachable.
+#
+# `pty` and `termios` used to be on that list too. They are gone from here as of #29 step 1: the pty
+# lives behind palmar/posixpty.py (palmar/conpty.py on Windows) and this file talks to an object.
+# What still pins the daemon to POSIX is the rest of the list in docs/windows.md — `flock`, the signal
+# handlers, `os.kill`/`waitpid`, and `add_reader`, which has no Windows equivalent at all.
 if sys.platform == "win32":
     raise SystemExit(
         "palmar does not run natively on Windows yet.\n"
@@ -45,7 +49,6 @@ import hashlib
 import hmac
 import json
 import os
-import pty
 import re
 import secrets
 import shutil
@@ -54,12 +57,15 @@ import socket
 import stat
 import struct
 import subprocess
-import termios
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import PROTOCOL, __version__
+# **One seam instead of thirty-nine.** The daemon talks to a Pty object, never to a master fd —
+# palmar/posixpty.py here, palmar/conpty.py on Windows (#29 step 1, docs/windows.md). `blocking` is the
+# only thing that ever has to be branched on, and step 2 is what starts branching on it.
+from .posixpty import PosixPty
 
 WS_MAGIC = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -397,8 +403,6 @@ def log(*a) -> None:
     print(time.strftime("%H:%M:%S"), *a, file=sys.stderr, flush=True)
 
 
-def set_winsize(fd: int, rows: int, cols: int) -> None:
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
 def clamp_int(raw, default: int, lo: int, hi: int) -> int:
@@ -658,11 +662,11 @@ class Session:
         self.attached: list[Attach] = []
         self.settings_path = RUN_DIR / f"{sid}.json"
 
-        self.pid, self.master = self._spawn()
-        set_winsize(self.master, rows, cols)
-        os.set_blocking(self.master, False)
+        self.pty = PosixPty()
+        self._spawn(rows, cols)
+        self.pid = self.pty.pid
 
-    def _spawn(self) -> tuple[int, int]:
+    def _spawn(self, rows: int, cols: int) -> None:
         # The daemon hard-codes $SHELL. There is no way for a client to pick the command (#29, principle 4).
         shell = os.environ.get("SHELL") or "/bin/sh"
         env = {k: v for k, v in os.environ.items()
@@ -690,29 +694,10 @@ class Session:
         if not has_utf8(env):
             env["LC_CTYPE"] = UTF8_CTYPE[0] or "UTF-8"
         env["TERM_PROGRAM"] = "palmar"     # same slot tmux puts TERM_PROGRAM=tmux in. Overwrites the launching terminal name
-        pid, master = pty.fork()
-        if pid == 0:  # child — this never returns. An exception must not leak into the parent's asyncio.
-            try:
-                os.chdir(self.cwd)
-            except OSError:
-                try:
-                    os.chdir(str(HOME))
-                except OSError:
-                    pass
-            try:
-                os.execvpe(shell, argv, env)
-            except OSError:
-                os.write(2, f"palmar: cannot exec {shell}\n".encode())
-            os._exit(127)
-        # **This fd must not pass down to the next pane.** The master `pty.fork()` hands back arrives with
-        # the inheritable flag on (unlike `os.open` or sockets, it is not CLOEXEC). Leave it and a later pane's
-        # shell inherits the masters of every pane opened before it — with five panes the last shell holds four.
-        # Measured 2026-09-09: writing one line into `/dev/fd/*` from the last pane made panes 0, 1, 2 and 3
-        # each run that line **with their own $PANE value**. That is past reading someone else's pane — it is
-        # **putting keys into someone else's shell**, which means answering another agent's approval prompt for them.
-        # As a bonus, closing a pane does not release the pty while a later pane still holds a copy.
-        os.set_inheritable(master, False)
-        return pid, master
+        # Everything above is palmar's policy — which shell, which rc, which environment. The fork
+        # itself, the cwd fallback, the exec and the inheritable flag are the pty's, and both sides of
+        # the seam do them the same way.
+        self.pty.spawn(argv, env, self.cwd, rows, cols)
 
     def to_json(self) -> dict:
         return {
@@ -739,13 +724,13 @@ class Session:
     def start_reading(self) -> None:
         if self.reading or self.closed:
             return
-        asyncio.get_running_loop().add_reader(self.master, self._on_readable)
+        asyncio.get_running_loop().add_reader(self.pty.fileno(), self._on_readable)
         self.reading = True
 
     def stop_reading(self) -> None:
         if not self.reading:
             return
-        asyncio.get_running_loop().remove_reader(self.master)
+        asyncio.get_running_loop().remove_reader(self.pty.fileno())
         self.reading = False
 
     def _backpressure(self) -> int:
@@ -761,7 +746,7 @@ class Session:
             if self._backpressure() >= HIGH_WATER:   # counting unsent pending too, so the cap really holds (#5)
                 break
             try:
-                chunk = os.read(self.master, 65536)
+                chunk = self.pty.read(65536)
             except BlockingIOError:
                 break
             except OSError:
@@ -920,14 +905,12 @@ class Session:
 
         **Trusted only after it has been seen to differ at least once.** On a shell without job control
         this value points at the shell forever, and that means **unknowable**, not "nothing is running"."""
-        try:
-            fg = os.tcgetpgrp(self.master)
-        except OSError:
-            return False                    # if we cannot ask we do not know — that is not being at a prompt
-        if fg != self.pid:
-            self.fg_varied = True
-            return False
-        return self.fg_varied
+        # The pty answers this, because Windows has no foreground process group at all and has to be
+        # able to say so. It returns None for "unknowable"; here that is False — **not knowing is not
+        # being at a prompt**, which is the reading this call has always had.
+        answer = self.pty.foreground_is_shell()
+        self.fg_varied = self.pty.fg_varied
+        return bool(answer)
 
     def _out_tick(self) -> None:
         """At a prompt: idle. Something running and printing **on and on**: working. Printing then stopping:
@@ -1077,7 +1060,7 @@ class Session:
             return
         if self.inq:
             try:
-                n = os.write(self.master, self.inq)
+                n = self.pty.write(self.inq)
             except BlockingIOError:
                 n = 0
             except OSError:
@@ -1087,10 +1070,10 @@ class Session:
                 del self.inq[:n]
         loop = asyncio.get_running_loop()
         if self.inq and not self.writing:
-            loop.add_writer(self.master, self._pump_input)
+            loop.add_writer(self.pty.fileno(), self._pump_input)
             self.writing = True
         elif not self.inq and self.writing:
-            loop.remove_writer(self.master)
+            loop.remove_writer(self.pty.fileno())
             self.writing = False
 
     def resize(self, cols: int, rows: int, force: bool = False) -> None:
@@ -1100,7 +1083,7 @@ class Session:
         if not (changed or force):
             return
         try:
-            set_winsize(self.master, rows, cols)
+            self.pty.resize(rows, cols)
         except OSError:
             return
         self.cols, self.rows = cols, rows
@@ -1112,7 +1095,7 @@ class Session:
         if self.closed:
             return
         try:
-            set_winsize(self.master, rows, max(1, cols - 1))
+            self.pty.resize(rows, max(1, cols - 1))
         except OSError:
             return
         asyncio.get_running_loop().call_later(SHAKE_MS / 1000, self.resize, cols, rows, True)
@@ -1164,7 +1147,7 @@ class Session:
         self.stop_reading()
         if self.writing:                     # remove add_writer before closing the fd (#1)
             try:
-                asyncio.get_running_loop().remove_writer(self.master)
+                asyncio.get_running_loop().remove_writer(self.pty.fileno())
             except Exception:
                 pass
             self.writing = False
@@ -1177,7 +1160,7 @@ class Session:
         drained = 0
         while drained < PUMP_BUDGET:
             try:
-                chunk = os.read(self.master, 65536)
+                chunk = self.pty.read(65536)
             except OSError:
                 break
             if not chunk:
@@ -1187,14 +1170,8 @@ class Session:
         if self.pending:
             self._emit(bytes(self.pending))
             self.pending.clear()
-        try:
-            os.close(self.master)
-        except OSError:
-            pass
-        try:
-            os.kill(self.pid, signal.SIGHUP)
-        except ProcessLookupError:
-            pass
+        self.pty.close()
+        self.pty.hangup()
         asyncio.get_running_loop().call_later(KILL_GRACE_S, reaper.kill_if_alive, self)
         for a in list(self.attached):
             try:
