@@ -441,9 +441,52 @@ def _serve():
             say("    frame %-6s %d bytes · %s" % (kind, len(pay), repr(pay[:120])))
         seen_bin = sum(1 for op, pay in fs if op == 2 and pay)
         say("    %d frame(s) in %d bytes · binary with payload: %d" % (len(fs), len(got), seen_bin))
+        # **Type into it.** The first chunk is the console's own mode-setting; what is missing is the
+        # prompt. Sending a keystroke says whether the pane is alive and merely quiet, or stuck.
+        def masked(payload, op=2):
+            m = os.urandom(4)
+            body = bytes(b ^ m[i % 4] for i, b in enumerate(payload))
+            n2 = len(payload)
+            if n2 < 126:
+                head2 = bytes([0x80 | op, 0x80 | n2])
+            else:
+                head2 = bytes([0x80 | op, 0x80 | 126]) + n2.to_bytes(2, "big")
+            return head2 + m + body
+
+        try:
+            sock.sendall(masked(b"echo palmar-probe-ok\r"))
+            say("    sent a keystroke")
+        except Exception as e:
+            say(HM, "could not send:", type(e).__name__, e)
+        end3 = time.time() + 10
+        while time.time() < end3:
+            try:
+                more = sock.recv(65536)
+            except Exception:
+                continue
+            if not more:
+                break
+            got += more
+            if b"palmar-probe-ok" in got:
+                break
+        echoed = b"palmar-probe-ok" in got
+        say("    after typing: %d bytes total · echoed back: %s" % (len(got), echoed))
+        fs = frames(got)
+        say("    frames now: %d · binary with payload: %d"
+            % (len(fs), sum(1 for op, pay in fs if op == 2 and pay)))
         sock.close()
+
+        # And what the daemon thinks of that session now.
+        req = urllib.request.Request(base + "/api/sessions?token=" + token, headers={"Origin": base})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            after = _json.loads(r.read())
+        after = after if isinstance(after, list) else after.get("sessions", [])
+        row = next((x for x in after if x.get("id") == sid), None)
+        say("    the session now:", _json.dumps(row, ensure_ascii=False) if row else "**gone**")
         if not seen_bin:
             raise RuntimeError("12s attached and not one terminal byte -- this is the empty window")
+        if not echoed:
+            raise RuntimeError("it took a keystroke and echoed nothing back in 10s")
 
         # **Detached means no console of its own.** A process with one would take a Ctrl-C from the
         # window it was started in, and die with it -- which is the whole thing this is for.
