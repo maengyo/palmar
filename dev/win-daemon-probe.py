@@ -397,33 +397,51 @@ def _serve():
         say("    ws /pty/<id> ->", head)
         if "101" not in head:
             raise RuntimeError("no upgrade: " + head)
-        # Read whatever it sends for a few seconds; text frames are the hello, binary is the terminal.
-        sock.settimeout(6)
-        seen_text = seen_bin = 0
-        got = buf.split(b"\r\n\r\n", 1)[1]
-        end2 = time.time() + 6
-        while time.time() < end2 and seen_bin == 0:
+        # **Parse the frames properly and wait.** The first pass read once and guessed from header
+        # bytes, which is how "binary 0" could have meant "I did not wait" rather than "nothing came".
+        def frames(buf):
+            """(opcode, payload) for whole frames; server frames are never masked."""
+            out, i2 = [], 0
+            while i2 + 2 <= len(buf):
+                op = buf[i2] & 0x0F
+                ln = buf[i2 + 1] & 0x7F
+                head2 = 2
+                if ln == 126:
+                    if i2 + 4 > len(buf):
+                        break
+                    ln = int.from_bytes(buf[i2 + 2:i2 + 4], "big"); head2 = 4
+                elif ln == 127:
+                    if i2 + 10 > len(buf):
+                        break
+                    ln = int.from_bytes(buf[i2 + 2:i2 + 10], "big"); head2 = 10
+                if i2 + head2 + ln > len(buf):
+                    break
+                out.append((op, buf[i2 + head2:i2 + head2 + ln]))
+                i2 += head2 + ln
+            return out
+
+        sock.settimeout(1.0)
+        end2 = time.time() + 12
+        while time.time() < end2:
+            fs = frames(got)
+            if any(op == 2 and pay for op, pay in fs):
+                break
             try:
                 more = sock.recv(65536)
             except Exception:
-                break
+                continue
             if not more:
                 break
             got += more
-            # Frame headers are enough to tell the two apart without a full parser.
-            for i in range(len(got) - 1):
-                op = got[i] & 0x0F
-                if got[i] & 0x80:
-                    if op == 1:
-                        seen_text += 1
-                    elif op == 2:
-                        seen_bin += 1
-            break
+        fs = frames(got)
+        for op, pay in fs[:4]:
+            kind = {1: "text", 2: "binary", 8: "close", 9: "ping"}.get(op, "op%d" % op)
+            say("    frame %-6s %d bytes · %s" % (kind, len(pay), repr(pay[:120])))
+        seen_bin = sum(1 for op, pay in fs if op == 2 and pay)
+        say("    %d frame(s) in %d bytes · binary with payload: %d" % (len(fs), len(got), seen_bin))
         sock.close()
-        say("    after attaching: %d byte(s) back · text frames %d · binary %d"
-            % (len(got), seen_text, seen_bin))
-        if not got:
-            raise RuntimeError("the pane socket opened and said nothing -- this is the empty window")
+        if not seen_bin:
+            raise RuntimeError("12s attached and not one terminal byte -- this is the empty window")
 
         # **Detached means no console of its own.** A process with one would take a Ctrl-C from the
         # window it was started in, and die with it -- which is the whole thing this is for.
