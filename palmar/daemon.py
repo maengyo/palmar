@@ -877,8 +877,16 @@ class Session:
 
     def _emit(self, data: bytes) -> None:
         """Puts it in the ring (skipping alt stretches) and sends it to everyone attached in one frame."""
-        self._scan_title(data)          # the title is only watched — **the bytes are not touched** (#38)
-        self._out_scan(data)            # agents that do not use the title are read from output (#22)
+        # **Reading status must never cost a byte.** Both of these only *watch* the stream, and a
+        # fault in either used to travel up through `_flush` — whose caller is a call_later, so it is
+        # logged and forgotten — with `pending` already cleared. The chunk was simply gone. That is a
+        # status bug presenting as an empty terminal, and it took a day to find as one (2026-09-14).
+        # The lights can be wrong for a moment; the terminal cannot lose output.
+        for watch in (self._scan_title, self._out_scan):
+            try:
+                watch(data)
+            except Exception as e:
+                log(f"session {self.id}: status scan failed, output unaffected — {type(e).__name__}: {e}")
         alt_changed = self._absorb(data)
         frame = Frame.build(data)
         for a in list(self.attached):

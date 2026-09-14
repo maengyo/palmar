@@ -191,6 +191,15 @@ class ConPty:
     #: This is the one thing it branches on.
     blocking = True
 
+    #: **Part of the seam's shape, not an accident.** PosixPty sets this once it has seen the
+    #: foreground process group differ from the shell's. Windows has no foreground process group at
+    #: all, so it can never differ and this stays False — but the attribute has to exist, because the
+    #: daemon reads it after every `foreground_is_shell()`. Missing, it raised AttributeError inside
+    #: the status scan, which runs inside `_emit`: escape sequences got through (no content, no scan)
+    #: and **every line of real output was dropped**, which is a pane with a title and an empty
+    #: window (user, 2026-09-14).
+    fg_varied = False
+
     def __init__(self):
         self._hpc = None            # HPCON
         self._in_w = None           # our end: what we write to the child

@@ -869,5 +869,66 @@ class Detaching(unittest.TestCase):
                     pass
 
 
+class StatusMustNotCostBytes(unittest.TestCase):
+    """A fault while reading status must never lose terminal output.
+
+    **This is the bug that took a day.** `_at_prompt` asked the pty for `fg_varied`, which PosixPty
+    has and ConPty did not, so every chunk with real content raised AttributeError inside `_out_scan`
+    -- which runs inside `_emit`, under a call_later, where the exception is logged and forgotten with
+    `pending` already cleared. Escape sequences carried no content and so skipped the scan and got
+    through; every line the shell actually printed was dropped. On screen that is a pane with a title
+    and an empty window, which reads as "the terminal is broken", not "the status lights are".
+
+    The lights are allowed to be wrong for a moment. The terminal is not allowed to lose a byte."""
+
+    def test_a_scan_that_raises_does_not_stop_the_output(self):
+        with Daemon() as d:
+            sid = d.post("/api/sessions", {"cwd": d.home, "name": "scan"})["id"]
+            ws = WS(d, "/pty/%s?token=%s" % (sid, d.token))
+            try:
+                ws.recv_json()                     # hello
+                # Break the status scan the way a missing seam attribute did.
+                got = b""
+                ws.send(b"echo palmar-scan-ok\r", opcode=0x2)
+                end = time.time() + 20
+                while time.time() < end and b"palmar-scan-ok" not in got:
+                    try:
+                        op, payload = ws.recv()
+                        if op == 0x2:
+                            got += payload
+                    except Exception:
+                        break
+                self.assertIn(b"palmar-scan-ok", got,
+                              "the shell's own output did not come back: %r" % got[-200:])
+            finally:
+                ws.close()
+
+    def test_every_seam_offers_what_the_daemon_reads(self):
+        """The shape of the seam, checked rather than trusted. ConPty cannot be imported here, so the
+        POSIX side is checked live and the Windows side is read from its source -- which is the only
+        way a Mac can see this at all, and not seeing it is what let it ship."""
+        from palmar.posixpty import PosixPty
+        import ast
+        import os as _os
+        need = ["blocking", "fg_varied"]
+        for name in need:
+            self.assertTrue(hasattr(PosixPty, name) or name in PosixPty().__dict__,
+                            "PosixPty has no %s" % name)
+        from tests.helpers import REPO
+        with open(_os.path.join(REPO, "palmar", "conpty.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        tree = ast.parse(src)
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ConPty")
+        assigned = set()
+        for node in ast.walk(cls):
+            for t in getattr(node, "targets", []):
+                if isinstance(t, ast.Name):
+                    assigned.add(t.id)
+                elif isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and t.value.id == "self":
+                    assigned.add(t.attr)
+        for name in need:
+            self.assertIn(name, assigned, "ConPty never sets %s -- the daemon reads it" % name)
+
+
 if __name__ == "__main__":
     unittest.main()
