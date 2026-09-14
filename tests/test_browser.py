@@ -1199,6 +1199,13 @@ class Grouping(unittest.TestCase):
         cls.b.stop()
         cls.d.stop()
 
+    def tearDown(self):
+        """**A throw inside the drag handler is silent.** `overSideAtDrop` was never declared, so the
+        arming block died on every pointermove and the gesture simply never finished — no failure and
+        no message, the page carrying on as if nothing had happened (2026-09-14). The page already
+        collects its own exceptions; this class only had to ask."""
+        self.assertEqual(self.b.errors(), [], "the page threw while being driven")
+
     def setUp(self):
         """Every test opens its own board: no groups, nothing where it was left."""
         self.b.ev("""(()=>{const P=window.palmar, L=P.layout();
@@ -1301,6 +1308,98 @@ class Grouping(unittest.TestCase):
           return P.groupOf(by('g1').id).length;})()""")
         self.assertEqual(n, 2, "holding one window over another did not group them")
         self.assertTrue(lit, "nothing showed it was about to happen — the gesture is invisible")
+
+    def test_the_side_you_drop_on_is_where_it_lands(self):
+        """**Any edge, not just the top one.** It used to hit-test the pointer, which during a drag is
+        always on the dragged window's own title bar, so the only way to reach another window was to
+        put that bar on top of it and every group stacked upwards (user, 2026-09-14: "위쪽 테두리에
+        놔야만 하니까 그룹이 위로만 쌓임"). Overlap of the whole rectangle finds the target from any
+        side, and the centres say which side it came from."""
+        r = self.bench("""
+          const a = by('g1').id;
+          put('g2', 360, 300, 240, 200);          // the target, in the middle
+          const side = (x, y) => { put('g1', x, y, 240, 200);
+                                   const h = P.paneOver(a, [a]); return h && h.side; };
+          return {right: side(500, 300), left: side(220, 300),
+                  below: side(360, 440), above: side(360, 160),
+                  clear: side(900, 300)};
+        """)
+        self.assertEqual([r["right"], r["left"], r["below"], r["above"]],
+                         ["right", "left", "below", "above"])
+        self.assertIsNone(r["clear"], "it found a target it is nowhere near")
+
+    def test_shrinking_a_member_closes_the_gap_again(self):
+        """**A group holds its own shape.** Growing one member pushes the rest along; shrinking it
+        back used to leave the hole where it had been, because the push knows how to make room and
+        nothing knew how to take it back (user, 2026-09-14: "크기를 다시 줄이면 그룹 안에서 빈공간이
+        발생함"). Laying the group out again on every resize is what closes it."""
+        r = self.bench("""
+          put('g1', 40, 40, 240, 200); put('g2', 400, 40, 240, 200);
+          P.joinGroups(by('g1').id, by('g2').id);
+          const g = () => P.groupOf(by('g1').id);
+          P.arrangeGroup(g());
+          const tight = at('g2')[0] - (at('g1')[0] + L[by('g1').id].w);
+          put('g1', at('g1')[0], at('g1')[1], 400, 200);   // grow it
+          P.arrangeGroup(g());
+          const grown = at('g2')[0] - (at('g1')[0] + L[by('g1').id].w);
+          put('g1', at('g1')[0], at('g1')[1], 240, 200);   // and back
+          P.arrangeGroup(g());
+          return {tight: tight, grown: grown,
+                  back: at('g2')[0] - (at('g1')[0] + L[by('g1').id].w)};
+        """)
+        self.assertEqual(r["grown"], r["tight"], "growing it did not keep the group tight")
+        self.assertEqual(r["back"], r["tight"],
+                         "shrinking it left a hole: %spx instead of %spx" % (r["back"], r["tight"]))
+
+    def test_the_gauge_fills_on_the_window_in_your_hand(self):
+        """**You can see how long is left.** A hold with no gauge is a window that does nothing for
+        most of a second and then surprises you (user, 2026-09-14: "몇초동안 잡고 있어야하는지가
+        안보임 ... 쥐고 있는 터미널 테두리를 타고 게이지 차는 듯한 효과"). It rides the dragged
+        window's own border, with a faint box showing where it would land, and moving off resets
+        both — one drag, sampled on the way."""
+        # **The dial itself, off the clock.** Under load a round trip can outlast the whole hold, so
+        # whether it passes through the middle is asked of the gauge directly; the hand below proves
+        # it is wired to the right window and comes down again.
+        dial = self.bench("""
+          const id = by('g1').id, read = () => { const e = by('g1').el;
+            return e.classList.contains('arming') ? Number(e.style.getPropertyValue('--p')) : null; };
+          const out = [];
+          for (const p of [0, 1, 45, 99, 100]) { P.setGauge(id, p); out.push(read()); }
+          P.setGauge(id, 0);
+          return {steps: out, off: read()};
+        """)
+        self.assertEqual(dial["steps"], [None, 1, 45, 99, 100], "the gauge does not track the hold")
+        self.assertIsNone(dial["off"], "the gauge does not come off")
+
+        self.bench("put('g1',60,60,240,200); put('g2',360,60,240,200); put('g3',60,400,240,200); return 1;")
+        x, y = self.press("g1")
+        tx, ty = self.press("g2")
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
+        look = """(()=>{const e=document.querySelector('.tile.arming');
+          return {pct: e ? Number(e.style.getPropertyValue('--p')) : null,
+                  ghost: !!document.querySelector('.ghost'),
+                  mine: e ? e.querySelector('.tb .name').textContent : null};})()"""
+        seen = []
+        for _ in range(6):
+            time.sleep(0.15)
+            self.send(type="mouseMoved", x=tx + 1, y=ty, buttons=1)
+            seen.append(self.b.ev(look))
+        filling = [s for s in seen if s["pct"] is not None]
+        self.assertTrue(filling, "no gauge showed at all while holding")
+        self.assertEqual(filling[-1]["mine"], "g1", "the gauge is not on the window in the hand")
+        self.assertEqual(filling[-1]["pct"], 100, "the gauge never filled: %r" % seen)
+        self.assertTrue(any(s["ghost"] for s in seen), "nothing showed where it would land")
+        # Off to an empty corner: the gauge and the preview both have to go.
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=tx, y=ty + 300 * i / 3, buttons=1)
+        time.sleep(0.2)
+        away = self.b.ev(look)
+        self.send(type="mouseReleased", x=tx, y=ty + 300, clickCount=1, buttons=0)
+        time.sleep(0.4)
+        self.assertEqual([away["pct"], away["ghost"]], [None, False],
+                         "the gauge stayed up after the hand moved on: %r" % away)
 
     def test_dragging_a_member_moves_the_whole_group(self):
         self.bench("""put('g1',60,60,240,200); put('g2',360,60,240,200); put('g3',60,400,240,200);

@@ -857,7 +857,8 @@ class Tile {
     let mode = null, sx = 0, sy = 0, ox = 0, oy = 0, ow = 0, oh = 0;
     // Group state for one drag: who moves with me, where each started, and the hold that makes a group.
     let party = [], starts = new Map(), solo = false;
-    let overId = null, overSince = 0, lastX = 0, lastY = 0, armed = null;
+    let overId = null, overSince = 0, lastX = 0, lastY = 0, armed = null, overSide = null;
+    let overSideAtDrop = null;   // the side the hold was armed on, read once on release
     const down = (m) => (ev) => {
       // Buttons, input fields and the confirm strip on the title bar are not a drag (#31: .cl and .cfm joined here)
       // Only .sz.own is excluded — the ordinary size readout is part of the title bar and should drag, and it
@@ -873,7 +874,7 @@ class Tile {
       solo = !!(ev.altKey && m === 'move' && layout[this.id] && layout[this.id].g);
       party = (m === 'move' && !solo) ? groupOf(this.id) : [this.id];
       starts = new Map(party.map((id) => [id, { x: layout[id].x, y: layout[id].y }]));
-      overId = null; overSince = 0; armed = null;
+      overId = null; overSince = 0; armed = null; overSide = null; overSideAtDrop = null;
       for (const id of party) { const t = tiles.get(id); if (t) t.el.classList.add('drag'); }
       this.el.classList.add('drag');
       ev.currentTarget.setPointerCapture(ev.pointerId);
@@ -903,24 +904,36 @@ class Tile {
           mmSet(id, nx2, ny2, r.w, r.h);
         }
         if (party.length > 1) paintGroups();
-        // **The hold.** Still, over a window that is not already travelling with me, for long enough.
-        // Movement resets it — a hand is never perfectly still, so "still" has a few pixels in it.
+        // **The hold.** Overlapping a window that is not already travelling with me, held still long
+        // enough. Movement resets it — a hand is never perfectly still, so "still" has a few pixels in it.
         const moved = Math.abs(ev.clientX - lastX) + Math.abs(ev.clientY - lastY);
         lastX = ev.clientX; lastY = ev.clientY;
-        const under = paneUnder(ev.clientX, ev.clientY, party);
+        const hit = paneOver(this.id, party);
+        const under = hit && hit.id;
         if (!under || under !== overId || moved > GROUP_STILL) {
           if (overId) markHold(overId, false);
+          setGauge(this.id, 0);
+          showGhost(null);
           armed = null;                       // moved on — nothing is going to be joined
           overId = under; overSince = under ? Date.now() : 0;
+          overSide = hit && hit.side;
           if (under) markHold(under, true);
-        } else if (overId && Date.now() - overSince >= GROUP_HOLD_MS) {
+        } else if (overId) {
+          overSide = hit.side;
+          const pct = (Date.now() - overSince) / GROUP_HOLD_MS * 100;
+          setGauge(this.id, pct);
+          showGhost(joinPreview(overId, overSide, this.id));
+        }
+        if (overId && Date.now() - overSince >= GROUP_HOLD_MS) {
           // **Armed, not done.** It used to join here, in the middle of the drag, so carrying on
           // somewhere else left you grouped to a window you had moved away from — "잡은 걸 놓지
           // 않고 다시 다른 공간으로 옮기면 그룹핑이 취소가 되어야 자연스럽지" (2026-09-14). The hold
           // arms it and the release commits it; moving away disarms it, which is what the reset
           // branch above already does.
           armed = overId;
+          overSideAtDrop = overSide;
           markHold(overId, 'ready');
+          setGauge(this.id, 100);
         }
       } else {
         const nw = Math.max(MIN_W, ow + dx), nh = Math.max(MIN_H, oh + dy);
@@ -933,6 +946,8 @@ class Tile {
       if (!mode) return;
       const was = mode; mode = null;
       if (overId) { markHold(overId, false); overId = null; }
+      setGauge(this.id, 0);
+      showGhost(null);
       for (const id of party) { const t = tiles.get(id); if (t) t.el.classList.remove('drag'); }
       this.el.classList.remove('drag');
       if (solo) {
@@ -944,6 +959,14 @@ class Tile {
       for (const id of party) { const t = tiles.get(id); if (t && t !== this) t.persist(); }
       if (armed) {
         undoMark('grouping', this.s.canvas);
+        // **Put it on the side it was carried to before arranging.** arrangeGroup reads the order out
+        // of where the windows are, so this is how "I brought it to the right of that one" survives.
+        const spot = joinPreview(armed, overSideAtDrop || 'right', this.id);
+        if (spot) {
+          layout[this.id] = Object.assign({}, layout[this.id], { x: spot.x, y: spot.y });
+          this.el.style.left = spot.x + 'px';
+          this.el.style.top = spot.y + 'px';
+        }
         joinGroups(this.id, armed);
         const ids = groupOf(this.id);
         arrangeGroup(ids);
@@ -957,6 +980,15 @@ class Tile {
       paintTidy();          // moving a window creates or removes slack to close up
       if (was === 'size') this.refit();   // tell the PTY only when the resize is let go (spike D)
       this.persist();
+      // **Resizing inside a group re-lays the group out.** Growing a member pushed the others away
+      // and shrinking it left the hole behind, because push-aside only ever resolves overlap and
+      // never pulls anything back — which is right for the canvas ("밀어내기를 타일링으로 바꾸지
+      // 마라") and wrong inside a group, where the whole point is a block that stays a block
+      // (user, 2026-09-14). Sizes are still the user's; only the positions are set.
+      if (was === 'size' && groupOf(this.id).length > 1) {
+        arrangeGroup(groupOf(this.id));
+        for (const id of groupOf(this.id)) { const t = tiles.get(id); if (t && t !== this) t.persist(); }
+      }
       settle(this.id);                    // whatever it landed on gets out of the way (decisions.md "새 창이 옆을 민다")
       renderMinimap();                    // the world may have grown — take the scale again
       refreshOff();
@@ -1215,38 +1247,86 @@ function groupRect(ids) {
   return r;
 }
 
-//: Which pane is under the pointer, ignoring the ones already travelling with me.
+//: Which window the one being dragged is over, and **which side of it** — the target with the
+//: largest overlap, and the direction from its centre to ours.
 //:
-//: **`elementsFromPoint`, plural.** The window being dragged is the one directly under the cursor —
-//: you are holding its title bar — so asking for the single topmost element always answered "you",
-//: and the hold could never find anything to join. The stack has to be walked past the party.
-//:
-//: Hit testing rather than arithmetic, for the same reason the resize grip is tested that way: the
-//: answer has to be the window a person sees under the pointer.
-function paneUnder(clientX, clientY, ignore) {
-  const stack = document.elementsFromPoint(clientX, clientY);
-  for (const el of stack) {
-    const tile = el && el.closest ? el.closest('.tile') : null;
-    if (!tile) continue;
-    for (const t of tiles.values()) {
-      if (t.el !== tile) continue;
-      if (ignore && ignore.indexOf(t.id) >= 0) break;   // mine — keep looking underneath
-      return t.visible() ? t.id : null;
-    }
+//: **The pointer was the wrong question.** It used to hit-test `elementsFromPoint` at the cursor,
+//: and the cursor is on the title bar, which is the dragged window's **top edge** — so the only way
+//: to reach another window was to put your top edge on it, and every group grew upwards
+//: (user, 2026-09-14). It also meant a member sticking out of a ragged group could not be aimed at,
+//: because the pointer never got near it. The rectangle knows all of that; the pointer never did.
+function paneOver(id, ignore) {
+  const me = layout[id];
+  if (!me) return null;
+  let best = null, bestArea = 0;
+  for (const t of tiles.values()) {
+    if (ignore && ignore.indexOf(t.id) >= 0) continue;
+    if (!t.visible() || t.s.canvas !== tiles.get(id).s.canvas) continue;
+    const r = layout[t.id];
+    if (!r) continue;
+    const w = Math.min(me.x + me.w, r.x + r.w) - Math.max(me.x, r.x);
+    const h = Math.min(me.y + me.h, r.y + r.h) - Math.max(me.y, r.y);
+    if (w <= 0 || h <= 0) continue;
+    const area = w * h;
+    if (area > bestArea) { bestArea = area; best = t.id; }
   }
-  return null;
+  if (!best) return null;
+  // **The side is where the hand is carrying it**, measured centre to centre and taken on the axis
+  // it has moved furthest along — so nudging it rightwards means "to the right", not "slightly down".
+  const r = layout[best];
+  const dx = (me.x + me.w / 2) - (r.x + r.w / 2);
+  const dy = (me.y + me.h / 2) - (r.y + r.h / 2);
+  const side = Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 'right' : 'left')
+                                            : (dy >= 0 ? 'below' : 'above');
+  return { id: best, side };
 }
 
-//: The window says it is about to be joined. **Without this a group forms out of nowhere** — the
-//: gesture is "hold still", which from the inside is indistinguishable from "nothing is happening".
-//: Two states, because they mean different things. **`true`** is "counting" — the hold has started.
-//: **`'ready'`** is "let go and these join" — the hold is done and the release will commit it. Without
-//: the second there is no moment that says *now*, and a person lets go without knowing what they get.
+//: Where it would land: beside the target, on that side, at the size it already is. **Not the exact
+//: final position** — the group re-arranges after joining — but the side it will end up on, which is
+//: the thing a person is choosing while they hold it there.
+function joinPreview(overId, side, meId) {
+  const r = layout[overId], me = layout[meId];
+  if (!r || !me) return null;
+  if (side === 'right') return { x: r.x + r.w + GAP, y: r.y, w: me.w, h: me.h };
+  if (side === 'left') return { x: Math.max(0, r.x - GAP - me.w), y: r.y, w: me.w, h: me.h };
+  if (side === 'below') return { x: r.x, y: r.y + r.h + GAP, w: me.w, h: me.h };
+  return { x: r.x, y: Math.max(0, r.y - GAP - me.h), w: me.w, h: me.h };
+}
+
+let ghostEl = null;
+function showGhost(box) {
+  if (!box) { if (ghostEl) { ghostEl.remove(); ghostEl = null; } return; }
+  if (!ghostEl) { ghostEl = el('div', 'ghost'); cvScroll.appendChild(ghostEl); }
+  ghostEl.style.left = box.x + 'px';
+  ghostEl.style.top = box.y + 'px';
+  ghostEl.style.width = box.w + 'px';
+  ghostEl.style.height = box.h + 'px';
+}
+
+//: The gauge, and then the moment it is full.
+//:
+//: **A hold nobody can see is a hold nobody trusts.** The gesture is standing still, which from the
+//: inside is indistinguishable from nothing happening, so "how much longer" has to be on screen —
+//: as a line travelling the dragged window's own border, because that is the window the answer is
+//: about ("테두리를 타고 게이지 차는 듯한 효과", 2026-09-14). Full circle means it will join; moving
+//: away empties it at once.
 function markHold(id, on) {
   const t = tiles.get(id);
   if (!t) return;
   t.el.classList.toggle('joining', on === true);
   t.el.classList.toggle('joinready', on === 'ready');
+}
+
+function setGauge(id, pct) {
+  const t = tiles.get(id);
+  if (!t) return;
+  if (pct <= 0) {
+    t.el.classList.remove('arming');
+    t.el.style.removeProperty('--p');
+    return;
+  }
+  t.el.classList.add('arming');
+  t.el.style.setProperty('--p', Math.min(100, Math.round(pct)));
 }
 
 function undoJoin(changed) {
@@ -1270,9 +1350,17 @@ function undoJoin(changed) {
 function arrangeGroup(ids) {
   const mine = ids.filter((id) => layout[id] && tiles.get(id));
   if (mine.length < 2) return;
-  // Oldest first, so a group keeps the order things were opened in rather than the order they were
-  // dragged together in — the same rule the left list uses.
-  mine.sort((a, b) => ((tiles.get(a).s.created || 0) - (tiles.get(b).s.created || 0)));
+  // **Reading order of where they are now**, so the side you dropped on is the order you get: carry a
+  // window to the right of another and it is to the right of it afterwards. Sorting by age instead
+  // meant the drop position was thrown away and the group came out in an order nobody chose.
+  // A row's worth of slack on the vertical compare, or two windows a few pixels apart in height
+  // swap places and the group appears to shuffle itself.
+  const ROWISH = Math.max(...mine.map((id) => layout[id].h)) / 2;
+  mine.sort((a, b) => {
+    const p = layout[a], q = layout[b];
+    if (Math.abs(p.y - q.y) > ROWISH) return p.y - q.y;
+    return p.x - q.x;
+  });
   const r = groupRect(mine);
   const w = Math.max(...mine.map((id) => layout[id].w));
   const h = Math.max(...mine.map((id) => layout[id].h));
@@ -3233,7 +3321,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // hand can comfortably drag into place one at a time.
                   pushAside, applyPush, hits, firstFree,
                   // Groups: the model is testable without a hand, the gesture needs one.
-                  groupOf, groupRect, joinGroups, leaveGroup, paneUnder, arrangeGroup,
+                  groupOf, groupRect, joinGroups, leaveGroup, paneOver, joinPreview, setGauge, arrangeGroup,
                   // Undo: one way back for everything that moves a window.
                   undoMark, undoLast, undoDepth: () => undoStack.length,
                   // Path joining is platform-shaped and the platform it gets wrong has no Chrome

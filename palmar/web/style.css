@@ -634,6 +634,27 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .tile.joinready::before {
   content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 75%, transparent);
+}
+
+/* **The gauge runs the dragged window's own border.** The gesture is standing still, and a hold
+   nobody can see is a hold nobody trusts — so how much longer is drawn on the window the answer is
+   about. A conic gradient turned into a ring by masking the middle out: --p is the percentage, set
+   from JS, and a full circle means letting go will join. */
+.tile.arming::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 2px;
+  pointer-events: none;
+  background: conic-gradient(from -90deg,
+              var(--accent) calc(var(--p, 0) * 1%), transparent 0);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+
+/* Where it will land. Faint on purpose: it is an offer, not a thing that exists yet. */
+.ghost {
+  position: absolute; z-index: 0; pointer-events: none; border-radius: 10px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }                 /* Behaviour: while dragging or resizing it follows instantly */
 .tile.focus { border-color: color-mix(in srgb, var(--accent) 60%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent), var(--shadow-2); }
 .tile.fresh { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
