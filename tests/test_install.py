@@ -5,6 +5,7 @@ stricter (no bashisms). Skipped where /bin/sh is missing, which on a dev machine
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -101,6 +102,112 @@ class Install(unittest.TestCase):
         self.assertIn("3.9", r.stdout + r.stderr)
         self.assertFalse(os.path.exists(os.path.join(self.prefix, "bin", "palmar")),
                          "a launcher was written despite no usable Python")
+
+
+def pwsh_path():
+    """PowerShell, or None. Windows has it built in; elsewhere it is `pwsh` if someone installed it."""
+    return shutil.which("pwsh") or shutil.which("powershell")
+
+
+@unittest.skipUnless(pwsh_path(), "no PowerShell on this machine")
+class InstallPs1(unittest.TestCase):
+    """install.ps1 — the Windows half of the one-line install.
+
+    Run through PowerShell Core, which is what a Windows machine has (5.1 built in, 7 if installed)
+    and what a Mac can have, so this is testable off Windows. What it cannot check here is the part
+    that is Windows-only: the Microsoft Store's zero-length python.exe stub, and whether a corporate
+    execution policy really lets `-ExecutionPolicy Bypass` through. Those need that machine.
+
+    **The daemon does not run on Windows yet (#29)**, so none of this ends in a working palmar. What
+    it does end in is a launcher that will work when the port lands, and a report of what the machine
+    has — which is the thing blocking the port."""
+
+    SCRIPT = os.path.join(REPO, "install.ps1")
+
+    def run_ps(self, *args, **kw):
+        cmd = [pwsh_path(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", self.SCRIPT] + list(args)
+        # **Close stdin.** Anything that reaches a Read-Host with an inherited stdin waits for the test
+        # runner's terminal, which is a hang rather than a failure.
+        return subprocess.run(cmd, input=kw.get("input", ""), capture_output=True, text=True,
+                              timeout=180, cwd=kw.get("cwd", REPO))
+
+    def test_it_parses(self):
+        """A syntax error in a file people run with the policy bypassed is a bad first impression."""
+        # **The path goes in the string.** With -Command, a trailing argument is appended to the command
+        # rather than bound to $args, so `$args[0]` was empty and pwsh sat waiting on stdin until the
+        # timeout — a hang, not a failure, which is the worse kind.
+        probe = (
+            "$t=$null; $e=$null;"
+            "[System.Management.Automation.Language.Parser]::ParseFile("
+            "  %s, [ref]$t, [ref]$e) | Out-Null;"
+            "if ($e) { $e | ForEach-Object { $_.Message }; exit 1 }"
+        ) % json.dumps(self.SCRIPT).replace("\\", "\\\\")
+        r = subprocess.run([pwsh_path(), "-NonInteractive", "-NoProfile", "-Command", probe],
+                           input="", capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_check_writes_nothing(self):
+        """`-Check` is the diagnostic, and a diagnostic that edits the machine is a worse diagnostic
+        (the same reason dev/wslg-probe.sh is separate from app/setup-linux.sh)."""
+        prefix = tempfile.mkdtemp(prefix="palmar-ps-")
+        self.addCleanup(shutil.rmtree, prefix, ignore_errors=True)
+        shutil.rmtree(prefix)                      # it must not even create the directory
+        r = self.run_ps("-Check", "-Prefix", prefix)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(os.path.exists(prefix), "-Check created something")
+        self.assertIn("Nothing was written", r.stdout)
+
+    def test_the_report_says_what_it_found(self):
+        """One screen a person can read back. That report is what this script is actually for today."""
+        out = self.run_ps("-Check").stdout
+        for want in ("PowerShell", "policy", "python", "checkout"):
+            self.assertIn(want, out, "the report does not mention " + want)
+
+    def test_it_says_the_daemon_does_not_run_here_yet(self):
+        """**The thing a person must not be left to discover by running it.** Until #29 the launcher
+        prints a refusal, and a script that installs it without saying so is setting up a surprise."""
+        out = self.run_ps("-Check").stdout
+        self.assertIn("does not run natively on Windows yet", out)
+        self.assertIn("WSL", out, "it does not name the path that does work today")
+        self.assertIn("conpty-check", out, "it does not name what this machine could do for the port")
+
+    def test_it_installs_a_launcher_that_points_at_the_checkout(self):
+        prefix = tempfile.mkdtemp(prefix="palmar-ps-")
+        self.addCleanup(shutil.rmtree, prefix, ignore_errors=True)
+        r = self.run_ps("-Yes", "-Prefix", prefix)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cmd = os.path.join(prefix, "bin", "palmar.cmd")
+        self.assertTrue(os.path.exists(cmd), "no launcher was written")
+        with open(cmd, encoding="ascii") as fh:
+            body = fh.read()
+        # A launcher, not a copy — so `git pull` updates palmar with no reinstall, as on POSIX.
+        self.assertIn("PYTHONPATH", body)
+        self.assertIn(REPO, body, "the launcher does not point at this checkout")
+        self.assertIn("-m palmar", body)
+
+    def test_it_asks_before_writing(self):
+        """Without -Yes it must stop at the question rather than write. Answering nothing is a no."""
+        prefix = tempfile.mkdtemp(prefix="palmar-ps-")
+        self.addCleanup(shutil.rmtree, prefix, ignore_errors=True)
+        shutil.rmtree(prefix)
+        cmd = [pwsh_path(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", self.SCRIPT,
+               "-Prefix", prefix]
+        r = subprocess.run(cmd, input="\n", capture_output=True, text=True, timeout=180, cwd=REPO)
+        self.assertIn("Nothing was written", r.stdout)
+        self.assertFalse(os.path.exists(os.path.join(prefix, "bin", "palmar.cmd")),
+                         "it wrote a launcher without being told to")
+
+    def test_it_refuses_outside_a_checkout(self):
+        """Run from somewhere else there is nothing to install — the repository is private, so there is
+        nothing to download either (#23). It has to say that rather than write a broken launcher."""
+        elsewhere = tempfile.mkdtemp(prefix="palmar-ps-out-")
+        self.addCleanup(shutil.rmtree, elsewhere, ignore_errors=True)
+        copy = os.path.join(elsewhere, "install.ps1")
+        shutil.copy(self.SCRIPT, copy)
+        r = subprocess.run([pwsh_path(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", copy, "-Yes"],
+                           capture_output=True, text=True, timeout=180, cwd=elsewhere)
+        self.assertNotEqual(r.returncode, 0, "it accepted a directory with no palmar in it")
+        self.assertIn("checkout", (r.stdout + r.stderr))
 
 
 if __name__ == "__main__":

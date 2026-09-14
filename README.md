@@ -99,7 +99,22 @@ git clone https://github.com/maengyo/palmar && sh palmar/install.sh   # from a c
 ```
 
 `install.sh` checks your Python, drops a `palmar` launcher in `~/.local/bin`, and changes nothing
-else — no root, no `~/.palmar` touched, the daemon never started. Prefer to read it first? `curl`
+else — no root, no `~/.palmar` touched, the daemon never started.
+
+**On Windows** there is `install.ps1`, run with the policy bypassed for this one process — no
+administrator, no setting changed:
+
+```
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Check   # look; it writes nothing
+powershell -ExecutionPolicy Bypass -File .\install.ps1          # then it asks before writing
+```
+
+**It does not give you a working palmar yet.** The daemon exits on Windows because `fcntl`, `pty`
+and `termios` are not there — the native port is #29, and until it lands the launcher prints that.
+What works today is the daemon inside WSL with any Windows browser pointed at the address it
+prints. What `-Check` is good for now is the report: which Python is real (it skips the Microsoft
+Store's zero-length `python.exe`), what the execution policy is in every scope, and whether WSL is
+there. Prefer to read it first? `curl`
 it to a file and run it by hand; it is short. Or skip it entirely and run the checkout directly:
 
 ```
