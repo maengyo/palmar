@@ -100,6 +100,7 @@ python3 -m palmar            # 127.0.0.1:8801. --port 만 받는다. host 옵션
 |---|---|---|---|
 | `GET` | `/?k=` `/index.html?k=` | | `web/` 의 **`.html`** — `?k=` 가 맞아야 한다. 아니면 `403` + 안내 HTML |
 | `GET` | `/app.js` `/style.css` … | | `web/` 의 나머지. 비밀을 안 실으므로 열쇠가 없어도 된다. 모르는 확장자는 `application/octet-stream` |
+| `POST` | `/api/stop?token=` | | 데몬에게 **멈추라고** 한다. `{"stopping": true}` 를 먼저 돌려주고 나간다 — `Ctrl-C` 와 같은 문. `palmar --stop` 이 이 길을 먼저 쓴다: **콘솔이 없는 데몬에는 신호가 안 닿는다**(윈도우에서 떨어져 나온 프로세스). 토큰이 관문이고, 토큰 파일은 0600 이다 |
 | `GET` | `/api/sessions?token=` | | `[Session]` (만든 순서). **캔버스로 거르지 않는다** — 왼쪽 목록이 전부를 보기 때문이다(⑪) |
 | `POST` | `/api/sessions?token=` | `{"cwd": "/abs/path", "canvas": "<id>", "name": "…"}` · `cwd` 없으면 홈 · `canvas` 가 없거나 `null` 이면 `order` 가 가장 앞인 캔버스 · `name` 없으면 이름 없음 | `Session` (201) · cwd 가 뿌리 밖이면 `400` · 모르는 `canvas` 면 `400` · 이름이 규칙에 안 맞으면 `400`. 세션은 80×24 로 태어나 첫 attach·resize 에서 크기가 잡힌다 |
 | `PATCH` | `/api/sessions/<id>?token=` | `{"name": …}` · `{"canvas": "<id>"}` · 둘 다. **몸에 있는 키만 바꾼다** (`name` 은 문자열 또는 `null`, `canvas` 는 문자열만) | `Session` (200 — 아무 키도 없는 `{}` 도 200, 그대로 돌려준다) · 세션이 없으면 `404` · 모르는 `canvas` 면 `400`(경로의 세션은 있으니 `404` 가 아니다) · **`{"canvas": null}` 도 `400`** — 소속은 비울 수 없다(`Session.canvas` 는 `null` 이 아니다) · 몸이 객체가 아니면 `400` |

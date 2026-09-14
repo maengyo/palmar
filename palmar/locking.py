@@ -59,6 +59,16 @@ else:
         fcntl.flock(fd, fcntl.LOCK_UN)
 
 
+#: **Windows opens in text mode unless told otherwise, and every file here is bytes.** In text mode
+#: the CRT translates `\n` to `\r\n` on the way out and buffers on the way in -- so the pid line
+#: written into run/lock does not have the length it was given, and a read after a seek may not start
+#: where it was asked to. That is the best explanation for why reading *past* a locked first byte
+#: still came back "permission denied" on a real machine (2026-09-14) -- **a hypothesis, not a
+#: measurement**: by then the transition it mattered for was over and there was nothing left to
+#: reproduce it against. Zero everywhere else, so it costs POSIX nothing.
+BINARY = getattr(os, "O_BINARY", 0)
+
+
 #: `O_NOFOLLOW` refuses to open a symlink, which is why the lock is opened with it -- somebody who
 #: can drop a link in `~/.palmar/run/` should not get us to lock a file of their choosing. Windows
 #: has no such flag; the directory is already 0700-equivalent by profile ACL there (docs/windows.md).

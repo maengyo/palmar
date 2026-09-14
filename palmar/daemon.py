@@ -85,6 +85,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+import urllib.request
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import PROTOCOL, __version__
@@ -99,7 +100,7 @@ else:
     from .posixpty import PosixPty as Pty, default_shell as Pty_default_shell
 # `fcntl` was the last import here that simply does not exist on Windows. The seven flock calls were
 # all one pattern, so they went behind a seam too (#29 step 3).
-from .locking import NOFOLLOW, release as unlock_fd, take as lock_fd
+from .locking import BINARY, NOFOLLOW, release as unlock_fd, take as lock_fd
 
 WS_MAGIC = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -1623,7 +1624,7 @@ def cwd_of(pid: int):
 def write_private(path: Path, data: bytes, mode: int) -> None:
     """Writes anew with mode. Writes a temp file and renames — never leaves a running shim half-written."""
     tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | NOFOLLOW, mode)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | NOFOLLOW | BINARY, mode)
     try:
         if POSIX_PERMS:
             os.fchmod(fd, mode)   # a no-op on Windows anyway; see POSIX_PERMS
@@ -1753,6 +1754,29 @@ def _read_lock_line(fd):
     return None, first
 
 
+def _ask_to_stop(url: str) -> bool:
+    """`POST /api/stop` on a running daemon. True if it took the request.
+
+    The token comes from run/token, which is 0600 — the same file every other local tool reads. If it
+    is not there, or the daemon is older than this route, this simply fails and the caller signals."""
+    try:
+        token = TOKEN_FILE.read_text("utf-8").strip()
+    except OSError:
+        return False
+    base = url.split("/?")[0]
+    req = urllib.request.Request(base + "/api/stop?token=" + token, data=b"",
+                                 headers={"Origin": base}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+#: Set once the loop is up; `POST /api/stop` calls it. A list so the route can reach it without a global.
+STOP_NOW = [None]
+
+
 def stop_daemon() -> int:
     """`palmar --stop` — stop the daemon that has this HOME, and its shells with it.
 
@@ -1775,7 +1799,7 @@ def stop_daemon() -> int:
         said = ""
     answering = said.startswith("http://") and daemon_answers(said)
     try:
-        fd = os.open(str(path), os.O_RDWR | NOFOLLOW)
+        fd = os.open(str(path), os.O_RDWR | NOFOLLOW | BINARY)
     except FileNotFoundError:
         print("palmar: 도는 데몬이 없다" if not answering else
               "palmar: 주소는 응답하는데 run/lock 이 없다 — 그 데몬은 palmar 가 만든 것이 아니거나 파일이 지워졌다")
@@ -1799,7 +1823,11 @@ def stop_daemon() -> int:
         if raw is None:
             print(f"palmar: run/lock 을 못 읽었다 — {why}")
             if answering:
-                print(f"        그런데 {said.split('/?')[0]} 는 응답한다. 작업 관리자에서 그 python 을 끝내라.")
+                print(f"        그런데 {said.split('/?')[0]} 는 응답한다 — 도는 데몬이 있다는 뜻이다.")
+                if sys.platform == "win32":
+                    print("        그 python 을 끝내라:  Get-Process python | Stop-Process")
+                else:
+                    print("        그 프로세스를 끝내라:  pkill -f 'python.*-m palmar'")
             return 1
         # "pid 1234 http://127.0.0.1:8801" — the address is there for --doctor; only the pid matters here.
         line = raw.split()
@@ -1807,22 +1835,23 @@ def stop_daemon() -> int:
             print(f"palmar: run/lock 의 내용을 알아볼 수 없다 ({' '.join(line)[:60]})")
             return 1
         pid = int(line[1])
-        try:
-            if sys.platform == "win32":
-                # **Not SIGTERM.** os.kill with anything but a console event is TerminateProcess on
-                # Windows — abrupt, and the restore snapshot never gets written. CTRL_BREAK_EVENT
-                # reaches the group `detached_no_fork` puts it in, and arrives as SIGBREAK, which the
-                # daemon handles alongside SIGINT and SIGTERM.
-                os.kill(pid, signal.CTRL_BREAK_EVENT)
-            else:
+        # **Ask over the socket first.** A console event cannot reach a daemon that has no console,
+        # and a detached one on Windows has none — GenerateConsoleCtrlEvent has nowhere to send it and
+        # os.kill falls back to TerminateProcess, which skips the shutdown and the restore snapshot
+        # (user, 2026-09-14, after I assumed the process group would be enough). The socket is there
+        # on every platform, it is already authenticated, and it ends in the same place Ctrl-C does.
+        if answering and _ask_to_stop(said):
+            print(f"palmar: pid {pid} 에 멈추라고 했다. 기다린다…")
+        else:
+            try:
                 os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            print("palmar: 그 데몬은 이미 없다")
-            return 0
-        except PermissionError:
-            print(f"palmar: pid {pid} 에 신호를 못 보낸다 — 다른 사용자의 것이다")
-            return 1
-        print(f"palmar: pid {pid} 에 멈추라고 했다. 기다린다…")
+            except ProcessLookupError:
+                    print("palmar: 그 데몬은 이미 없다")
+                    return 0
+            except PermissionError:
+                print(f"palmar: pid {pid} 에 신호를 못 보낸다 — 다른 사용자의 것이다")
+                return 1
+            print(f"palmar: pid {pid} 에 멈추라고 했다. 기다린다…")
     finally:
         os.close(fd)
     # Gone means the lock is free again. Poll rather than waitpid — it is not our child.
@@ -1830,7 +1859,7 @@ def stop_daemon() -> int:
     while time.monotonic() < end:
         time.sleep(0.1)
         try:
-            fd = os.open(str(path), os.O_RDWR | NOFOLLOW)
+            fd = os.open(str(path), os.O_RDWR | NOFOLLOW | BINARY)
         except OSError:
             print("palmar: 멈췄다")
             return 0
@@ -1857,7 +1886,7 @@ def acquire_single_instance_lock() -> None:
     a web page *and* an app both in use, running into a daemon that is already up is the ordinary case, not
     a mistake. If it answers, `AlreadyRunning` carries its address up and the caller opens that. The refusal
     below is kept for the case where something holds the lock and cannot be reached — that really is wrong."""
-    fd = os.open(str(RUN_DIR / "lock"), os.O_RDWR | os.O_CREAT | NOFOLLOW, 0o600)
+    fd = os.open(str(RUN_DIR / "lock"), os.O_RDWR | os.O_CREAT | NOFOLLOW | BINARY, 0o600)
     try:
         lock_fd(fd)
     except OSError:
@@ -2773,6 +2802,23 @@ async def handle_request(reader, writer) -> None:
         writer.write(http(204))
         return
 
+    if path == "/api/stop":
+        # **`palmar --stop`, over the socket the daemon already has.** Signals do not reach a daemon
+        # that has no console: on Windows a detached process is in no console at all, so
+        # GenerateConsoleCtrlEvent has nowhere to send to and os.kill falls back to TerminateProcess —
+        # which skips the shutdown path, and the restore snapshot with it (user, 2026-09-14).
+        # This asks it to leave the same way Ctrl-C does, and it leaves by the same door.
+        # **The token is the gate**, and the token file is 0600: whoever can read it is already the
+        # person who can attach to every pane (README, "what palmar does not protect you from").
+        if method != "POST":
+            writer.write(http_error(405, "POST"))
+            return
+        log("멈추라는 요청을 받았다 (POST /api/stop)")
+        writer.write(http_json(200, {"stopping": True}))
+        await writer.drain()
+        STOP_NOW[0] and STOP_NOW[0]()
+        return
+
     if path == "/api/dirs":
         if method == "GET":
             find = qget(q, "find", "").strip()
@@ -3050,6 +3096,8 @@ async def main(port: int, open_page: bool = True) -> None:
     except OSError as e:
         raise SystemExit(f"palmard: 127.0.0.1:{port} 에 묶지 못했다 — {e.strerror or e}")
     stop = loop.create_future()
+    # Handed to the one HTTP route that can ask for a shutdown, so it goes out the same door as Ctrl-C.
+    STOP_NOW[0] = lambda: None if stop.done() else stop.set_result(None)
     # **add_signal_handler is POSIX-only** — the Proactor loop raises NotImplementedError for it,
     # measured on a runner. `signal.signal` works on both, but its handler runs on the main thread
     # rather than inside the loop, so it has to hand back across with call_soon_threadsafe.
@@ -3179,7 +3227,7 @@ def doctor(port: int) -> int:
     running, note = None, ""
     if lock_path.exists():
         try:
-            fd = os.open(str(lock_path), os.O_RDWR)
+            fd = os.open(str(lock_path), os.O_RDWR | BINARY)
             try:
                 lock_fd(fd)
                 running = False                 # we took it = nobody is holding it

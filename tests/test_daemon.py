@@ -959,6 +959,46 @@ class StoppingTrustsTheAddress(unittest.TestCase):
             self.assertNotIn("도는 데몬이 없다", r.stdout,
                              "it called a running daemon dead: %r" % r.stdout)
 
+    def test_it_asks_over_the_socket(self):
+        """**Signals cannot reach a daemon with no console.** A detached process on Windows is in no
+        console at all, so GenerateConsoleCtrlEvent has nowhere to send and os.kill falls back to
+        TerminateProcess — which skips the shutdown path, and the restore snapshot with it (user,
+        2026-09-14, after I assumed a process group would be enough). The socket is there on every
+        platform and is already authenticated, so that is asked first and the signal is the fallback.
+
+        Exercised here so the path that matters on Windows is covered where it can be run."""
+        from tests.helpers import PYTHON, REPO
+        with Daemon() as d:
+            base = d.base
+            r = subprocess.run([PYTHON, "-c",
+                                "import sys;sys.path.insert(0,%r);"
+                                "from palmar.daemon import _ask_to_stop;"
+                                "print(_ask_to_stop(%r))" % (REPO, d.url)],
+                               cwd=REPO, env=dict(os.environ, HOME=d.home, PYTHONPATH=REPO),
+                               capture_output=True, text=True, timeout=30)
+            self.assertIn("True", r.stdout, "the daemon refused POST /api/stop: %s" % r.stderr[-300:])
+            # And it really goes: the address stops answering.
+            end = time.time() + 20
+            import urllib.error
+            import urllib.request
+            gone = False
+            while time.time() < end:
+                try:
+                    urllib.request.urlopen(
+                        urllib.request.Request(base + "/api/sessions?token=" + d.token,
+                                               headers={"Origin": base}), timeout=2)
+                except Exception:
+                    gone = True
+                    break
+                time.sleep(0.3)
+            self.assertTrue(gone, "it said it would stop and kept answering")
+
+    def test_stopping_needs_the_token(self):
+        """It ends the daemon and every shell in it, so it is gated exactly like every other route."""
+        with Daemon() as d:
+            st, _ = d.raw("POST", "/api/stop", token=False)
+            self.assertIn(st, (401, 403), "POST /api/stop was accepted without a token")
+
     def test_it_still_says_so_when_nothing_runs(self):
         """The ordinary case has to stay ordinary -- no address, no lock, one sentence."""
         from tests.helpers import PYTHON, REPO

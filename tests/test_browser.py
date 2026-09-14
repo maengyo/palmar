@@ -789,6 +789,31 @@ class PushAside(unittest.TestCase):
         self.assertEqual(r["b"][:2], [312, 100])
         self.assertEqual(r["c"][:2], [524, 100], "c settled against a instead of against b")
 
+    def test_a_new_window_fills_a_gap_before_growing_the_canvas(self):
+        """**They used to pile up downwards.** firstFree scanned the viewport only, so once that was
+        full every new terminal went under the last one and the canvas grew for ever — even with the
+        top half emptied by closing things (user, 2026-09-14)."""
+        r = self.bench("""
+          // Fill the viewport, then leave a hole near the top and a tall pile below it.
+          put('a', 12, 12, 300, 300);
+          put('b', 12, 1400, 300, 300);     // far below: the canvas is now much taller than the view
+          put('c', 340, 12, 300, 300);
+          // The gap at (12, 330) is free and inside the canvas the tiles already describe.
+          const spot = P.firstFree(200, 160, by('a').s.canvas);
+          return {spot: spot, deepest: 1400};
+        """)
+        self.assertLess(r["spot"]["y"], r["deepest"],
+                        "it went below everything instead of using the gap: %r" % r["spot"])
+
+    def test_it_still_goes_below_when_nothing_fits(self):
+        """The fallback has to stay. A window wider than every gap has nowhere else to go."""
+        r = self.bench("""
+          put('a', 12, 12, 2000, 300); put('b', 12, 330, 2000, 300); put('c', 12, 650, 2000, 300);
+          const spot = P.firstFree(1900, 400, by('a').s.canvas);
+          return {spot: spot};
+        """)
+        self.assertGreaterEqual(r["spot"]["y"], 950, "it claimed a gap that cannot hold it")
+
     def test_nothing_overlapping_moves_nothing(self):
         """The ordinary case: most drags land in empty space. Nothing should move and no toast should
         appear — a toast on every drag would be noise."""

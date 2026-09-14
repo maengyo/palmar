@@ -979,14 +979,28 @@ function tidyCanvas(canvasId) {
   return true;
 }
 
+// Where a new window goes: **the first gap anywhere on the canvas, and only then below everything.**
+//
+// It used to scan the viewport alone, so once that was full every new terminal went under the last
+// one and the canvas grew downwards for ever — even with the top half emptied by closing things
+// (user, 2026-09-14). The canvas is already as big as its contents; looking at all of it costs the
+// same scan over a slightly larger box and reuses the room that is actually there.
+//
+// **Reading order**, left to right then down, because that is where the eye expects the next thing.
+// The grid is the dot grid, so a new window lands aligned with the ones already placed.
 function firstFree(w, h, canvasId) {
-  const W = cvScroll.clientWidth, H = cvScroll.clientHeight;
   const rects = [];
   for (const t of tiles.values()) { if (t.s.canvas === canvasId && layout[t.id]) rects.push(layout[t.id]); }
+  // As big as the viewport, or as big as what is already on the canvas — whichever is larger. The
+  // extra row and column of slack let a window land just past the current edge rather than starting
+  // a new pile below, which is the case that made this look broken.
+  const W = Math.max(cvScroll.clientWidth, rects.reduce((m, r) => Math.max(m, r.x + r.w), 0) + GAP + w);
+  const H = Math.max(cvScroll.clientHeight, rects.reduce((m, r) => Math.max(m, r.y + r.h), 0) + GAP + h);
   const hit = (x, y) => rects.some((r) => x < r.x + r.w + GAP && x + w + GAP > r.x && y < r.y + r.h + GAP && y + h + GAP > r.y);
   for (let y = GAP; y + h <= H; y += GRID)
     for (let x = GAP; x + w <= W; x += GRID)
       if (!hit(x, y)) return { x, y };
+  // Nothing fits anywhere — every gap is smaller than this window. Below the lot, and the canvas grows.
   const bottom = rects.reduce((m, r) => Math.max(m, r.y + r.h), 0);
   return { x: GAP, y: bottom ? bottom + GAP : GAP };
 }
@@ -2792,7 +2806,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // Push-aside. A test drives the real drag with mouse events; these are here so the geometry
                   // can also be asked directly — the cascade and the round limit need more windows than a
                   // hand can comfortably drag into place one at a time.
-                  pushAside, applyPush, hits,
+                  pushAside, applyPush, hits, firstFree,
                   // Path joining is platform-shaped and the platform it gets wrong has no Chrome
                   // here — so it is tested directly rather than by driving the rail.
                   joinDir,
