@@ -857,7 +857,7 @@ class Tile {
     let mode = null, sx = 0, sy = 0, ox = 0, oy = 0, ow = 0, oh = 0;
     // Group state for one drag: who moves with me, where each started, and the hold that makes a group.
     let party = [], starts = new Map(), solo = false;
-    let overId = null, overSince = 0, lastX = 0, lastY = 0, armed = null, overSide = null;
+    let overId = null, overSince = 0, armed = null, overSide = null;
     let overSideAtDrop = null;   // the side the hold was armed on, read once on release
     const down = (m) => (ev) => {
       // Buttons, input fields and the confirm strip on the title bar are not a drag (#31: .cl and .cfm joined here)
@@ -904,13 +904,17 @@ class Tile {
           mmSet(id, nx2, ny2, r.w, r.h);
         }
         if (party.length > 1) paintGroups();
-        // **The hold.** Overlapping a window that is not already travelling with me, held still long
-        // enough. Movement resets it — a hand is never perfectly still, so "still" has a few pixels in it.
-        const moved = Math.abs(ev.clientX - lastX) + Math.abs(ev.clientY - lastY);
-        lastX = ev.clientX; lastY = ev.clientY;
+        // **The hold.** Overlapping a window that is not already travelling with me, for long enough.
+        //
+        // **Leaving resets it, not moving.** This used to also reset on any movement past a few pixels,
+        // on the theory that a hold is a window held still — and a hand cannot hold still. On a real
+        // mouse the gauge flickered near zero and never filled, so there was no gauge, no preview, and
+        // a gesture that seemed to need one exact pixel (user, 2026-09-14, on Windows). Every test had
+        // sent the same coordinate twice and so had never moved at all. The dwell alone is enough to
+        // keep a window you are only crossing from arming: nobody spends 900ms on the way past.
         const hit = paneOver(this.id, party);
         const under = hit && hit.id;
-        if (!under || under !== overId || moved > GROUP_STILL) {
+        if (under !== overId) {
           if (overId) markHold(overId, false);
           setGauge(this.id, 0);
           showGhost(null);
@@ -1221,8 +1225,7 @@ function paintUndo() {
 //
 // Membership rides in the same store as the position (⑩ provisional, `palmar-tiles`) — and lands in
 // the same undecided as the coordinates do (③, #2). A group is an id, kept on each member.
-const GROUP_HOLD_MS = 900;      // still over another window this long and they join
-const GROUP_STILL = 6;          // px; a hand is never perfectly still, and a drift is not a hold
+const GROUP_HOLD_MS = 900;      // over another window this long and they join
 
 function groupOf(id) {
   const g = layout[id] && layout[id].g;
@@ -1244,6 +1247,17 @@ function groupRect(ids) {
     r.x = Math.min(r.x, q.x); r.y = Math.min(r.y, q.y);
     r.w = x2 - r.x; r.h = y2 - r.y;
   }
+  return r;
+}
+
+// A group as one movable thing: the bounding box for moving it, `cells` for deciding what it hits.
+function blockOf(ids) {
+  const r = groupRect(ids);
+  if (!r) return null;
+  r.cells = ids.filter((id) => layout[id]).map((id) => {
+    const q = layout[id];
+    return { dx: q.x - r.x, dy: q.y - r.y, w: q.w, h: q.h };
+  });
   return r;
 }
 
@@ -1362,8 +1376,6 @@ function arrangeGroup(ids) {
     return p.x - q.x;
   });
   const r = groupRect(mine);
-  const w = Math.max(...mine.map((id) => layout[id].w));
-  const h = Math.max(...mine.map((id) => layout[id].h));
   // **As wide as fits, and it may end up an ㄱ.** The frame follows the shape the members actually
   // occupy, so a last row with one window in it is not a hole any more — it is the shape (사용자,
   // 2026-09-14: "굳이 사각형 안에 들어가게 하는 게 아니라 ㄱ 자 모양으로 묶어도 되잖아"). That
@@ -1372,15 +1384,27 @@ function arrangeGroup(ids) {
   //
   // Wide first, because the canvas grows downwards without limit and its width is finite: across
   // spends the space there is instead of the space there always is.
+  //
+  // **Each window takes the width it has, not the widest one's.** A grid of equal cells is only tidy
+  // while the windows are equal: give one member a different size and every narrower one sits at the
+  // left of an oversized cell with a hole beside it, which is a group that looks like it has come
+  // apart — reported after growing one member of four and shrinking it back, with the far one left
+  // hanging (user, 2026-09-14). Rows are filled instead, each window against the last, and a row is
+  // as tall as the tallest thing in it. Windows of one size come out exactly as they did before.
   const room = Math.max(1, (cvScroll.clientWidth || 1) - GAP * 2);
-  const cols = Math.max(1, Math.min(mine.length, Math.floor((room + GAP) / (w + GAP))));
+  let x = r.x, y = r.y, rowH = 0, rowStart = 0;
   mine.forEach((id, i) => {
-    const x = Math.max(0, r.x + (i % cols) * (w + GAP));
-    const y = Math.max(0, r.y + Math.floor(i / cols) * (h + GAP));
+    const q = layout[id];
+    if (i > rowStart && (x - r.x) + q.w > room) {    // no room left on this row — start the next one
+      x = r.x; y += rowH + GAP; rowH = 0; rowStart = i;
+    }
+    const px = Math.max(0, x), py = Math.max(0, y);
+    layout[id] = Object.assign({}, layout[id], { x: px, y: py });
     const t = tiles.get(id);
-    layout[id] = Object.assign({}, layout[id], { x, y });
-    t.el.style.left = x + 'px';
-    t.el.style.top = y + 'px';
+    t.el.style.left = px + 'px';
+    t.el.style.top = py + 'px';
+    x += q.w + GAP;
+    rowH = Math.max(rowH, q.h);
   });
   saveLayout();
   paintGroups();     // the frame is the union of the members — it moved, so it has to be redrawn
@@ -1490,18 +1514,57 @@ const PUSH_ROUNDS = 20;                 // termcanvas's limit, the number decisi
 
 // The gap counts: two windows a hair apart read as touching, and that gap is the grid the eye already sees.
 function hits(a, b) {
+  if (a.cells || b.cells) {
+    for (const p of cellsOf(a)) for (const q of cellsOf(b)) if (touches(p, q)) return true;
+    return false;
+  }
+  return touches(a, b);
+}
+
+function touches(a, b) {
   return a.x < b.x + b.w + GAP && a.x + a.w + GAP > b.x &&
          a.y < b.y + b.h + GAP && a.y + a.h + GAP > b.y;
 }
 
+//: **The outline is not the shape.** A block may hold several windows, and a group laid out as an ㄱ
+//: has a corner inside its own bounding box that belongs to nobody. Taking the box as the block claims
+//: that corner: the frame drew an ㄱ and the physics pushed a rectangle, so a window dropped in the
+//: notch was thrown back out (user, 2026-09-14: "그 공간은 그룹의 공간이 되어서 다른 터미널을 놓을
+//: 수가 없어"). A block therefore carries `cells` — its windows, each an offset from its own corner —
+//: and collision asks the windows, not the box. A block with no `cells` is a plain rectangle.
+function cellsOf(b) {
+  if (!b.cells) return [b];
+  return b.cells.map((c) => ({ x: b.x + c.dx, y: b.y + c.dy, w: c.w, h: c.h }));
+}
+
 // The four ways out of `p`, each the exact distance that clears the gap and not a pixel more.
+// Far enough to clear **every** cell of `p`, not just the one that happened to be hit — a group moved
+// only clear of its first overlap lands on the next window along.
 function shove(p, r, dir) {
+  const ps = cellsOf(p);
+  const rs = r.cells || [{ dx: 0, dy: 0, w: r.w, h: r.h }];
+  let R = -Infinity, L = Infinity, B = -Infinity, T = Infinity;
+  for (const a of ps) {
+    for (const c of rs) {
+      const b = { x: r.x + c.dx, y: r.y + c.dy, w: c.w, h: c.h };
+      // Sideways only clears a pair that shares rows; up and down only one that shares columns. A pair
+      // that shares neither cannot be in the way whatever happens on that axis.
+      if (a.y < b.y + b.h + GAP && a.y + a.h + GAP > b.y) {
+        R = Math.max(R, a.x + a.w + GAP - c.dx);
+        L = Math.min(L, a.x - GAP - c.w - c.dx);
+      }
+      if (a.x < b.x + b.w + GAP && a.x + a.w + GAP > b.x) {
+        B = Math.max(B, a.y + a.h + GAP - c.dy);
+        T = Math.min(T, a.y - GAP - c.h - c.dy);
+      }
+    }
+  }
   const ways = [
-    { d: 'r', x: p.x + p.w + GAP, y: r.y, by: Math.abs(p.x + p.w + GAP - r.x) },
-    { d: 'b', x: r.x, y: p.y + p.h + GAP, by: Math.abs(p.y + p.h + GAP - r.y) },
-    { d: 'l', x: p.x - GAP - r.w, y: r.y, by: Math.abs(p.x - GAP - r.w - r.x) },
-    { d: 't', x: r.x, y: p.y - GAP - r.h, by: Math.abs(p.y - GAP - r.h - r.y) },
-  ];
+    { d: 'r', x: R, y: r.y, by: Math.abs(R - r.x) },
+    { d: 'b', x: r.x, y: B, by: Math.abs(B - r.y) },
+    { d: 'l', x: L, y: r.y, by: Math.abs(L - r.x) },
+    { d: 't', x: r.x, y: T, by: Math.abs(T - r.y) },
+  ].filter((w) => isFinite(w.x) && isFinite(w.y));
   // **Keep going the way it was already going.** A row of windows slides over as a row instead of
   // scattering, and every step of a cascade then leads away from the window that started it — which is
   // what makes it stop. Re-choosing the nearest way at each hop lets two windows trade places forever.
@@ -1540,7 +1603,7 @@ function pushAside(canvasId, anchorId, opts) {
   // **Work on a copy.** A run that hits the round limit has to leave the screen exactly as it was, rather
   // than stop halfway with windows parked where nobody asked for them.
   const box = new Map();
-  for (const [k, ids] of members) box.set(k, groupRect(ids));
+  for (const [k, ids] of members) box.set(k, blockOf(ids));
   const start = new Map([...box].map(([k, r]) => [k, { x: r.x, y: r.y }]));
   const anchorKey = key(anchorId);
   let wave = [{ id: anchorKey, dir: null }];

@@ -640,11 +640,20 @@ body.fold-r .rail.right .rail-fold       { display: none; }
    nobody can see is a hold nobody trusts — so how much longer is drawn on the window the answer is
    about. A conic gradient turned into a ring by masking the middle out: --p is the percentage, set
    from JS, and a full circle means letting go will join. */
+/* **It has to beat the border it sits on.** At 2px of the accent it was a slightly lighter edge on a
+   tile that already has a light border and a bright title bar — measured on screen at 63% full and all
+   but invisible, which is how it was reported ("게이지가 아예 안보여", 2026-09-14). Three pixels, a
+   track dark enough to read the filled part against, and the filled part carrying
+   the accent's own weight. .tile has overflow:hidden, so a glow outside the border would be clipped:
+   the contrast has to come from the ring itself. The accent is used as it is rather than mixed towards
+   white — white reads on the dark theme and disappears on the light one, where the accent is a blue on
+   a pale tile. */
 .tile.arming::after {
-  content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 2px;
-  pointer-events: none;
+  content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 3px;
+  pointer-events: none; z-index: 3;
   background: conic-gradient(from -90deg,
-              var(--accent) calc(var(--p, 0) * 1%), transparent 0);
+              var(--accent) calc(var(--p, 0) * 1%),
+              color-mix(in srgb, var(--accent) 20%, transparent) 0);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
@@ -653,8 +662,8 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 /* Where it will land. Faint on purpose: it is an offer, not a thing that exists yet. */
 .ghost {
   position: absolute; z-index: 0; pointer-events: none; border-radius: 10px;
-  border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 2px dashed color-mix(in srgb, var(--accent) 75%, transparent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
 }                 /* Behaviour: while dragging or resizing it follows instantly */
 .tile.focus { border-color: color-mix(in srgb, var(--accent) 60%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent), var(--shadow-2); }
 .tile.fresh { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }

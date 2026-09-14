@@ -1280,7 +1280,12 @@ class Grouping(unittest.TestCase):
         self.b.ws.call("Input.dispatchMouseEvent", dict(button="left", **kw))
 
     def test_holding_one_over_another_groups_them(self):
-        """The gesture itself. Moving resets the hold, so it is dragged there and then left alone."""
+        """The gesture itself: carried there, held, let go.
+
+        **"Showed it was about to happen" is any of three marks**, because they replace one another as
+        the hold runs: the target lights up on arrival, the gauge fills on the window in the hand, and
+        the target goes to its armed mark at the end. Watching only for the first one made this fail
+        under a loaded machine, where the first look already arrived after the hold was full."""
         self.bench("put('g1',60,60,240,200); put('g2',360,60,240,200); put('g3',60,400,240,200); return 1;")
         x, y = self.press("g1")
         tx, ty = self.press("g2")
@@ -1294,7 +1299,7 @@ class Grouping(unittest.TestCase):
         for _ in range(14):
             st = self.b.ev("""(()=>{const P=window.palmar;
               const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
-              return {lit: document.querySelectorAll('.tile.joining').length > 0,
+              return {lit: document.querySelectorAll('.tile.joining, .tile.joinready, .tile.arming').length > 0,
                       n: P.groupOf(by('g1').id).length};})()""")
             lit = lit or st["lit"]
             if st["n"] == 2:
@@ -1308,6 +1313,83 @@ class Grouping(unittest.TestCase):
           return P.groupOf(by('g1').id).length;})()""")
         self.assertEqual(n, 2, "holding one window over another did not group them")
         self.assertTrue(lit, "nothing showed it was about to happen — the gesture is invisible")
+
+    def test_members_of_different_widths_still_sit_against_each_other(self):
+        """**A grid of equal cells is only tidy while the windows are equal.** Laying every member out
+        on the widest one's pitch left a hole beside each narrower one, so growing a member and
+        shrinking it back left the far window hanging at a distance, still in the group (user,
+        2026-09-14). A row is packed by the widths the windows actually have."""
+        r = self.bench("""
+          put('g1', 40, 40, 180, 160); put('g2', 260, 40, 380, 160); put('g3', 700, 40, 200, 160);
+          P.joinGroups(by('g1').id, by('g2').id);
+          P.joinGroups(by('g3').id, by('g1').id);
+          const ids = P.groupOf(by('g1').id);
+          P.arrangeGroup(ids);
+          const row = ids.map((id) => [L[id].x, L[id].y, L[id].w]).sort((a, b) => a[0] - b[0]);
+          return {row: row, room: document.querySelector('.cv-scroll').clientWidth};
+        """)
+        row = r["row"]
+        self.assertEqual(len({p[1] for p in row}), 1, "they did not stay on one row: %r" % row)
+        for a, b in zip(row, row[1:]):
+            self.assertEqual(b[0] - (a[0] + a[2]), 12,
+                             "a hole opened between two members: %r" % row)
+
+    def test_a_hand_is_not_a_clamp(self):
+        """**The hold asked for stillness the hand cannot give.** Any pointer movement over six pixels
+        reset the gauge, so on a real mouse it flickered near zero and never filled: no gauge, no
+        preview, and grouping that seemed to want one exact pixel (user, 2026-09-14, on Windows —
+        every earlier test sent the same coordinate twice and so never moved at all). What the gesture
+        was asked for is "게이지가 오르며 그룹핑 할 곳에서 멀어지는 순간 초기화" — it is *leaving*
+        that resets it, not moving. Held over the target, jittering the way a hand does, it fills."""
+        self.bench("put('g1',60,60,240,200); put('g2',360,60,240,200); put('g3',60,400,240,200); return 1;")
+        x, y = self.press("g1")
+        tx, ty = self.press("g2")
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
+        jitter = [(0, 0), (9, -7), (-8, 6), (11, 4), (-6, -9), (7, 8), (-10, 3)]
+        best, n = 0, 1
+        for k in range(14):
+            time.sleep(0.12)
+            dx, dy = jitter[k % len(jitter)]
+            self.send(type="mouseMoved", x=tx + dx, y=ty + dy, buttons=1)
+            st = self.b.ev("""(()=>{const e=document.querySelector('.tile.arming');
+              const P=window.palmar, by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+              return {pct: e ? Number(e.style.getPropertyValue('--p')) : 0,
+                      n: P.groupOf(by('g1').id).length};})()""")
+            best = max(best, st["pct"])
+            n = st["n"]
+        self.send(type="mouseReleased", x=tx, y=ty, clickCount=1, buttons=0)
+        time.sleep(0.5)
+        n = self.b.ev("""(()=>{const P=window.palmar;
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          return P.groupOf(by('g1').id).length;})()""")
+        self.assertEqual(best, 100, "a jittering hand never filled the gauge: reached %s%%" % best)
+        self.assertEqual(n, 2, "it never grouped, because the hand was not still enough")
+
+    def test_the_notch_of_an_L_belongs_to_nobody(self):
+        """**The outline is not the shape.** The frame draws an ㄱ, and the corner it leaves open is
+        real space — but the push took the group's bounding box, so a window put in that corner was
+        thrown straight back out (user, 2026-09-14: "ㄱ자 모양 그룹화 했을 때 남는 공간에 다른
+        터미널 놓이는거 같다가도 ... 또 그 공간은 그룹의 공간이 되어서 다른 터미널을 놓을 수가
+        없어"). Collision asks the windows now, not the box around them."""
+        r = self.bench("""
+          put('g1', 40, 40, 400, 160);     // the top bar of the ㄱ
+          put('g2', 40, 212, 180, 160);    // the leg, down the left
+          P.joinGroups(by('g1').id, by('g2').id);
+          put('g3', 244, 212, 180, 160);   // the open corner: inside the box, touching no window
+          const before = at('g3');
+          const box = P.groupRect(P.groupOf(by('g1').id));
+          const moves = P.pushAside(by('g3').s.canvas, by('g3').id);
+          return {moves: moves.length, before: before, after: at('g3'), box: box,
+                  a: at('g1'), b: at('g2')};
+        """)
+        box, g3 = r["box"], r["before"]
+        self.assertTrue(box["x"] <= g3[0] and g3[0] + 180 <= box["x"] + box["w"]
+                        and box["y"] <= g3[1] and g3[1] + 160 <= box["y"] + box["h"],
+                        "the window is not in the notch, so this proves nothing: %r in %r" % (g3, box))
+        self.assertEqual(r["moves"], 0, "the group claimed its own empty corner: %r" % (r,))
+        self.assertEqual(r["after"], r["before"], "it was pushed out of the corner")
 
     def test_the_side_you_drop_on_is_where_it_lands(self):
         """**Any edge, not just the top one.** It used to hit-test the pointer, which during a drag is
