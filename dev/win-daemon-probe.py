@@ -397,6 +397,8 @@ def _serve():
         say("    ws /pty/<id> ->", head)
         if "101" not in head:
             raise RuntimeError("no upgrade: " + head)
+        got = buf.split(b"\r\n\r\n", 1)[1]      # anything that rode in with the handshake
+
         # **Parse the frames properly and wait.** The first pass read once and guessed from header
         # bytes, which is how "binary 0" could have meant "I did not wait" rather than "nothing came".
         def frames(buf):
