@@ -21,18 +21,23 @@ loop over a self-pipe, so the single thread stays single. A PTY hitting EOF arri
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
-# **A platform we do not support must not be a traceback.** `fcntl` does not exist on Windows, so
-# importing it there kills the process before a line of palmar runs and the person sees an ImportError
-# stack instead of a sentence. The check has to sit **above** the import block for that reason — and
-# above the Python-version check below, which was equally unreachable.
+# **A platform we do not support must not be a traceback.** The check sits **above** the import
+# block so a missing module cannot turn "not supported yet" into an ImportError stack — and above
+# the Python-version check below, which was equally unreachable.
+#
+# `PALMAR_WINDOWS_ANYWAY` is **a development escape hatch, not a feature.** The port is being built
+# in steps and each round has to get further than the last, so there has to be a way to say "go on
+# and tell me what breaks". An environment variable rather than a flag, because nobody should find
+# it by reading `--help`. **Step 4 deletes this whole block**, hatch and all (docs/windows.md).
 #
 # `pty` and `termios` used to be on that list too. They are gone from here as of #29 step 1: the pty
 # lives behind palmar/posixpty.py (palmar/conpty.py on Windows) and this file talks to an object.
 # What still pins the daemon to POSIX is the rest of the list in docs/windows.md — `flock`, the signal
 # handlers, `os.kill`/`waitpid`, and `add_reader`, which has no Windows equivalent at all.
-if sys.platform == "win32":
+if sys.platform == "win32" and not os.environ.get("PALMAR_WINDOWS_ANYWAY"):
     raise SystemExit(
         "palmar does not run natively on Windows yet.\n"
         "  Run the daemon inside WSL and open the address it prints in your Windows browser.\n"
@@ -44,11 +49,9 @@ if sys.version_info < (3, 9):
 import asyncio
 import base64
 import collections
-import fcntl
 import hashlib
 import hmac
 import json
-import os
 import re
 import secrets
 import shutil
@@ -65,7 +68,15 @@ from . import PROTOCOL, __version__
 # **One seam instead of thirty-nine.** The daemon talks to a Pty object, never to a master fd —
 # palmar/posixpty.py here, palmar/conpty.py on Windows (#29 step 1, docs/windows.md). `blocking` is the
 # only thing that ever has to be branched on, and step 2 is what starts branching on it.
-from .posixpty import PosixPty
+# **The seam picks itself, once.** Everything below says `Pty()` and never asks which platform it is
+# on -- that was the whole point of moving fifteen `self.master` uses behind an object (#29 step 1).
+if sys.platform == "win32":                      # pragma: no cover - chosen by platform
+    from .conpty import ConPty as Pty
+else:
+    from .posixpty import PosixPty as Pty
+# `fcntl` was the last import here that simply does not exist on Windows. The seven flock calls were
+# all one pattern, so they went behind a seam too (#29 step 3).
+from .locking import NOFOLLOW, release as unlock_fd, take as lock_fd
 
 WS_MAGIC = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -662,7 +673,7 @@ class Session:
         self.attached: list[Attach] = []
         self.settings_path = RUN_DIR / f"{sid}.json"
 
-        self.pty = PosixPty()
+        self.pty = Pty()
         self._spawn(rows, cols)
         self.pid = self.pty.pid
 
@@ -1589,11 +1600,11 @@ def stop_daemon() -> int:
         return 1
     try:
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_fd(fd)
         except OSError:
             pass                                    # held — a daemon is alive, which is the point
         else:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            unlock_fd(fd)
             print("palmar: 도는 데몬이 없다")
             return 0
         try:
@@ -1628,11 +1639,11 @@ def stop_daemon() -> int:
             print("palmar: 멈췄다")
             return 0
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_fd(fd)
         except OSError:
             continue
         else:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            unlock_fd(fd)
             print("palmar: 멈췄다")
             return 0
         finally:
@@ -1650,9 +1661,9 @@ def acquire_single_instance_lock() -> None:
     a web page *and* an app both in use, running into a daemon that is already up is the ordinary case, not
     a mistake. If it answers, `AlreadyRunning` carries its address up and the caller opens that. The refusal
     below is kept for the case where something holds the lock and cannot be reached — that really is wrong."""
-    fd = os.open(str(RUN_DIR / "lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    fd = os.open(str(RUN_DIR / "lock"), os.O_RDWR | os.O_CREAT | NOFOLLOW, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_fd(fd)
     except OSError:
         try:
             prev = os.read(fd, 256).decode("utf-8", "replace").strip()
@@ -2893,9 +2904,9 @@ def doctor(port: int) -> int:
         try:
             fd = os.open(str(lock_path), os.O_RDWR)
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                lock_fd(fd)
                 running = False                 # we took it = nobody is holding it
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                unlock_fd(fd)
             except OSError:
                 running = True                  # somebody is holding it = a daemon is alive
                 try:

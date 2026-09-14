@@ -26,6 +26,9 @@ on:
       - "palmar/conpty.py"
       - "dev/conpty-check.py"
       - "install.ps1"
+      - "dev/win-daemon-probe.py"
+      - "palmar/daemon.py"
+      - "palmar/locking.py"
       - ".github/workflows/windows-conpty.yml"
 
 jobs:
@@ -61,6 +64,14 @@ jobs:
 
       # No pip install of anything: this half of the port is ctypes against kernel32, which is the
       # whole point of writing it.
+      # **The machine orders the remaining work.** docs/windows.md lists 41 platform-bound sites,
+      # but a list is not a sequence -- what matters is which one stops the process first. This walks
+      # the real start-up path with the development hatch set and prints the walls in the order they
+      # are hit. continue-on-error: hitting a wall is the measurement, not a broken build.
+      - name: how far does the daemon get
+        continue-on-error: true
+        run: python dev/win-daemon-probe.py
+
       - name: conpty
         env:
           CONPTY_WATCHDOG: "120"
