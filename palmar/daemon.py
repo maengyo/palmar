@@ -1184,8 +1184,14 @@ class Session:
         # **Not unmeasured — measured, and it did not show up**: DELETEing a pane running `yes` on macOS,
         # even the old budget-less loop ended by itself at 2048 bytes with EAGAIN (2026-09-08, once). Linux
         # was not measured. So this did not fix an observed hang; it put a cap where there was none.
+        # **Only where reading can say "nothing right now".** This loop ends because a non-blocking
+        # read raises BlockingIOError once it is drained. On Windows ReadFile simply waits, and a
+        # pane that has stopped printing waits forever — measured 2026-09-14: the probe's six-minute
+        # job timeout, with nothing after "a pane prints something". Draining a blocking handle needs
+        # the thread that step 2 introduces; until then the salvage is skipped there, and what is
+        # lost is an exit echo, not correctness.
         drained = 0
-        while drained < PUMP_BUDGET:
+        while not self.pty.blocking and drained < PUMP_BUDGET:
             try:
                 chunk = self.pty.read(65536)
             except OSError:

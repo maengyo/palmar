@@ -15,6 +15,7 @@ import os
 import sys
 import tempfile
 import time
+import time
 import traceback
 
 OK, NO, HM = " ok ", " NO ", " ?? "
@@ -67,83 +68,6 @@ head("how far does the daemon get on Windows?")
 say("    HOME =", HOME)
 say("    python", sys.version.split()[0])
 
-D = {}
-
-
-def _import():
-    import palmar.daemon as d
-    D["d"] = d
-
-
-if wall("import palmar.daemon", _import):
-    d = D["d"]
-    say("    PALMAR_DIR =", getattr(d, "PALMAR_DIR", "?"))
-    say("    Pty =", getattr(d, "Pty", None).__name__ if getattr(d, "Pty", None) else "?")
-
-    wall("setup_palmar_dir (dirs, shim, 0700)", lambda: d.setup_palmar_dir())
-    wall("acquire_single_instance_lock", lambda: d.acquire_single_instance_lock())
-
-    def _spawn():
-        # The real constructor, with the real shell -- this is where pty.fork used to be and where
-        # ConPty now is. `canvas` is required, so give it one that does not have to exist yet.
-        D["pane"] = d.Session("probe", os.getcwd(), 80, 24, "probe-canvas")
-    wall("open a pane (Session -> ConPty.spawn)", _spawn)
-
-    def _loop():
-        import asyncio
-        loop = asyncio.new_event_loop()
-        try:
-            loop.add_signal_handler(2, lambda: None)
-        finally:
-            loop.close()
-    wall("asyncio add_signal_handler", _loop)
-
-    def _sigchld():
-        import signal
-        if not hasattr(signal, "SIGCHLD"):
-            raise AttributeError("signal has no SIGCHLD on Windows -- pane death comes from console EOF")
-    wall("signal.SIGCHLD exists", _sigchld)
-
-    def _reader():
-        """**The read path, which is step 2 and the largest piece left.** add_reader has no Windows
-        equivalent, so this is what the daemon cannot yet do: be told when there is output."""
-        import asyncio
-        loop = asyncio.new_event_loop()
-        try:
-            p = D.get("pane")
-            fd = p.pty.fileno() if p else None
-            if fd is None:
-                raise NotImplementedError("ConPty has no fileno -- the loop cannot wait on it (blocking=%r)"
-                                          % getattr(p.pty, "blocking", "?"))
-            loop.add_reader(fd, lambda: None)
-        finally:
-            loop.close()
-    wall("the loop can wait for output (step 2)", _reader)
-
-    def _bytes():
-        """Does a pane actually produce bytes? The blocking read is what step 2 has to wrap."""
-        p = D.get("pane")
-        if p is None:
-            raise RuntimeError("no pane to read from")
-        got = b""
-        end = time.time() + 6
-        while time.time() < end and len(got) < 16:
-            chunk = p.pty.read(65536)
-            if not chunk:
-                break
-            got += chunk
-        if not got:
-            raise RuntimeError("the pane printed nothing in 6s")
-        say("    first bytes:", repr(got[:60]))
-    wall("a pane prints something", _bytes)
-
-    pane = D.get("pane")
-    if pane is not None:
-        try:
-            pane.die("probe done")
-        except Exception:
-            pass
-
 def _locking():
     """**Which msvcrt.locking actually takes on a fresh file?**
 
@@ -192,6 +116,111 @@ def _locking():
 
 
 wall("which msvcrt.locking works", _locking)
+
+
+D = {}
+
+
+def _import():
+    import palmar.daemon as d
+    D["d"] = d
+
+
+if wall("import palmar.daemon", _import):
+    d = D["d"]
+    say("    PALMAR_DIR =", getattr(d, "PALMAR_DIR", "?"))
+    say("    Pty =", getattr(d, "Pty", None).__name__ if getattr(d, "Pty", None) else "?")
+
+    wall("setup_palmar_dir (dirs, shim, 0700)", lambda: d.setup_palmar_dir())
+    wall("acquire_single_instance_lock", lambda: d.acquire_single_instance_lock())
+
+    def _spawn():
+        # The real constructor, with the real shell -- this is where pty.fork used to be and where
+        # ConPty now is. `canvas` is required, so give it one that does not have to exist yet.
+        D["pane"] = d.Session("probe", os.getcwd(), 80, 24, "probe-canvas")
+    wall("open a pane (Session -> ConPty.spawn)", _spawn)
+
+    def _loop():
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            loop.add_signal_handler(2, lambda: None)
+        finally:
+            loop.close()
+    wall("platform: asyncio add_signal_handler", _loop)
+
+    def _sigchld():
+        import signal
+        if not hasattr(signal, "SIGCHLD"):
+            raise AttributeError("signal has no SIGCHLD on Windows -- pane death comes from console EOF")
+    wall("platform: signal.SIGCHLD exists", _sigchld)
+
+    def _reader():
+        """**Step 2, the largest piece left.** add_reader has no Windows equivalent, so this is the
+        thing the daemon still cannot do: be told when there is output, instead of sitting in a read."""
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            p = D.get("pane")
+            fd = p.pty.fileno() if p else None
+            if fd is None:
+                raise NotImplementedError("ConPty has no fileno -- the loop cannot wait on it (blocking=%r)"
+                                          % getattr(p.pty, "blocking", "?"))
+            loop.add_reader(fd, lambda: None)
+        finally:
+            loop.close()
+    wall("the loop can wait for output (step 2)", _reader)
+
+    def _bytes():
+        p = D.get("pane")
+        if p is None:
+            raise RuntimeError("no pane to read from")
+        got = p.pty.read(65536)
+        if not got:
+            raise RuntimeError("the pane printed nothing")
+        say("    first bytes:", repr(got[:60]))
+    wall("a pane prints something", _bytes)
+
+    def _reader():
+        """**The read path, which is step 2 and the largest piece left.** add_reader has no Windows
+        equivalent, so this is what the daemon cannot yet do: be told when there is output."""
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            p = D.get("pane")
+            fd = p.pty.fileno() if p else None
+            if fd is None:
+                raise NotImplementedError("ConPty has no fileno -- the loop cannot wait on it (blocking=%r)"
+                                          % getattr(p.pty, "blocking", "?"))
+            loop.add_reader(fd, lambda: None)
+        finally:
+            loop.close()
+    wall("the loop can wait for output (step 2)", _reader)
+
+    def _bytes():
+        """Does a pane actually produce bytes? The blocking read is what step 2 has to wrap."""
+        p = D.get("pane")
+        if p is None:
+            raise RuntimeError("no pane to read from")
+        got = b""
+        end = time.time() + 6
+        while time.time() < end and len(got) < 16:
+            chunk = p.pty.read(65536)
+            if not chunk:
+                break
+            got += chunk
+        if not got:
+            raise RuntimeError("the pane printed nothing in 6s")
+        say("    first bytes:", repr(got[:60]))
+    wall("a pane prints something", _bytes)
+
+    pane = D.get("pane")
+    if pane is not None:
+        # **Guarded, because this is where a whole run was lost.** die() drained the console before
+        # closing it, and a blocking read on a quiet pane never comes back -- the job hit its
+        # six-minute timeout and every check after this never ran (2026-09-14).
+        wall("close a pane without hanging", lambda: pane.die("probe done"))
+
 
 head("result")
 if WALLS:
