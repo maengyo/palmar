@@ -231,6 +231,70 @@ if wall("import palmar.daemon", _import):
         wall("close a pane without hanging", lambda: pane.die("probe done"))
 
 
+def _serve():
+    """**The whole daemon, in its own process, answering HTTP.**
+
+    Not `main()` in this one: the probe has already taken the home lock above, and a second
+    `setup_palmar_dir` in the same process would be refused -- correctly. A subprocess also means the
+    real entry point, `cli()` included, which is what a person actually runs."""
+    import socket
+    import subprocess
+    import urllib.request
+
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    home = tempfile.mkdtemp(prefix="palmar-serve-")
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    env = dict(os.environ, HOME=home, USERPROFILE=home, PALMAR_WINDOWS_ANYWAY="1",
+               PYTHONPATH=repo, PYTHONIOENCODING="utf-8")
+    say("    starting a daemon on port", port)
+    proc = subprocess.Popen([sys.executable, "-m", "palmar", "--no-browser", "--port", str(port)],
+                            cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", errors="replace")
+    url_file = os.path.join(home, ".palmar", "run", "url")
+    try:
+        url = None
+        end = time.time() + 25
+        while time.time() < end:
+            if os.path.exists(url_file):
+                with open(url_file, encoding="utf-8") as fh:
+                    url = fh.read().strip()
+                break
+            if proc.poll() is not None:
+                out, err = proc.communicate()
+                raise RuntimeError("it exited (%s): %s" % (proc.returncode, (err or out).strip()[-300:]))
+            time.sleep(0.3)
+        if not url:
+            raise RuntimeError("no run/url in 25s")
+        base = url.split("/?")[0]
+        say("    it says it is at", base)
+        req = urllib.request.Request(url, headers={"Origin": base})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            body = r.read()
+            if r.status != 200:
+                raise RuntimeError("the page came back %d" % r.status)
+        say("    GET / ->", r.status, "%d bytes" % len(body),
+            "· looks like the app" if b"PALMAR_TOKEN" in body else "· **no token in it**")
+        if b"PALMAR_TOKEN" not in body:
+            raise RuntimeError("the page has no token script -- it is not palmar's index.html")
+    finally:
+        subprocess.run([sys.executable, "-m", "palmar", "--stop"], cwd=repo, env=env,
+                       capture_output=True, timeout=60)
+        try:
+            proc.wait(timeout=20)
+        except Exception:
+            proc.kill()
+        for pipe in (proc.stdout, proc.stderr):
+            try:
+                pipe.close()
+            except Exception:
+                pass
+
+
+wall("the whole daemon serves a page", _serve)
+
 head("result")
 if WALLS:
     say(NO, "walls, in the order they were hit:")
