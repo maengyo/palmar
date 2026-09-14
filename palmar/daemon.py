@@ -4,7 +4,11 @@
 It spawns PTYs, moves bytes, takes hooks, reads folders. Nothing more (AGENTS.md principle 1).
 
 - Standard library only. Python 3.9 syntax only — `/usr/bin/python3` is 3.9.6, the ground for "zero install".
-- Single-threaded asyncio. `pty.fork` warns when threads exist and risks deadlock (spike D investigation).
+- Single-threaded asyncio **on POSIX** — `pty.fork` warns when threads exist and risks deadlock
+  (spike D investigation), so nothing here starts a thread where fork is how a pane is made.
+  Windows has no such call and no way to wait on a ConPTY either, so a pane there reads on a thread
+  and hands the bytes back with `call_soon_threadsafe` (#29 step 2). `Pty.blocking` is the only
+  thing that decides, and it decides once.
 - The websocket is hand-rolled RFC 6455 — `Frame`/`read_frame` are spike D verbatim.
 - The flow-control constants (100KB/10KB/256KB) and the coalescing time (5ms) are spike D measurements.
 - Ring buffer (absolute offset + `since`) from spike G; alt-screen detection and the SIGWINCH shake from spike F.
@@ -72,6 +76,7 @@ import socket
 import stat
 import struct
 import subprocess
+import threading
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -685,6 +690,13 @@ class Session:
         self.attached: list[Attach] = []
         self.settings_path = RUN_DIR / f"{sid}.json"
 
+        #: Only used where the pty blocks — Windows. `_can_read` is back-pressure expressed as a
+        #: thread that parks: clearing it stops the reads, setting it lets them go on, which is
+        #: exactly what add_reader/remove_reader do on the other side.
+        self._thread = None
+        self._loop = None
+        self._can_read = threading.Event()
+
         self.pty = Pty()
         self._spawn(rows, cols)
         self.pid = self.pty.pid
@@ -751,14 +763,61 @@ class Session:
     def start_reading(self) -> None:
         if self.reading or self.closed:
             return
-        asyncio.get_running_loop().add_reader(self.pty.fileno(), self._on_readable)
+        if self.pty.blocking:
+            # One thread per pane, started the first time and parked afterwards rather than churned:
+            # a pane can cross the water marks often, and a thread per crossing is not a flow control.
+            self._loop = asyncio.get_running_loop()
+            self._can_read.set()
+            if self._thread is None:
+                self._thread = threading.Thread(target=self._read_loop, name="pty-" + self.id,
+                                                daemon=True)
+                self._thread.start()
+        else:
+            asyncio.get_running_loop().add_reader(self.pty.fileno(), self._on_readable)
         self.reading = True
 
     def stop_reading(self) -> None:
         if not self.reading:
             return
-        asyncio.get_running_loop().remove_reader(self.pty.fileno())
+        if self.pty.blocking:
+            # **It parks after the read it is already in.** So the cap can be overshot by one read —
+            # 64KB — which is the same shape of slack the POSIX side documents for PUMP_BUDGET.
+            self._can_read.clear()
+        else:
+            asyncio.get_running_loop().remove_reader(self.pty.fileno())
         self.reading = False
+
+    # ── the blocking half (#29 step 2) ───────────────────────────
+    def _read_loop(self) -> None:
+        """**Runs on its own thread and touches nothing the loop owns.** Every byte crosses back with
+        `call_soon_threadsafe`; `self.closed` is only read, and the Event is the one thing both
+        sides write. Getting that wrong is a data race in the pane buffers, so it is kept this narrow."""
+        loop = self._loop
+        while not self.closed:
+            self._can_read.wait()
+            if self.closed:
+                return
+            try:
+                chunk = self.pty.read(65536)
+            except OSError:
+                chunk = b""             # the console is gone — same as EOF, and die() says which
+            if not chunk:
+                loop.call_soon_threadsafe(self._read_eof)
+                return
+            loop.call_soon_threadsafe(self._read_gave, chunk)
+
+    def _read_gave(self, chunk: bytes) -> None:
+        """On the loop again. The tail of `_on_readable`, minus the draining — the thread did that."""
+        if self.closed:
+            return
+        self.pending += chunk
+        if self.flush_handle is None:
+            self.flush_handle = asyncio.get_running_loop().call_later(COALESCE_MS / 1000, self._flush)
+        self._flow()
+
+    def _read_eof(self) -> None:
+        if not self.closed:
+            self.die("pty eof")
 
     def _backpressure(self) -> int:
         """The furthest-behind browser's unacked bytes + pending not yet sent. 0 when nobody is attached —
@@ -1095,6 +1154,15 @@ class Session:
                 return
             if n:
                 del self.inq[:n]
+        if self.pty.blocking:
+            # **Written straight through, with no add_writer.** WriteFile waits when the console's
+            # input pipe is full instead of returning short, so there is nothing to wait *for* — the
+            # write above already took all of it. The cost is that a paste larger than the pipe's
+            # buffer stalls the loop for as long as the console takes to drain it. Input is typed or
+            # pasted, not streamed, so that is bounded; if it ever shows up, it is a second thread
+            # and not a redesign (#29 step 2).
+            self.inq.clear()
+            return
         loop = asyncio.get_running_loop()
         if self.inq and not self.writing:
             loop.add_writer(self.pty.fileno(), self._pump_input)
@@ -1176,7 +1244,7 @@ class Session:
             try:
                 asyncio.get_running_loop().remove_writer(self.pty.fileno())
             except Exception:
-                pass
+                pass                         # blocking ptys never set `writing`, so this is POSIX only
             self.writing = False
         # Salvage what the shell emitted just before dying (an exit echo, say). **Within the budget only** —
         # SIGHUP has not been sent yet, so the child can still write here, and then when this loop ends is
@@ -1204,6 +1272,11 @@ class Session:
             self._emit(bytes(self.pending))
             self.pending.clear()
         self.pty.close()
+        # **Wake the reader so it can see `closed` and leave.** close() cancels the read it is sitting
+        # in (CancelIoEx); this releases one that is parked on the Event instead. Without it the
+        # thread outlives the pane — daemon, so it would not hold a shutdown, but it would hold the
+        # pane object and its ring buffer for as long as the daemon lives.
+        self._can_read.set()
         self.pty.hangup()
         asyncio.get_running_loop().call_later(KILL_GRACE_S, reaper.kill_if_alive, self)
         for a in list(self.attached):

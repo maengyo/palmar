@@ -175,6 +175,38 @@ if wall("import palmar.daemon", _import):
             loop.close()
     wall("the loop can wait for output (step 2)", _reader)
 
+    def _threaded():
+        """**Step 2, through the daemon's own path.** start_reading has to put a thread on it, the
+        bytes have to arrive in `pending` on the loop, and stop_reading has to park the thread rather
+        than let memory fill."""
+        import asyncio
+
+        async def go():
+            p = D["pane"]
+            p.start_reading()
+            if not p.reading:
+                raise RuntimeError("start_reading did not take")
+            if p._thread is None or not p._thread.is_alive():
+                raise RuntimeError("no reader thread is running")
+            for _ in range(40):
+                if p.pending:
+                    break
+                await asyncio.sleep(0.1)
+            if not p.pending:
+                raise RuntimeError("the thread read nothing into pending in 4s")
+            say("    pending after the wait:", len(p.pending), "bytes ·", repr(bytes(p.pending[:40])))
+            p.stop_reading()
+            if p._can_read.is_set():
+                raise RuntimeError("stop_reading did not park the thread")
+            say("    stop_reading parked it")
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(go())
+        finally:
+            loop.close()
+    wall("the daemon reads on a thread (step 2)", _threaded)
+
     def _bytes():
         p = D.get("pane")
         if p is None:
@@ -185,38 +217,6 @@ if wall("import palmar.daemon", _import):
         say("    first bytes:", repr(got[:60]))
     wall("a pane prints something", _bytes)
 
-    def _reader():
-        """**The read path, which is step 2 and the largest piece left.** add_reader has no Windows
-        equivalent, so this is what the daemon cannot yet do: be told when there is output."""
-        import asyncio
-        loop = asyncio.new_event_loop()
-        try:
-            p = D.get("pane")
-            fd = p.pty.fileno() if p else None
-            if fd is None:
-                raise NotImplementedError("ConPty has no fileno -- the loop cannot wait on it (blocking=%r)"
-                                          % getattr(p.pty, "blocking", "?"))
-            loop.add_reader(fd, lambda: None)
-        finally:
-            loop.close()
-    wall("the loop can wait for output (step 2)", _reader)
-
-    def _bytes():
-        """Does a pane actually produce bytes? The blocking read is what step 2 has to wrap."""
-        p = D.get("pane")
-        if p is None:
-            raise RuntimeError("no pane to read from")
-        got = b""
-        end = time.time() + 6
-        while time.time() < end and len(got) < 16:
-            chunk = p.pty.read(65536)
-            if not chunk:
-                break
-            got += chunk
-        if not got:
-            raise RuntimeError("the pane printed nothing in 6s")
-        say("    first bytes:", repr(got[:60]))
-    wall("a pane prints something", _bytes)
 
     pane = D.get("pane")
     if pane is not None:
