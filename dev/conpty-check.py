@@ -627,6 +627,155 @@ def _resize():
         "the stream survived a resize" if b"line39" in got else "**output stopped after the resize**")
 
 
+
+@guarded("can the loop read a ConPTY without a thread?")
+def _proactor():
+    """**The question #29 step 2 turns on.** The read path is shaped around `read()` blocking, which
+    means a thread, which means back-pressure has to be re-expressed as "the thread stops reading".
+    That is the biggest single piece left. If asyncio can wait on the ConPTY directly, none of it is
+    needed and the POSIX shape carries over.
+
+    Why it might work: `add_reader` is not the only way in. ProactorEventLoop has `connect_read_pipe`,
+    which is what asyncio already uses for subprocess pipes on Windows, and it wants a handle opened
+    with FILE_FLAG_OVERLAPPED. `CreatePipe` cannot make one — but **we create the ConPTY's pipes
+    ourselves**, so a named pipe with that flag can go in instead. Whether ConPTY accepts one, and
+    whether bytes really arrive, is what this measures.
+
+    Why it might not: ConPTY may refuse a named pipe, or accept it and write nothing; and the handle
+    passes through `msvcrt.open_osfhandle`, which takes ownership."""
+    import asyncio
+    import msvcrt
+    from ctypes import byref, sizeof, wintypes
+    import ctypes
+    from palmar import conpty
+    k32 = conpty.kernel32
+
+    # ── the control. This is the measurement docs/windows.md already records; re-run it so the
+    # comparison is from one machine and one afternoon rather than from memory.
+    loop = asyncio.ProactorEventLoop()
+    try:
+        import socket
+        a, b = socket.socketpair()
+        try:
+            loop.add_reader(a.fileno(), lambda: None)
+            say(HM, "add_reader worked on a socket — that would be new")
+        except NotImplementedError:
+            say(OK, "add_reader raises NotImplementedError (the reason step 2 exists)")
+        except Exception as e:
+            say(HM, "add_reader raised something else:", type(e).__name__, e)
+        finally:
+            a.close(); b.close()
+    finally:
+        loop.close()
+
+    # ── an overlapped pipe for the console's output ─────────────────────────────
+    PIPE_ACCESS_INBOUND = 0x00000001
+    FILE_FLAG_OVERLAPPED = 0x40000000
+    FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000
+    GENERIC_WRITE = 0x40000000
+    OPEN_EXISTING = 3
+    INVALID = ctypes.c_void_p(-1).value
+
+    # Declared, not guessed — the lesson from 2026-09-11.
+    k32.CreateNamedPipeW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                     wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+                                     wintypes.DWORD, ctypes.POINTER(conpty.SECURITY_ATTRIBUTES)]
+    k32.CreateNamedPipeW.restype = wintypes.HANDLE
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                ctypes.POINTER(conpty.SECURITY_ATTRIBUTES), wintypes.DWORD,
+                                wintypes.DWORD, wintypes.HANDLE]
+    k32.CreateFileW.restype = wintypes.HANDLE
+
+    made = {}
+
+    def overlapped_pair():
+        name = r"\\.\pipe\palmar-probe-%d-%d" % (os.getpid(), int(time.time() * 1000) % 1000000)
+        sa = conpty.SECURITY_ATTRIBUTES(sizeof(conpty.SECURITY_ATTRIBUTES), None, True)
+        r = k32.CreateNamedPipeW(
+            name, PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+            0, 1, 65536, 65536, 0, byref(sa))
+        if r == INVALID or not r:
+            raise OSError(ctypes.get_last_error(), "CreateNamedPipeW")
+        w = k32.CreateFileW(name, GENERIC_WRITE, 0, byref(sa), OPEN_EXISTING, 0, None)
+        if w == INVALID or not w:
+            raise OSError(ctypes.get_last_error(), "CreateFileW(client end)")
+        made["name"] = name
+        return wintypes.HANDLE(r), wintypes.HANDLE(w)
+
+    path = script("chatty.py", [
+        "import sys, time",
+        "for i in range(5):",
+        "    sys.stdout.write('LINE%d' % i + chr(10)); sys.stdout.flush(); time.sleep(0.05)",
+        "sys.stdout.write('MARKERdone' + chr(10)); sys.stdout.flush()",
+        "time.sleep(3)",
+    ])
+
+    p = conpty.ConPty()
+    try:
+        p.spawn([sys.executable, "-u", path], rows=30, cols=100, out_pipe=overlapped_pair)
+    except Exception as e:
+        say(NO, "**ConPTY would not take a named pipe**:", type(e).__name__, e)
+        say("    then step 2 keeps its thread; that is the plan already written down")
+        return
+    say(OK, "ConPTY accepted an overlapped named pipe —", made.get("name", "?"))
+
+    # msvcrt.open_osfhandle **takes ownership**: closing the fd closes the handle. Hand the handle
+    # over and stop ConPty from closing it too, or the second close is on a stranger's handle.
+    handle = p._out_r
+    p._out_r = None
+    fd = msvcrt.open_osfhandle(handle.value if hasattr(handle, "value") else handle, os.O_RDONLY)
+    pipe = open(fd, "rb", buffering=0)
+
+    got = bytearray()
+
+    class Proto(asyncio.Protocol):
+        def data_received(self, data):
+            got.extend(data)
+
+    async def listen():
+        loop2 = asyncio.get_running_loop()
+        say("    loop is", type(loop2).__name__)
+        tr, _ = await loop2.connect_read_pipe(Proto, pipe)
+        try:
+            for _ in range(60):
+                if b"MARKERdone" in bytes(got):
+                    return True
+                await asyncio.sleep(0.1)
+        finally:
+            tr.close()
+        return False
+
+    ok = False
+    err = None
+    try:
+        loop3 = asyncio.ProactorEventLoop()
+        try:
+            ok = loop3.run_until_complete(listen())
+        finally:
+            loop3.close()
+    except Exception as e:
+        err = e
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+        p.close()
+
+    if err is not None:
+        say(NO, "**connect_read_pipe refused it**:", type(err).__name__, err)
+        say("    step 2 keeps its thread.")
+        return
+    say("    bytes through the loop:", len(got), "·", repr(bytes(got)[:60]))
+    if ok:
+        say(OK, "**the loop read a ConPTY with no thread.** Step 2 can keep the POSIX shape:")
+        say("    back-pressure stays add_reader/remove_reader, not a thread that stops reading.")
+    elif got:
+        say(HM, "some bytes arrived but the marker never did — partial, and not good enough to build on")
+    else:
+        say(NO, "**no bytes.** ConPTY took the pipe and wrote nothing into it; step 2 keeps its thread")
+
+
 head("result")
 if FAILED:
     say(NO, "failed:", ", ".join(sorted(set(FAILED))))

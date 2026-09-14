@@ -201,7 +201,7 @@ class ConPty:
         self.closed = False
 
     # ── starting ───────────────────────────────────────────────────────
-    def spawn(self, argv, env=None, cwd=None, rows: int = 24, cols: int = 80) -> None:
+    def spawn(self, argv, env=None, cwd=None, rows: int = 24, cols: int = 80, out_pipe=None) -> None:
         """Start `argv` inside a new pseudo-console.
 
         **Takes a list, like the POSIX side**, so the daemon never has to know which platform it is
@@ -216,11 +216,19 @@ class ConPty:
 
         sa = SECURITY_ATTRIBUTES(sizeof(SECURITY_ATTRIBUTES), None, True)
         in_r = wintypes.HANDLE(); in_w = wintypes.HANDLE()
-        out_r = wintypes.HANDLE(); out_w = wintypes.HANDLE()
         if not kernel32.CreatePipe(byref(in_r), byref(in_w), byref(sa), 0):
             _err("CreatePipe(in)")
-        if not kernel32.CreatePipe(byref(out_r), byref(out_w), byref(sa), 0):
-            _err("CreatePipe(out)")
+        # **Where the output pipe comes from is a seam.** `CreatePipe` makes an anonymous pipe, which
+        # cannot be opened for overlapped I/O — so reading it means blocking, which means a thread.
+        # A named pipe created with FILE_FLAG_OVERLAPPED can go to asyncio's Proactor loop instead,
+        # and whether ConPTY accepts one is a question for a machine, not for reasoning. `out_pipe`
+        # lets a probe answer it without a second copy of everything below (#29 step 2).
+        if out_pipe is not None:
+            out_r, out_w = out_pipe()
+        else:
+            out_r = wintypes.HANDLE(); out_w = wintypes.HANDLE()
+            if not kernel32.CreatePipe(byref(out_r), byref(out_w), byref(sa), 0):
+                _err("CreatePipe(out)")
 
         # **The console gets the far ends.** It reads what we write into in_w and writes what we
         # read out of out_r; we must let go of the two it owns or the pipes never see EOF.
