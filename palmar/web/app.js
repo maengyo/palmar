@@ -470,8 +470,10 @@ class Tile {
     // localStorage still held f while the screen showed the default).
     layout[s.id] = { x, y, w, h, z };
     if (saved && saved.f) layout[s.id].f = saved.f;
+    if (saved && saved.g) layout[s.id].g = saved.g;   // groups survive a reload, like the position
     saveLayout();
     cvScroll.appendChild(e);
+    paintGroups();      // a group survives a reload, so a restored tile has to come back wearing it
 
     // xterm — the browser does the terminal emulation (AGENTS.md principle 1)
     this.term = new Terminal({
@@ -840,7 +842,11 @@ class Tile {
 
   persist() {
     const r = this.rect();
+    // **Keep the group.** This rewrites the entry wholesale, which is how the text size was thrown
+    // away once before (see below) — membership would have gone the same way on every drag.
+    const g = layout[this.id] && layout[this.id].g;
     layout[this.id] = { x: r.x, y: r.y, w: r.w, h: r.h, z: parseInt(this.el.style.zIndex, 10) || 0 };
+    if (g) layout[this.id].g = g;
     const f = this.term.options.fontSize;
     if (f && Math.abs(f - FONT_PX) > 0.01) layout[this.id].f = f;   // the default is not written
     saveLayout();
@@ -849,6 +855,9 @@ class Tile {
   dragify() {
     const bar = this.el.firstChild, grip = this.gripEl;
     let mode = null, sx = 0, sy = 0, ox = 0, oy = 0, ow = 0, oh = 0;
+    // Group state for one drag: who moves with me, where each started, and the hold that makes a group.
+    let party = [], starts = new Map(), solo = false;
+    let overId = null, overSince = 0, lastX = 0, lastY = 0, joined = null;
     const down = (m) => (ev) => {
       // Buttons, input fields and the confirm strip on the title bar are not a drag (#31: .cl and .cfm joined here)
       // Only .sz.own is excluded — the ordinary size readout is part of the title bar and should drag, and it
@@ -857,6 +866,13 @@ class Tile {
       if (ev.button !== 0 || ev.target.closest('.xp, .rn, .cl, .ed, .cfm, .sz.own') || this.el.classList.contains('max')) return;
       mode = m; sx = ev.clientX; sy = ev.clientY;
       ({ x: ox, y: oy, w: ow, h: oh } = this.rect());
+      // **Alt takes one window out of its group.** A group moves together, so there has to be a way to
+      // mean "just this one" — and it is the same gesture that leaves it behind when you let go.
+      solo = !!(ev.altKey && m === 'move' && layout[this.id] && layout[this.id].g);
+      party = (m === 'move' && !solo) ? groupOf(this.id) : [this.id];
+      starts = new Map(party.map((id) => [id, { x: layout[id].x, y: layout[id].y }]));
+      overId = null; overSince = 0; joined = null;
+      for (const id of party) { const t = tiles.get(id); if (t) t.el.classList.add('drag'); }
       this.el.classList.add('drag');
       ev.currentTarget.setPointerCapture(ev.pointerId);
       ev.preventDefault();
@@ -866,10 +882,43 @@ class Tile {
       const dx = ev.clientX - sx, dy = ev.clientY - sy;
       // Move the minimap rectangle along using **the value just computed** — do not ask the DOM again
       if (mode === 'move') {
-        const nx = Math.max(0, ox + dx), ny = Math.max(0, oy + dy);
-        this.el.style.left = nx + 'px';
-        this.el.style.top = ny + 'px';
-        mmSet(this.id, nx, ny, ow, oh);
+        // Everyone in the party moves by the same amount, clamped so no member crosses the origin.
+        let mdx = dx, mdy = dy;
+        for (const id of party) {
+          const st = starts.get(id);
+          mdx = Math.max(mdx, -st.x);
+          mdy = Math.max(mdy, -st.y);
+        }
+        for (const id of party) {
+          const t = tiles.get(id), st = starts.get(id), r = layout[id];
+          if (!t || !r) continue;
+          const nx2 = st.x + mdx, ny2 = st.y + mdy;
+          t.el.style.left = nx2 + 'px';
+          t.el.style.top = ny2 + 'px';
+          mmSet(id, nx2, ny2, r.w, r.h);
+        }
+        // **The hold.** Still, over a window that is not already travelling with me, for long enough.
+        // Movement resets it — a hand is never perfectly still, so "still" has a few pixels in it.
+        const moved = Math.abs(ev.clientX - lastX) + Math.abs(ev.clientY - lastY);
+        lastX = ev.clientX; lastY = ev.clientY;
+        const under = paneUnder(ev.clientX, ev.clientY, party);
+        if (!under || under !== overId || moved > GROUP_STILL) {
+          if (overId) markHold(overId, false);
+          overId = under; overSince = under ? Date.now() : 0;
+          if (under) markHold(under, true);
+        } else if (overId && !joined && Date.now() - overSince >= GROUP_HOLD_MS) {
+          joined = joinGroups(this.id, overId);
+          markHold(overId, false);
+          party = groupOf(this.id);
+          // Whoever just joined starts from where they are — they are not being dragged, they are
+          // being joined to something that is.
+          for (const id of party) if (!starts.has(id)) starts.set(id, { x: layout[id].x, y: layout[id].y });
+          for (const id of party) { const t = tiles.get(id); if (t) t.el.classList.add('drag'); }
+          const n = party.length;
+          toast([{ b: 'grouped ' + n + (n > 1 ? ' windows' : ' window') },
+                 'they move together now — hold ' + (IS_MAC ? '⌥' : 'Alt') + ' while dragging to take one out',
+                 { a: 'undo', on: () => { undoJoin(joined); joined = null; } }]);
+        }
       } else {
         const nw = Math.max(MIN_W, ow + dx), nh = Math.max(MIN_H, oh + dy);
         this.el.style.width = nw + 'px';
@@ -880,7 +929,15 @@ class Tile {
     const up = () => {
       if (!mode) return;
       const was = mode; mode = null;
+      if (overId) { markHold(overId, false); overId = null; }
+      for (const id of party) { const t = tiles.get(id); if (t) t.el.classList.remove('drag'); }
       this.el.classList.remove('drag');
+      if (solo) {
+        const left = leaveGroup(this.id);
+        solo = false;
+        if (left) toast([{ b: this.nameEl.textContent || 'window' }, 'left its group']);
+      }
+      for (const id of party) { const t = tiles.get(id); if (t && t !== this) t.persist(); }
       paintTidy();          // moving a window creates or removes slack to close up
       if (was === 'size') this.refit();   // tell the PTY only when the resize is let go (spike D)
       this.persist();
@@ -1038,6 +1095,138 @@ function firstFree(w, h, canvasId) {
 // canvas grows without limit (⑩) that search cannot fail, so there is never anything to push. The other
 // half of the decision — a **new** terminal sits down and shoves — needs somewhere on screen for a person
 // to aim it, and there is no click-to-place yet. That is a person's call, not this file's.
+// ── groups (2026-09-14, 사용자) ─────────────────────────────────────────────
+// **Hold a window still over another and they travel together.** Asked for as "끌어다가 다른
+// 터미널 위에 올려놓고 몇 초 이상 가만히 두면 그 두 터미널은 그룹화" — a lighter thing than a
+// canvas: a canvas is a different workbench, a group is a set that lives together on one.
+//
+// It fits here because push-aside already settled when overlap is allowed: **windows may overlap
+// while the hand is down**, and only the drop resolves it. So the hold happens in a moment that
+// already exists, and nothing had to be loosened to make room for it.
+//
+// Membership rides in the same store as the position (⑩ provisional, `palmar-tiles`) — and lands in
+// the same undecided as the coordinates do (③, #2). A group is an id, kept on each member.
+const GROUP_HOLD_MS = 900;      // still over another window this long and they join
+const GROUP_STILL = 6;          // px; a hand is never perfectly still, and a drift is not a hold
+
+function groupOf(id) {
+  const g = layout[id] && layout[id].g;
+  if (!g) return [id];
+  const out = [];
+  for (const t of tiles.values()) if (layout[t.id] && layout[t.id].g === g) out.push(t.id);
+  return out.length ? out : [id];
+}
+
+//: The rectangle a group occupies — the union of its members. Push-aside moves **blocks**, and a
+//: group is one block; without this a push could walk through the middle of a group and take it apart.
+function groupRect(ids) {
+  let r = null;
+  for (const id of ids) {
+    const q = layout[id];
+    if (!q) continue;
+    if (!r) { r = { x: q.x, y: q.y, w: q.w, h: q.h }; continue; }
+    const x2 = Math.max(r.x + r.w, q.x + q.w), y2 = Math.max(r.y + r.h, q.y + q.h);
+    r.x = Math.min(r.x, q.x); r.y = Math.min(r.y, q.y);
+    r.w = x2 - r.x; r.h = y2 - r.y;
+  }
+  return r;
+}
+
+//: Which pane is under the pointer, ignoring the ones already travelling with me.
+//:
+//: **`elementsFromPoint`, plural.** The window being dragged is the one directly under the cursor —
+//: you are holding its title bar — so asking for the single topmost element always answered "you",
+//: and the hold could never find anything to join. The stack has to be walked past the party.
+//:
+//: Hit testing rather than arithmetic, for the same reason the resize grip is tested that way: the
+//: answer has to be the window a person sees under the pointer.
+function paneUnder(clientX, clientY, ignore) {
+  const stack = document.elementsFromPoint(clientX, clientY);
+  for (const el of stack) {
+    const tile = el && el.closest ? el.closest('.tile') : null;
+    if (!tile) continue;
+    for (const t of tiles.values()) {
+      if (t.el !== tile) continue;
+      if (ignore && ignore.indexOf(t.id) >= 0) break;   // mine — keep looking underneath
+      return t.visible() ? t.id : null;
+    }
+  }
+  return null;
+}
+
+//: The window says it is about to be joined. **Without this a group forms out of nowhere** — the
+//: gesture is "hold still", which from the inside is indistinguishable from "nothing is happening".
+function markHold(id, on) {
+  const t = tiles.get(id);
+  if (t) t.el.classList.toggle('joining', !!on);
+}
+
+function undoJoin(changed) {
+  if (!changed) return;
+  for (const c of changed) {
+    if (!layout[c.id]) continue;
+    const next = Object.assign({}, layout[c.id]);
+    if (c.was) next.g = c.was; else delete next.g;
+    layout[c.id] = next;
+  }
+  saveLayout();
+  paintGroups();
+}
+
+function newGroupId() {
+  return 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+//: Join `a`'s group and `b`'s group into one. Returns the ids that changed, for the undo.
+function joinGroups(a, b) {
+  const mine = groupOf(a), theirs = groupOf(b);
+  const g = (layout[a] && layout[a].g) || (layout[b] && layout[b].g) || newGroupId();
+  const changed = [];
+  for (const id of mine.concat(theirs)) {
+    if (!layout[id] || layout[id].g === g) continue;
+    changed.push({ id, was: layout[id].g || null });
+    layout[id] = Object.assign({}, layout[id], { g });
+  }
+  saveLayout();
+  paintGroups();
+  return changed;
+}
+
+function leaveGroup(id) {
+  if (!layout[id] || !layout[id].g) return null;
+  const was = layout[id].g;
+  const left = Object.assign({}, layout[id]);
+  delete left.g;
+  layout[id] = left;
+  // A group of one is not a group. If only one member is left, it stops being one too.
+  const rest = [...tiles.values()].filter((t) => layout[t.id] && layout[t.id].g === was);
+  if (rest.length === 1) {
+    const only = Object.assign({}, layout[rest[0].id]);
+    delete only.g;
+    layout[rest[0].id] = only;
+  }
+  saveLayout();
+  paintGroups();
+  return was;
+}
+
+//: The colour is derived from the id, so a group looks the same on every browser without the daemon
+//: knowing anything about groups (protocol.md "없는 것").
+function paintGroups() {
+  const seen = new Map();
+  for (const t of tiles.values()) {
+    const g = layout[t.id] && layout[t.id].g;
+    t.el.classList.toggle('grouped', !!g);
+    if (!g) { t.el.style.removeProperty('--group'); continue; }
+    if (!seen.has(g)) {
+      let n = 0;
+      for (let i = 0; i < g.length; i++) n = (n * 31 + g.charCodeAt(i)) >>> 0;
+      seen.set(g, (n % 360));
+    }
+    t.el.style.setProperty('--group', 'hsl(' + seen.get(g) + ' 70% 55%)');
+  }
+}
+
 const PUSH_ROUNDS = 20;                 // termcanvas's limit, the number decisions.md names
 
 // The gap counts: two windows a hair apart read as touching, and that gap is the grid the eye already sees.
@@ -1071,10 +1260,23 @@ function shove(p, r, dir) {
 function pushAside(canvasId, anchorId) {
   const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
   if (mine.length < 2) return [];
+  // **Blocks, not windows.** A group travels together, so it is pushed together — one rectangle for
+  // the whole set. Without this a push could walk between two members and take the group apart, which
+  // is the one thing a group is for (2026-09-14).
+  const key = (id) => (layout[id] && layout[id].g) || id;
+  const members = new Map();          // block key → the ids inside it
+  for (const t of mine) {
+    const k = key(t.id);
+    if (!members.has(k)) members.set(k, []);
+    members.get(k).push(t.id);
+  }
   // **Work on a copy.** A run that hits the round limit has to leave the screen exactly as it was, rather
   // than stop halfway with windows parked where nobody asked for them.
-  const box = new Map(mine.map((t) => [t.id, Object.assign({}, layout[t.id])]));
-  let wave = [{ id: anchorId, dir: null }];
+  const box = new Map();
+  for (const [k, ids] of members) box.set(k, groupRect(ids));
+  const start = new Map([...box].map(([k, r]) => [k, { x: r.x, y: r.y }]));
+  const anchorKey = key(anchorId);
+  let wave = [{ id: anchorKey, dir: null }];
   for (let round = 0; wave.length; round++) {
     if (round >= PUSH_ROUNDS) return [];
     const next = new Map();
@@ -1082,7 +1284,7 @@ function pushAside(canvasId, anchorId) {
       const p = box.get(id);
       if (!p) continue;
       for (const [oid, r] of box) {
-        if (oid === id || oid === anchorId || !hits(p, r)) continue;
+        if (oid === id || oid === anchorKey || !hits(p, r)) continue;
         const w = shove(p, r, dir);
         r.x = w.x; r.y = w.y;
         next.set(oid, { id: oid, dir: w.d });   // shoved twice in one wave: the later shove has the last word
@@ -1090,10 +1292,16 @@ function pushAside(canvasId, anchorId) {
     }
     wave = [...next.values()];
   }
+  // Back from blocks to windows: every member moves by its block's delta.
   const moves = [];
-  for (const [id, r] of box) {
-    const was = layout[id];
-    if (r.x !== was.x || r.y !== was.y) moves.push({ id, x0: was.x, y0: was.y, x: r.x, y: r.y });
+  for (const [k, r] of box) {
+    const from = start.get(k);
+    const dx = r.x - from.x, dy = r.y - from.y;
+    if (!dx && !dy) continue;
+    for (const id of members.get(k)) {
+      const was = layout[id];
+      moves.push({ id, x0: was.x, y0: was.y, x: was.x + dx, y: was.y + dy });
+    }
   }
   return moves;
 }
@@ -2825,6 +3033,8 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // can also be asked directly — the cascade and the round limit need more windows than a
                   // hand can comfortably drag into place one at a time.
                   pushAside, applyPush, hits, firstFree,
+                  // Groups: the model is testable without a hand, the gesture needs one.
+                  groupOf, groupRect, joinGroups, leaveGroup, paneUnder,
                   // Path joining is platform-shaped and the platform it gets wrong has no Chrome
                   // here — so it is tested directly rather than by driving the rail.
                   joinDir,

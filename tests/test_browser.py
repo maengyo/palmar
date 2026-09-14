@@ -1167,5 +1167,188 @@ class ANewPaneFitsItsWindow(unittest.TestCase):
         self.assertEqual(r["rows"], r["want"]["rows"])
 
 
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class Grouping(unittest.TestCase):
+    """Hold a window still over another and they travel together.
+
+    A lighter thing than a canvas: a canvas is a different workbench, a group is a set that lives
+    together on one (asked for 2026-09-14). It fits because push-aside already settled when overlap
+    is allowed — windows may overlap while the hand is down, and only the drop resolves it — so the
+    hold happens in a moment that already existed."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+        cls.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          for (const n of ['g1','g2','g3'])
+            await fetch('/api/sessions?token='+T,{method:'POST',
+              headers:{'content-type':'application/json'},
+              body:JSON.stringify({cwd:%s,name:n})});})()""" % json.dumps(cls.d.home))
+        time.sleep(5)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def setUp(self):
+        """Every test opens its own board: no groups, nothing where it was left."""
+        self.b.ev("""(()=>{const P=window.palmar, L=P.layout();
+          for (const t of P.tiles.values()) if (L[t.id]) { const n=Object.assign({},L[t.id]); delete n.g; L[t.id]=n; }
+          const t=document.querySelector('.toast'); if(t){t.classList.remove('show');t.textContent='';}
+          return 1;})()""")
+
+    JS = """
+      const P = window.palmar, L = P.layout();
+      const by = (n) => [...P.tiles.values()].find((t) => t.s.name === n);
+      const put = (n, x, y, w, h) => { const t = by(n);
+        L[t.id] = Object.assign({}, L[t.id], {x:x, y:y, w:w, h:h});
+        t.el.style.transition='none';
+        t.el.style.left=x+'px'; t.el.style.top=y+'px'; t.el.style.width=w+'px'; t.el.style.height=h+'px';
+        void t.el.offsetWidth; t.el.style.transition='';
+        return t.id; };
+      const at = (n) => { const r = L[by(n).id]; return [r.x, r.y]; };
+    """
+
+    def bench(self, body):
+        return self.b.ev("(()=>{" + self.JS + "\n" + body + "})()")
+
+    def test_the_model_joins_and_leaves(self):
+        """Without a hand: two windows join, a third joins the same group, one leaves."""
+        r = self.bench("""
+          const a = by('g1').id, b = by('g2').id, c = by('g3').id;
+          P.joinGroups(a, b);
+          const two = P.groupOf(a).length;
+          P.joinGroups(c, b);
+          const three = P.groupOf(a).length;
+          P.leaveGroup(c);
+          return {two: two, three: three, after: P.groupOf(a).length, cAlone: P.groupOf(c).length};
+        """)
+        self.assertEqual([r["two"], r["three"], r["after"], r["cAlone"]], [2, 3, 2, 1])
+
+    def test_a_group_of_one_is_not_a_group(self):
+        """Leaving a pair has to dissolve it, or the other window keeps a colour and a promise that
+        no longer means anything."""
+        r = self.bench("""
+          P.joinGroups(by('g1').id, by('g2').id);
+          P.leaveGroup(by('g1').id);
+          return {a: P.groupOf(by('g1').id).length, b: P.groupOf(by('g2').id).length,
+                  marked: document.querySelectorAll('.tile.grouped').length};
+        """)
+        self.assertEqual([r["a"], r["b"], r["marked"]], [1, 1, 0])
+
+    def test_push_aside_moves_a_group_as_one_block(self):
+        """**The reason groupRect exists.** Pushed window by window, a push could walk between two
+        members and take the group apart — which is the one thing a group is for."""
+        r = self.bench("""
+          // g1 must actually land on g2, or there is nothing to push.
+          put('g1', 40, 40, 260, 200);    // spans 40..300
+          put('g2', 260, 40, 200, 200);   // g2 and g3 are a group, side by side — 260..460
+          put('g3', 480, 40, 200, 200);
+          P.joinGroups(by('g2').id, by('g3').id);
+          const gap0 = at('g3')[0] - at('g2')[0];
+          P.applyPush(P.pushAside(by('g1').s.canvas, by('g1').id));
+          return {gap0: gap0, gap1: at('g3')[0] - at('g2')[0], g2: at('g2'), g3: at('g3')};
+        """)
+        self.assertEqual(r["gap1"], r["gap0"],
+                         "the group was stretched: %r -> %r" % (r["g2"], r["g3"]))
+        self.assertGreater(r["g2"][0], 260, "the group did not move out of the way at all")
+
+    # ── through the hand ─────────────────────────────────────────────────────
+    def press(self, name, **kw):
+        box = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name===%s);
+          const r=t.el.querySelector('.tb').getBoundingClientRect();
+          return {x:r.left+r.width/2, y:r.top+r.height/2};})()""" % json.dumps(name))
+        return box["x"], box["y"]
+
+    def send(self, **kw):
+        self.b.ws.call("Input.dispatchMouseEvent", dict(button="left", **kw))
+
+    def test_holding_one_over_another_groups_them(self):
+        """The gesture itself. Moving resets the hold, so it is dragged there and then left alone."""
+        self.bench("put('g1',60,60,240,200); put('g2',360,60,240,200); put('g3',60,400,240,200); return 1;")
+        x, y = self.press("g1")
+        tx, ty = self.press("g2")
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
+        # Still, over it, for longer than the hold. A jiggle inside GROUP_STILL must not reset it.
+        # **Both facts in one round trip.** Asking twice let the group form between the questions, so
+        # the highlight was gone by the time the second one arrived and the gesture looked invisible.
+        lit = False
+        for _ in range(14):
+            st = self.b.ev("""(()=>{const P=window.palmar;
+              const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+              return {lit: document.querySelectorAll('.tile.joining').length > 0,
+                      n: P.groupOf(by('g1').id).length};})()""")
+            lit = lit or st["lit"]
+            if st["n"] == 2:
+                break
+            time.sleep(0.18)
+            self.send(type="mouseMoved", x=tx + 1, y=ty, buttons=1)
+        self.send(type="mouseReleased", x=tx + 1, y=ty, clickCount=1, buttons=0)
+        time.sleep(0.4)
+        n = self.b.ev("""(()=>{const P=window.palmar;
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          return P.groupOf(by('g1').id).length;})()""")
+        self.assertEqual(n, 2, "holding one window over another did not group them")
+        self.assertTrue(lit, "nothing showed it was about to happen — the gesture is invisible")
+
+    def test_dragging_a_member_moves_the_whole_group(self):
+        self.bench("""put('g1',60,60,240,200); put('g2',360,60,240,200); put('g3',60,400,240,200);
+                      P.joinGroups(by('g1').id, by('g2').id); return 1;""")
+        before = self.bench("return {a: at('g1'), b: at('g2')};")
+        x, y = self.press("g1")
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x, y=y + 60 * i / 3, buttons=1)
+        self.send(type="mouseReleased", x=x, y=y + 60, clickCount=1, buttons=0)
+        time.sleep(0.5)
+        after = self.bench("return {a: at('g1'), b: at('g2')};")
+        self.assertGreater(after["a"][1], before["a"][1], "the dragged window did not move")
+        self.assertEqual(after["b"][1] - before["b"][1], after["a"][1] - before["a"][1],
+                         "the other member did not come with it: %r -> %r" % (before, after))
+
+    def test_alt_drag_takes_one_out(self):
+        """A group moves together, so there has to be a way to mean "just this one"."""
+        self.bench("""put('g1',60,60,240,200); put('g2',360,60,240,200); put('g3',60,400,240,200);
+                      P.joinGroups(by('g1').id, by('g2').id); return 1;""")
+        before = self.bench("return {b: at('g2')};")
+        x, y = self.press("g1")
+        self.b.ws.call("Input.dispatchMouseEvent",
+                       dict(button="left", type="mousePressed", x=x, y=y, clickCount=1,
+                            buttons=1, modifiers=1))          # 1 = Alt
+        for i in (1, 2, 3):
+            self.b.ws.call("Input.dispatchMouseEvent",
+                           dict(button="left", type="mouseMoved", x=x, y=y + 40 * i / 3,
+                                buttons=1, modifiers=1))
+        self.b.ws.call("Input.dispatchMouseEvent",
+                       dict(button="left", type="mouseReleased", x=x, y=y + 40, clickCount=1,
+                            buttons=0, modifiers=1))
+        time.sleep(0.5)
+        r = self.b.ev("""(()=>{const P=window.palmar;
+          const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
+          return {a: P.groupOf(by('g1').id).length, b: P.groupOf(by('g2').id).length};})()""")
+        after = self.bench("return {b: at('g2')};")
+        self.assertEqual([r["a"], r["b"]], [1, 1], "alt-drag did not take it out of the group")
+        self.assertEqual(after["b"], before["b"], "the one left behind moved anyway")
+
+    def test_a_group_survives_a_reload(self):
+        """Membership rides with the position, so it comes back the same way (③ provisional)."""
+        self.bench("P.joinGroups(by('g1').id, by('g2').id); return 1;")
+        # **saveLayout is debounced 150ms.** Reloading inside that window loses the group — and the
+        # position too, which it has always done. Waiting is the honest test of what is stored, not
+        # of how fast it is written.
+        time.sleep(0.6)
+        self.b.open(self.d.url)
+        time.sleep(4)
+        n = self.b.ev("""(()=>{const P=window.palmar;
+          const by=(x)=>[...P.tiles.values()].find(t=>t.s.name===x);
+          return by('g1') ? P.groupOf(by('g1').id).length : -1;})()""")
+        self.assertEqual(n, 2, "the group did not come back after a reload")
+
+
 if __name__ == "__main__":
     unittest.main()
