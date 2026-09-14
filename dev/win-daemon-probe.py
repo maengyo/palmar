@@ -188,13 +188,18 @@ if wall("import palmar.daemon", _import):
                 raise RuntimeError("start_reading did not take")
             if p._thread is None or not p._thread.is_alive():
                 raise RuntimeError("no reader thread is running")
+            # **Watch `produced`, not `pending`.** pending is a 5ms staging area -- _flush empties it
+            # into the ring and out to whoever is attached -- so looking there 100ms later finds
+            # nothing and says the thread read nothing. It had read plenty. `produced` is the total
+            # that has gone out and only grows.
             for _ in range(40):
-                if p.pending:
+                if p.produced:
                     break
                 await asyncio.sleep(0.1)
-            if not p.pending:
-                raise RuntimeError("the thread read nothing into pending in 4s")
-            say("    pending after the wait:", len(p.pending), "bytes ·", repr(bytes(p.pending[:40])))
+            if not p.produced:
+                raise RuntimeError("the thread produced nothing in 4s (thread alive=%r, can_read=%r)"
+                                   % (p._thread.is_alive(), p._can_read.is_set()))
+            say("    produced:", p.produced, "bytes")
             p.stop_reading()
             if p._can_read.is_set():
                 raise RuntimeError("stop_reading did not park the thread")
