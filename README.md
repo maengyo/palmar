@@ -34,7 +34,7 @@ different one closed; tidying up is a button, not a habit the canvas has.
 
 **Windows that belong together can travel together.** Hold one still over another — it lights up,
 then goes solid — and letting go there makes them a group: dragging any of them moves them all, and
-they line up as one tidy block inside a frame of their own. Move away before letting go and nothing
+they line up together inside a frame that follows the shape they make — an L stays an L. Move away before letting go and nothing
 happens. `Alt`-drag takes one back out. A group is lighter than a canvas: a canvas is a different
 workbench, a group is a set that lives together on one.
 

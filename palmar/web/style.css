@@ -602,10 +602,23 @@ body.fold-r .rail.right .rail-fold       { display: none; }
    group that owns no space is just a colour. The rectangle is drawn under the tiles, so it also
    shows the shape the group actually occupies, which is what makes an untidy one look untidy.
    It takes no pointer events: dragging, hit-testing and the resize grip are unchanged. */
+/* **The shape they occupy, not the box around it.** A bounding rectangle claimed a square the group
+   did not use, which is what "it takes up space of its own accord" was about. One padded cell per
+   member, unioned — three windows in two columns come out as a ㄱ and the frame is a ㄱ.
+   Opaque children inside a translucent parent: overlapping padding would otherwise compound into
+   darker seams and the union would read as rectangles that happened to meet. The two drop-shadows
+   trace the union's own edge, which no border on a wrapper can do. */
 .gbox {
-  position: absolute; z-index: 0; pointer-events: none; border-radius: 14px;
-  background: color-mix(in srgb, var(--group) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--group) 42%, transparent);
+  position: absolute; z-index: 0; pointer-events: none;
+  /* **The transparency lives here, and the cells are opaque.** Translucent cells would compound
+     where their padding overlaps and the union would read as rectangles that happened to meet.
+     The parent composites them into one layer first, then fades the whole shape once. */
+  opacity: .16;
+  /* Traces the union's own edge — the one thing a border on a wrapper cannot do. */
+  filter: drop-shadow(0 0 2px var(--group));
+}
+.gcell {
+  position: absolute; border-radius: 14px; background: var(--group);
   transition: left .35s cubic-bezier(.2,.8,.2,1), top .35s cubic-bezier(.2,.8,.2,1),
               width .35s cubic-bezier(.2,.8,.2,1), height .35s cubic-bezier(.2,.8,.2,1);
 }

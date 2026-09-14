@@ -1276,24 +1276,16 @@ function arrangeGroup(ids) {
   const r = groupRect(mine);
   const w = Math.max(...mine.map((id) => layout[id].w));
   const h = Math.max(...mine.map((id) => layout[id].h));
-  // **As wide as fits, with no empty cells.** Two rules, in that order.
+  // **As wide as fits, and it may end up an ㄱ.** The frame follows the shape the members actually
+  // occupy, so a last row with one window in it is not a hole any more — it is the shape (사용자,
+  // 2026-09-14: "굳이 사각형 안에 들어가게 하는 게 아니라 ㄱ 자 모양으로 묶어도 되잖아"). That
+  // removed the rule this used to carry about never leaving an empty cell, and with it the reason
+  // three windows had to be one row or none.
   //
-  // *No empty cells*: three windows in two columns leaves a hole, and a group that reserves a square
-  // it does not use is exactly the "it takes up space of its own accord" this was meant to fix.
-  //
-  // *As wide as fits*: the canvas grows downwards without limit and its width is finite, so a group
-  // laid out across spends the space there is instead of the space there always is — and terminals
-  // are read side by side. A log-of-the-ratio score like arrangeCanvas's was tried first and put
-  // three windows in a column, which ran off the bottom of the screen and was right by its own
-  // measure. The measure was wrong for a group.
+  // Wide first, because the canvas grows downwards without limit and its width is finite: across
+  // spends the space there is instead of the space there always is.
   const room = Math.max(1, (cvScroll.clientWidth || 1) - GAP * 2);
-  let cols = 1;
-  for (let c = mine.length; c >= 1; c--) {
-    if (c * (w + GAP) - GAP > room) continue;        // this many across does not fit
-    if (c * Math.ceil(mine.length / c) !== mine.length) continue;   // it would leave a hole
-    cols = c;
-    break;
-  }
+  const cols = Math.max(1, Math.min(mine.length, Math.floor((room + GAP) / (w + GAP))));
   mine.forEach((id, i) => {
     const x = Math.max(0, r.x + (i % cols) * (w + GAP));
     const y = Math.max(0, r.y + Math.floor(i / cols) * (h + GAP));
@@ -1380,10 +1372,23 @@ function paintGroups() {
       groupBoxes.set(g, box);
     }
     box.style.setProperty('--group', 'hsl(' + groupHue(g) + ' 70% 55%)');
-    box.style.left = Math.max(0, r.x - GROUP_PAD) + 'px';
-    box.style.top = Math.max(0, r.y - GROUP_PAD) + 'px';
-    box.style.width = (r.w + GROUP_PAD * 2) + 'px';
-    box.style.height = (r.h + GROUP_PAD * 2) + 'px';
+    // The wrapper is only a coordinate origin; the shape is the cells inside it.
+    box.style.left = '0px'; box.style.top = '0px';
+    box.style.width = '0px'; box.style.height = '0px';
+    // **One padded cell per member, and the shape is their union.** Opaque children inside a
+    // translucent parent: overlapping padding does not compound into darker seams the way stacked
+    // translucent boxes would, so an ㄱ reads as one shape rather than two rectangles that met.
+    const cells = box.children;
+    for (let i = cells.length; i < ids.length; i++) box.appendChild(el('div', 'gcell'));
+    while (box.children.length > ids.length) box.lastChild.remove();
+    ids.forEach((id, i) => {
+      const q = layout[id];
+      const c = box.children[i];
+      c.style.left = Math.max(0, q.x - GROUP_PAD) + 'px';
+      c.style.top = Math.max(0, q.y - GROUP_PAD) + 'px';
+      c.style.width = (q.w + GROUP_PAD * 2) + 'px';
+      c.style.height = (q.h + GROUP_PAD * 2) + 'px';
+    });
   }
   for (const [g, box] of groupBoxes) {
     if (keep.has(g)) continue;

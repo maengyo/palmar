@@ -1391,7 +1391,8 @@ class Grouping(unittest.TestCase):
         that ran off the bottom of the screen — right by its own measure, and the measure was wrong
         for a group (2026-09-14)."""
         r = self.bench("""
-          put('g1', 30, 30, 260, 190); put('g2', 600, 320, 260, 190); put('g3', 30, 320, 260, 190);
+          // Narrow enough that three fit across.
+          put('g1', 30, 30, 240, 190); put('g2', 600, 320, 240, 190); put('g3', 30, 320, 240, 190);
           P.joinGroups(by('g1').id, by('g2').id);
           P.joinGroups(by('g3').id, by('g1').id);
           P.arrangeGroup(P.groupOf(by('g1').id));
@@ -1411,26 +1412,56 @@ class Grouping(unittest.TestCase):
         self.assertNotEqual(r["a"][1], r["b"][1],
                             "two 700px windows were put side by side in %dpx: %r" % (r["room"], r))
 
-    def test_the_frame_is_one_rectangle_behind_them(self):
-        """One frame, not a tint on each — and it has to cover the members it names."""
+    def test_the_frame_follows_the_shape_not_a_box_around_it(self):
+        """**One cell per member, unioned — an ㄱ comes out an ㄱ** (user, 2026-09-14: "굳이 사각형
+        안에 들어가게 하는 게 아니라 ㄱ 자 모양으로 묶어도 되잖아"). A bounding rectangle claimed a
+        square the group did not use, which is what "it takes up space of its own accord" was about."""
         r = self.bench("""
-          put('g1', 60, 60, 200, 160); put('g2', 300, 60, 200, 160);
+          // Wide enough that only two fit across, so the third wraps and the shape is an ㄱ.
+          put('g1', 30, 30, 400, 200); put('g2', 700, 300, 400, 200); put('g3', 30, 300, 400, 200);
           P.joinGroups(by('g1').id, by('g2').id);
+          P.joinGroups(by('g3').id, by('g1').id);
           P.arrangeGroup(P.groupOf(by('g1').id));
           const boxes = [...document.querySelectorAll('.gbox')];
-          const r0 = P.groupRect(P.groupOf(by('g1').id));
-          const b = boxes[0];
-          return {n: boxes.length,
-                  boxL: parseInt(b.style.left), boxT: parseInt(b.style.top),
-                  boxW: parseInt(b.style.width), boxH: parseInt(b.style.height),
-                  rect: r0, pointer: getComputedStyle(b).pointerEvents};
+          const cells = [...boxes[0].children].map((c) => ({
+            x: parseInt(c.style.left), y: parseInt(c.style.top),
+            w: parseInt(c.style.width), h: parseInt(c.style.height)}));
+          const ids = P.groupOf(by('g1').id);
+          return {boxes: boxes.length, cells: cells, rect: P.groupRect(ids),
+                  pointer: getComputedStyle(boxes[0]).pointerEvents,
+                  at: ids.map((id) => [P.layout()[id].x, P.layout()[id].y])};
         """)
-        self.assertEqual(r["n"], 1, "a group drew %d frames" % r["n"])
-        self.assertLessEqual(r["boxL"], r["rect"]["x"])
-        self.assertLessEqual(r["boxT"], r["rect"]["y"])
-        self.assertGreaterEqual(r["boxL"] + r["boxW"], r["rect"]["x"] + r["rect"]["w"])
-        self.assertGreaterEqual(r["boxT"] + r["boxH"], r["rect"]["y"] + r["rect"]["h"])
+        self.assertEqual(r["boxes"], 1, "a group drew %d frames" % r["boxes"])
+        self.assertEqual(len(r["cells"]), 3, "the frame is not one cell per member")
         self.assertEqual(r["pointer"], "none", "the frame would swallow drags")
+        # Every member is covered by its own cell.
+        for (mx, my), c in zip(r["at"], r["cells"]):
+            self.assertLessEqual(c["x"], mx)
+            self.assertLessEqual(c["y"], my)
+        # **And the corner the group does not use is not covered.** That is the whole point: the
+        # bounding box would reach it, the union does not.
+        rect = r["rect"]
+        corner = (rect["x"] + rect["w"] - 10, rect["y"] + rect["h"] - 10)
+        inside = any(c["x"] <= corner[0] <= c["x"] + c["w"] and c["y"] <= corner[1] <= c["y"] + c["h"]
+                     for c in r["cells"])
+        self.assertFalse(inside,
+                         "the frame covers the empty corner — it is still a bounding box: %r" % r["cells"])
+
+    def test_it_wraps_into_an_L_rather_than_one_long_row(self):
+        """Windows too wide to sit three across wrap, and that is allowed to look like an ㄱ now —
+        the rule about never leaving an empty cell went away with the bounding box that made it
+        necessary."""
+        r = self.bench("""
+          put('g1', 30, 30, 400, 200); put('g2', 700, 300, 400, 200); put('g3', 30, 300, 400, 200);
+          P.joinGroups(by('g1').id, by('g2').id);
+          P.joinGroups(by('g3').id, by('g1').id);
+          P.arrangeGroup(P.groupOf(by('g1').id));
+          return {at: P.groupOf(by('g1').id).map((id)=>[P.layout()[id].x, P.layout()[id].y])};
+        """)
+        rows = sorted({p[1] for p in r["at"]})
+        self.assertEqual(len(rows), 2, "three 400px windows did not wrap onto two rows: %r" % r["at"])
+        top = [p for p in r["at"] if p[1] == rows[0]]
+        self.assertEqual(len(top), 2, "the top row is not full: %r" % r["at"])
 
     def test_a_group_survives_a_reload(self):
         """Membership rides with the position, so it comes back the same way (③ provisional)."""
