@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -771,6 +772,101 @@ class WhatProtocolPromises(unittest.TestCase):
             s = d.open_pane(name="fresh")
             # measured at the moment of creation, before the shell's first prompt reaches the ring
             self.assertIn(s["quiet"], (None,), "quiet was %r on a pane that has printed nothing" % s["quiet"])
+
+
+class Detaching(unittest.TestCase):
+    """`palmar` comes back and leaves the daemon running.
+
+    **The terminal was killing it.** The daemon caught SIGINT and SIGTERM but not SIGHUP, and closing
+    a terminal sends SIGHUP to that terminal's foreground process group -- measured 2026-09-14: two
+    seconds after the hangup it was gone, with every shell in it. Putting the UI in a window did not
+    help, because a window started from a terminal is in the same group; a session of its own is the
+    actual mechanism (principle 2, sessions outlive the UI).
+
+    --foreground is the way back for developing on it, and it is what every other test here uses:
+    a test that cannot terminate what it started leaks a daemon per class."""
+
+    def start(self, home, port, *extra):
+        from tests.helpers import PYTHON, REPO
+        return subprocess.run([PYTHON, "-m", "palmar", "--no-browser",
+                               "--port", str(port)] + list(extra),
+                              cwd=REPO, env=dict(os.environ, HOME=home, PYTHONPATH=REPO),
+                              capture_output=True, text=True, timeout=60)
+
+    def pid_of(self, port):
+        """**Only the daemon on this port.** Matching `palmar` loosely once killed the daemon a
+        person was using, on this machine (2026-09-14)."""
+        out = subprocess.run(["ps", "ax", "-o", "pid=,command="],
+                             capture_output=True, text=True).stdout
+        for line in out.splitlines():
+            if ("--port %d" % port) in line and "grep" not in line:
+                return int(line.split()[0])
+        return None
+
+    def test_it_returns_and_the_daemon_stays(self):
+        home = tempfile.mkdtemp(prefix="palmar-detach-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        from tests.helpers import free_port
+        port = free_port()
+        r = self.start(home, port)
+        self.addCleanup(self.start, home, port, "--stop")
+        self.assertEqual(r.returncode, 0, r.stderr[-400:])
+        # It came back -- that is the subprocess having exited at all, inside the timeout.
+        self.assertTrue(r.stdout.strip().startswith("http://"),
+                        "the address is still the last line of stdout: %r" % r.stdout[-200:])
+        pid = self.pid_of(port)
+        self.assertIsNotNone(pid, "it came back but left no daemon behind")
+        # No controlling terminal, and reparented -- both halves of being detached.
+        ps = subprocess.run(["ps", "-o", "ppid=,tty=", "-p", str(pid)],
+                            capture_output=True, text=True).stdout.split()
+        self.assertEqual(ps[0], "1", "the daemon still has its starter for a parent")
+        self.assertIn(ps[1], ("??", "?"), "the daemon still has a controlling terminal")
+
+    def test_a_hangup_does_not_end_it(self):
+        """setsid already means a closing terminal's SIGHUP never arrives. Ignoring one sent by hand
+        as well is what a background service should do, and it is one line."""
+        home = tempfile.mkdtemp(prefix="palmar-detach-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        from tests.helpers import free_port
+        port = free_port()
+        self.assertEqual(self.start(home, port).returncode, 0)
+        self.addCleanup(self.start, home, port, "--stop")
+        pid = self.pid_of(port)
+        self.assertIsNotNone(pid)
+        os.kill(pid, signal.SIGHUP)
+        time.sleep(2)
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            self.fail("SIGHUP ended the daemon")
+
+    def test_foreground_stays_in_front(self):
+        """The way back. Without it the tests here could not stop what they start."""
+        home = tempfile.mkdtemp(prefix="palmar-detach-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        from tests.helpers import PYTHON, REPO, free_port
+        port = free_port()
+        p = subprocess.Popen([PYTHON, "-m", "palmar", "--no-browser", "--foreground",
+                              "--port", str(port)], cwd=REPO,
+                             env=dict(os.environ, HOME=home, PYTHONPATH=REPO),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            end = time.time() + 25
+            while time.time() < end and not os.path.exists(os.path.join(home, ".palmar", "run", "url")):
+                self.assertIsNone(p.poll(), "--foreground exited instead of staying")
+                time.sleep(0.2)
+            self.assertIsNone(p.poll(), "--foreground did not stay in the foreground")
+        finally:
+            p.terminate()
+            try:
+                p.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                p.kill()
+            for pipe in (p.stdout, p.stderr):
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":

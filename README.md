@@ -101,6 +101,11 @@ git clone https://github.com/maengyo/palmar && sh palmar/install.sh   # from a c
 `install.sh` checks your Python, drops a `palmar` launcher in `~/.local/bin`, and changes nothing
 else — no root, no `~/.palmar` touched, the daemon never started.
 
+**`palmar` prints the address and comes straight back.** The daemon goes into a session of its own,
+so closing the terminal does not take it — nor your shells — with it. Run it again and it hands you
+the same address instead of starting a second one; `palmar --stop` is how it ends, and
+`palmar --foreground` keeps it attached with `Ctrl-C` if that is what you want.
+
 **On Windows** there is `install.ps1`, run with the policy bypassed for this one process — no
 administrator, no setting changed:
 

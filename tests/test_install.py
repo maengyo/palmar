@@ -53,6 +53,9 @@ class Install(unittest.TestCase):
         # a port unlikely to collide
         import socket
         s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+        # **Exiting 0 is now success.** The daemon detaches, so the launcher prints the address and
+        # comes back — that is the whole point of it (2026-09-14). What is asserted is that a daemon
+        # is there afterwards, not that this process is.
         proc = subprocess.Popen([shim, "--port", str(port), "--no-browser"], cwd="/tmp",
                                 env=dict(os.environ, HOME=home),
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -66,7 +69,7 @@ class Install(unittest.TestCase):
                 if os.path.exists(url_file):
                     url = open(url_file).read().strip()
                     break
-                if proc.poll() is not None:
+                if proc.poll() is not None and proc.returncode != 0:
                     self.fail("the launcher exited: " + (proc.stderr.read() or b"").decode()[-300:])
                 time.sleep(0.2)
             self.assertIsNotNone(url, "the launched daemon never wrote its url")
@@ -74,6 +77,9 @@ class Install(unittest.TestCase):
             with urllib.request.urlopen(req, timeout=10) as resp:
                 self.assertEqual(resp.status, 200)
         finally:
+            # The launcher may already be gone; the daemon it detached is what has to be stopped.
+            subprocess.run([shim, "--stop"], env=dict(os.environ, HOME=home),
+                           capture_output=True, timeout=30)
             proc.terminate()
             try:
                 proc.wait(timeout=10)

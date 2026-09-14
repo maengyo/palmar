@@ -2808,7 +2808,10 @@ async def main(port: int, open_page: bool = True) -> None:
         # The address still goes to stdout and only to stdout: "the last line is the address" is a
         # contract the app reads on (docs/protocol.md), and this path has to keep it.
         log("이미 도는 데몬이 있다 — 그것을 연다 (데몬은 HOME 당 하나)")
-        print(e.url, flush=True)
+        # **announce, not print.** Detached, stdout is a log file and the only thing the person who
+        # typed the command can still see is the pipe. This path is the ordinary one for a second
+        # `palmar`, so sending its address down the log was the first thing detaching broke.
+        announce(e.url)
         if open_page:
             open_browser(e.url)
         return
@@ -2846,7 +2849,7 @@ async def main(port: int, open_page: bool = True) -> None:
         write_private(URL_FILE, url.encode() + b"\n", 0o600)
     except OSError as e:
         log(f"run/url 을 못 남겼다 — {e}")
-    print(url, flush=True)
+    announce(url)
     # After the address, never before: if it cannot be shown the person still has it, and everything
     # this says goes to stderr so stdout's last line stays the address (docs/protocol.md).
     if open_page:
@@ -3085,6 +3088,91 @@ def _daemon_hello_version(port: int, token: str):
     return None
 
 
+#: Where the address goes. Normally stdout. When the daemon has been detached it is a pipe back to
+#: the process the person actually ran, which prints it and exits — so **"stdout's last line is the
+#: address" stays true for whoever typed the command** (docs/protocol.md), even though the daemon
+#: that produced it is no longer attached to their terminal.
+ANNOUNCE = [None]
+
+
+def announce(line: str) -> None:
+    fd = ANNOUNCE[0]
+    if fd is None:
+        print(line, flush=True)
+        return
+    try:
+        os.write(fd, line.encode() + b"\n")
+        os.close(fd)
+    except OSError:
+        pass
+    ANNOUNCE[0] = None
+
+
+def detached(port: int, open_page: bool) -> int:
+    """Start the daemon in its own session and come straight back.
+
+    **The terminal was killing it.** The daemon caught SIGINT and SIGTERM but not SIGHUP, and closing
+    a terminal sends SIGHUP to the whole process group — measured 2026-09-14: the daemon was gone two
+    seconds later. Wrapping it in the window did not fix that either; a window started *from* a
+    terminal is in the same group. Being in a session of its own is the actual mechanism, and it makes
+    the window optional rather than required (principle 2: sessions outlive the UI).
+
+    One fork is enough. The parent prints the address and exits at once, so the daemon is reparented
+    immediately and no zombie is left behind — a second fork only buys something for a parent that
+    lingers, and this one does not.
+
+    The address comes back over a pipe rather than by watching run/url, because a start that **fails**
+    has to come back the same way. With stderr going to a log file, the pipe is the only thing the
+    person who typed the command can still see."""
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid:                                     # the process the person ran
+        os.close(w)
+        with os.fdopen(r, "rb") as back:
+            said = back.read().decode("utf-8", "replace").strip()
+        if not said:
+            print("palmar: 데몬이 주소를 못 냈다 — `palmar --doctor` 로 본다", file=sys.stderr)
+            return 1
+        if not said.startswith("http://"):
+            print(said, file=sys.stderr)        # it failed, and this is why
+            return 1
+        print(said, flush=True)
+        return 0
+
+    # ── the daemon, from here on ───────────────────────────────────────────
+    os.close(r)
+    os.setsid()                                 # a fresh fork is never a group leader, so this holds
+    # setsid already means a closing terminal's SIGHUP never reaches here — it goes to that terminal's
+    # foreground group and this is not in it. Ignoring it as well covers the one sent by hand, which
+    # is what a background service should do and costs a line.
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    ANNOUNCE[0] = w
+    try:
+        ensure_private_dir(PALMAR_DIR)
+        logf = os.open(str(PALMAR_DIR / "log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    except OSError:
+        logf = os.open(os.devnull, os.O_WRONLY)
+    null = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(null, 0)
+    os.dup2(logf, 1)                            # anything printed after the address goes to the log
+    os.dup2(logf, 2)
+    for fd in (null, logf):
+        if fd > 2:
+            os.close(fd)
+    try:
+        asyncio.run(main(port, open_page=open_page))
+    except SystemExit as e:   # noqa: PERF203 - three separate reports, not one
+        # The refusals — a lock somebody holds, a port in use — are SystemExit with a sentence. The
+        # person who typed the command is on the other end of that pipe and has nothing else to read.
+        announce(str(e.code) if e.code and not isinstance(e.code, int) else "palmar: 뜨지 못했다")
+        os._exit(1)
+    except BaseException as e:
+        announce("palmar: %s: %s" % (type(e).__name__, e))
+        os._exit(1)
+    os._exit(0)
+
+
 def cli() -> None:
     """The `palmar` command and `python3 -m palmar` both land here."""
     ap = argparse.ArgumentParser(prog="palmar", description="palmar 데몬. 127.0.0.1 에만 묶인다.")
@@ -3100,10 +3188,18 @@ def cli() -> None:
     # there has to be a way to say stop, and it is this one (asked for 2026-09-11).
     ap.add_argument("--stop", action="store_true",
                     help="이 HOME 의 데몬을 멈춘다 (안의 셸도 같이 죽는다)")
+    # **Detached is the default**, because the daemon outliving the terminal is the point of it
+    # (principle 2). --foreground is for developing on it and for the tests, which have to be able to
+    # terminate what they started. Windows cannot fork; detaching there is part of #29 step 4.
+    ap.add_argument("--foreground", action="store_true",
+                    help="터미널에 붙은 채로 돈다 (Ctrl-C 로 멈춘다). 기본은 떨어져 나오는 것")
     args = ap.parse_args()
     if args.stop:
         raise SystemExit(stop_daemon())
     if args.doctor:
         raise SystemExit(doctor(args.port))
-    asyncio.run(main(args.port, open_page=not args.no_browser))
+    if args.foreground or not hasattr(os, "fork"):
+        asyncio.run(main(args.port, open_page=not args.no_browser))
+    else:
+        raise SystemExit(detached(args.port, open_page=not args.no_browser))
 

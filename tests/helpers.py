@@ -63,6 +63,9 @@ class Daemon:
         env.update(self._extra)
         self.proc = subprocess.Popen(
             [PYTHON, "-m", "palmar", "--port", str(self.port)]
+            # **--foreground.** The daemon detaches by default now (2026-09-14), and a test that
+            # cannot terminate what it started leaks a daemon per test class.
+            + ["--foreground"]
             + ([] if self.browser else ["--no-browser"]),
             cwd=REPO, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         end = time.time() + START_TIMEOUT
