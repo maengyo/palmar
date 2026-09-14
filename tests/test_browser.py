@@ -1038,5 +1038,43 @@ class UpdateNotice(unittest.TestCase):
                       "static replies lost Cache-Control: no-store, so a plain reload may serve the old page")
 
 
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class JoiningPaths(unittest.TestCase):
+    """`joinDir` — how the directory rail builds a child's path from its parent's.
+
+    It was written for POSIX only: absolute meant "starts with /", and the separator was always "/".
+    On Windows that makes `C:\\/Users`, which happens to work when it goes back to the daemon and then
+    appears, wrong, in every path shown on screen."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def join(self, parent, name):
+        return self.b.ev("window.palmar.joinDir(%s, %s)" % (json.dumps(parent), json.dumps(name)))
+
+    def test_posix_is_unchanged(self):
+        self.assertEqual(self.join("/Users/kim", "work"), "/Users/kim/work")
+        self.assertEqual(self.join("", "/"), "/")
+        self.assertEqual(self.join("/home", "kim"), "/home/kim")
+
+    def test_a_drive_letter_is_absolute_too(self):
+        """Roots arrive as absolute names. Without this, `C:\\` was joined onto its parent rather
+        than replacing it."""
+        self.assertEqual(self.join("", "C:\\"), "C:\\")
+        self.assertEqual(self.join("/whatever", "D:\\"), "D:\\")
+
+    def test_the_separator_is_the_parent_s(self):
+        self.assertEqual(self.join("C:\\", "Users"), "C:\\Users")
+        self.assertEqual(self.join("C:\\Users", "kim"), "C:\\Users\\kim")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3056,6 +3056,21 @@ def doctor(port: int) -> int:
     kind = wsl_kind()
     tab = browser_argv("http://127.0.0.1:%d/" % port)     # keyless on purpose — never print the key
     out("  WSL       %s" % (kind or "no"))
+    # **The directory rail, which came up empty on Windows and could only be guessed at from here**
+    # (user, 2026-09-14). Three things decide what it shows: the tops to browse from, the roots that
+    # are the floor for opening a terminal, and whether the entry actually builds. Printing all
+    # three turns "the rail is empty" into one line that says which.
+    try:
+        tp = tops()
+        rs = roots()
+        out("  tops      %s" % (", ".join(tp) or "(none)"))
+        out("  roots     %s" % (", ".join(str(r) for r in rs) or "(none)"))
+        first = tp[0] if tp else None
+        if first:
+            e = dir_entry(first, first)
+            out("  rail      %s -> %s" % (first, json.dumps(e, ensure_ascii=False)))
+    except Exception as e:
+        out("  ! the rail would fail here — %s: %s" % (type(e).__name__, e))
     out("  browser   %s%s" % (Path(tab[0]).name if tab else "(found no way to open one — open the address yourself)",
                               "   <- $BROWSER" if (os.environ.get("BROWSER") or "").strip() else ""))
     # The pane's character encoding. If it is not UTF-8, Korean, Japanese and Chinese input breaks — on screen it looks like "it will not type".

@@ -2568,9 +2568,14 @@ let selectedDir = null;
 function joinDir(parent, name) {
   // protocol.md does not pin down whether name in the roots list is an absolute path or a name to join onto path — take both
   if (!name) return parent || '';
-  if (name.startsWith('/')) return name;
+  // Absolute on either platform: a leading slash, or a drive letter. Without the second, a Windows
+  // root like `C:\` was joined onto its parent instead of replacing it.
+  if (name.startsWith('/') || /^[A-Za-z]:[\\/]/.test(name)) return name;
   if (!parent) return name;
-  return parent.replace(/\/$/, '') + '/' + name;
+  // **The separator is the parent's.** Building `C:\/Users` happens to work on Windows, but it comes
+  // straight back to the daemon as a cwd and then into every path shown on screen.
+  const sep = /^[A-Za-z]:[\\/]/.test(parent) || parent.indexOf('\\') >= 0 ? '\\' : '/';
+  return parent.replace(/[\\/]$/, '') + sep + name;
 }
 function makeNode(parentPath, e, depth) {
   return { path: joinDir(parentPath, e.name), name: e.name, branch: e.git_branch || null,
@@ -2788,6 +2793,9 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // can also be asked directly — the cascade and the round limit need more windows than a
                   // hand can comfortably drag into place one at a time.
                   pushAside, applyPush, hits,
+                  // Path joining is platform-shaped and the platform it gets wrong has no Chrome
+                  // here — so it is tested directly rather than by driving the rail.
+                  joinDir,
                   // Update notice. daemonSeen being set proves the hello handler feeds it; checkVersion is
                   // here because the alternative is restarting a daemon on a different version mid-test.
                   checkVersion, daemonSeen: () => daemonSeen,
