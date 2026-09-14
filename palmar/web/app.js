@@ -728,7 +728,9 @@ class Tile {
     this.xpEl.addEventListener('click', (ev) => { ev.stopPropagation(); setMax(this, !this.el.classList.contains('max')); });
     this.rnEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.rename(); });
     this.clEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.askClose(); });
-    this.nameEl.addEventListener('dblclick', (ev) => { ev.stopPropagation(); this.rename(); });
+    // Double-click on the name is caught in dragify's down(), not here: the title bar takes pointer
+    // capture on pointerdown, and a captured pointer's click and dblclick are retargeted to the
+    // capturing element — a dblclick listener on the name itself never fires (measured 2026-09-15).
     e.addEventListener('pointerdown', () => focusTile(this.id, { user: true, keyboard: false }), true);
     this.dragify();
     this.update(s);
@@ -918,12 +920,28 @@ class Tile {
     let overId = null, overSince = 0, armed = null, overSide = null;
     let overSideAtDrop = null;   // the side the hold was armed on, read once on release
     let holdTimer = null;       // the clock behind the hold, so a still hand still counts
+    let nameTap = null;         // the last pointerdown on the name — two of them close together is a rename
     const down = (m) => (ev) => {
       // Buttons, input fields and the confirm strip on the title bar are not a drag (#31: .cl and .cfm joined here)
       // Only .sz.own is excluded — the ordinary size readout is part of the title bar and should drag, and it
       // becomes a reset button only on a pane whose text size was changed (#25). Leave it in and pointerdown is
       // taken as a drag and no click fires.
       if (ev.button !== 0 || ev.target.closest('.xp, .rn, .cl, .ed, .cfm, .sz.own') || this.el.classList.contains('max')) return;
+      // **A double-click on the name is a rename, and it has to be caught here.** This handler takes
+      // pointer capture, and a captured pointer's click and dblclick go to the capturing element —
+      // so the dblclick listener the name used to carry never fired, while the canvas tab, which
+      // captures nothing, renamed fine (user, 2026-09-15). Two pointerdowns on the name within 400ms
+      // and a few pixels of each other are that double-click; the second one starts no drag.
+      if (m === 'move' && ev.target.closest('.name')) {
+        const now = Date.now();
+        if (nameTap && now - nameTap.t < 400 && Math.abs(ev.clientX - nameTap.x) < 6 && Math.abs(ev.clientY - nameTap.y) < 6) {
+          nameTap = null;
+          ev.preventDefault();
+          this.rename();
+          return;
+        }
+        nameTap = { t: now, x: ev.clientX, y: ev.clientY };
+      }
       mode = m; sx = ev.clientX; sy = ev.clientY;
       ({ x: ox, y: oy, w: ow, h: oh } = this.rect());
       // **Alt takes one window out of its group.** A group moves together, so there has to be a way to
@@ -979,7 +997,7 @@ class Tile {
         // once, which is what says the hold has something to hold on to.
         const pct = (Date.now() - overSince - GROUP_LEAD_MS) / GROUP_HOLD_MS * 100;
         setGauge(this.id, pct);                        // 0 or less takes the ring off
-        showGhost(pct > 0 ? joinPreview(overId, overSide, this.id) : null);
+        showGhost(pct > 0 ? joinPreview(overId, overSide, this.id) : null, overSide, pct);
       }
       if (overId && Date.now() - overSince >= GROUP_LEAD_MS + GROUP_HOLD_MS) {
         // **Armed, not done.** It used to join here, in the middle of the drag, so carrying on
@@ -991,6 +1009,7 @@ class Tile {
         overSideAtDrop = overSide;
         markHold(overId, 'ready');
         setGauge(this.id, 100);
+        showGhost(joinPreview(overId, overSide, this.id), overSide, 100);
       }
     };
     const move = (ev) => {
@@ -1309,7 +1328,7 @@ function paintUndo() {
 // Membership rides in the same store as the position (⑩ provisional, `palmar-tiles`) — and lands in
 // the same undecided as the coordinates do (③, #2). A group is an id, kept on each member.
 const GROUP_LEAD_MS = 280;      // quiet moment after the overlap before the gauge starts
-const GROUP_HOLD_MS = 1500;     // and this long filling, over another window, and they join
+const GROUP_HOLD_MS = 1100;     // and this long filling, over another window, and they join (1500 read as slow)
 const OVER_TAKE = 0.20;         // this much of the dragged window covered before it takes a target
 const OVER_KEEP = 0.05;         // and it holds that target until this little is left
 
@@ -1420,14 +1439,36 @@ function joinPreview(overId, side, meId) {
   return { x: r.x, y: Math.max(0, r.y - GAP - me.h), w: me.w, h: me.h };
 }
 
+//: **Two ways of showing the hold, and the person picks.** `ring` runs a line round the border of the
+//: window in the hand; `grow` fills the landing box from the edge that touches the target towards the
+//: far one, so where and how long are one picture ("예측 지점으로 사라락 확장되는 느낌", 2026-09-15);
+//: `both` shows both. grow is the default: the eye is on the landing box, not on the window under the
+//: hand, and one clock is calmer than two. The choice is the browser's, like the theme.
+const LS_HOLD = 'palmar.hold';
+const HOLD_STYLES = ['grow', 'ring', 'both'];
+let holdStyle = 'grow';
+try { const v = localStorage.getItem(LS_HOLD); if (HOLD_STYLES.indexOf(v) >= 0) holdStyle = v; } catch (e) {}
+function applyHoldStyle(v) {
+  holdStyle = HOLD_STYLES.indexOf(v) >= 0 ? v : 'grow';
+  for (const h of HOLD_STYLES) document.body.classList.toggle('hold-' + h, h === holdStyle);
+  try { if (holdStyle === 'grow') localStorage.removeItem(LS_HOLD); else localStorage.setItem(LS_HOLD, holdStyle); } catch (e) {}
+}
+applyHoldStyle(holdStyle);
+
 let ghostEl = null;
-function showGhost(box) {
+// The landing box, and how far the hold has come: `side` is the edge it fills from — the one against
+// the target — and `pct` how much of it is filled. 100 is armed, and the box says so by going solid.
+function showGhost(box, side, pct) {
   if (!box) { if (ghostEl) { ghostEl.remove(); ghostEl = null; } return; }
   if (!ghostEl) { ghostEl = el('div', 'ghost'); cvScroll.appendChild(ghostEl); }
   ghostEl.style.left = box.x + 'px';
   ghostEl.style.top = box.y + 'px';
   ghostEl.style.width = box.w + 'px';
   ghostEl.style.height = box.h + 'px';
+  ghostEl.dataset.side = side || 'right';
+  const p = Math.max(0, Math.min(100, pct || 0));
+  ghostEl.style.setProperty('--p', p.toFixed(1));
+  ghostEl.classList.toggle('full', p >= 100);
 }
 
 //: The gauge, and then the moment it is full.
@@ -3570,6 +3611,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // The layout store: saveLayout pushes it to the daemon, client is who this page is
                   // to the daemon — a test with two browsers needs to tell the two apart.
                   saveLayout, client: () => CLIENT, layoutOnDaemon: () => layoutOnDaemon,
+                  holdStyle: () => holdStyle,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
                   lastOutAt, renderList,
@@ -3816,6 +3858,11 @@ function boot() {
         autoTidy = sw.checked;
         try { if (autoTidy) localStorage.setItem(LS_AUTOTIDY, '1'); else localStorage.removeItem(LS_AUTOTIDY); } catch (e) {}
       });
+    }
+    const hsel = document.getElementById('holdstyle');
+    if (hsel) {
+      hsel.value = holdStyle;
+      hsel.addEventListener('change', () => applyHoldStyle(hsel.value));
     }
     const psw = document.getElementById('pushaside');
     if (psw) {

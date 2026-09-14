@@ -1408,6 +1408,48 @@ class Grouping(unittest.TestCase):
         self.assertEqual(r["n"], 2, "the group did not survive the reload")
         self.assertEqual(r["boxes"], 1, "the group came back without its frame")
 
+    def test_the_landing_box_fills_toward_the_far_edge(self):
+        """**grow, the default.** The landing box fills from the edge against the target towards the
+        far one, so where and how long are one picture ("예측 지점으로 사라락 확장되는 느낌",
+        2026-09-15). It carries the side it fills from and the percentage, and at 100 it goes solid —
+        let go and it joins. The ring is still there for whoever prefers it, chosen in the panel."""
+        self.assertEqual(self.b.ev("window.palmar.holdStyle()"), "grow")
+        self.assertTrue(self.b.ev("document.body.classList.contains('hold-grow')"))
+        self.bench("put('g1',60,60,240,200); put('g2',420,60,240,200); put('g3',60,400,240,200); return 1;")
+        x, y = self.press("g1")
+        tx, ty = self.press("g2")
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
+        seen = []
+        for _ in range(26):
+            time.sleep(0.1)
+            self.send(type="mouseMoved", x=tx + 1, y=ty, buttons=1)
+            g = self.b.ev("""(()=>{const g=document.querySelector('.ghost'); if (!g) return null;
+              return {side: g.dataset.side, p: Number(g.style.getPropertyValue('--p')),
+                      full: g.classList.contains('full'),
+                      fill: getComputedStyle(g, '::before').display};})()""")
+            if g:
+                seen.append(g)
+                if g["full"]:
+                    break
+        self.send(type="mouseReleased", x=tx + 1, y=ty, clickCount=1, buttons=0)
+        time.sleep(0.4)
+        self.assertTrue(seen, "no landing box ever showed")
+        self.assertTrue(all(g["side"] == seen[0]["side"] for g in seen), "the side it fills from flickered: %r" % seen)
+        self.assertEqual(seen[0]["fill"], "block", "the fill layer is not shown under the default style")
+        self.assertTrue(seen[-1]["full"] and seen[-1]["p"] == 100, "it never filled up: %r" % seen[-1])
+        self.assertLess(seen[0]["p"], seen[-1]["p"], "it did not fill over time: %r" % seen)
+
+    def test_the_hold_style_is_the_persons_to_choose(self):
+        r = self.b.ev("""(()=>{const s=document.getElementById('holdstyle'); s.value='ring';
+          s.dispatchEvent(new Event('change'));
+          return {style: window.palmar.holdStyle(), ring: document.body.classList.contains('hold-ring'),
+                  grow: document.body.classList.contains('hold-grow'), kept: localStorage.getItem('palmar.hold')};})()""")
+        self.addCleanup(lambda: self.b.ev("""(()=>{const s=document.getElementById('holdstyle'); s.value='grow';
+          s.dispatchEvent(new Event('change')); return 1;})()"""))
+        self.assertEqual([r["style"], r["ring"], r["grow"], r["kept"]], ["ring", True, False, "ring"])
+
     def test_a_still_hand_still_counts(self):
         """**A hold that only advances while you move is not a hold.** The whole block ran on
         pointermove, so the one gesture it exists for — putting a window down on another and keeping it
@@ -2248,3 +2290,68 @@ class OneBoardForEveryBrowser(unittest.TestCase):
                           "the group to appear in the second browser")
         self.assertEqual(n, 2)
         self.assertEqual(b.ev("document.querySelectorAll('.gbox').length"), 1, "grouped in the store, unframed on screen")
+
+
+class RenamingByHand(unittest.TestCase):
+    """Double-click the name on a window's title bar and it becomes editable — the same gesture the
+    canvas tab has. It did not: the title bar takes pointer capture on pointerdown, and a captured
+    pointer's click and dblclick are retargeted to the capturing element, so a dblclick listener on
+    the name itself never fired (user, 2026-09-15: "캔버스 이름에서는 가능한데, 터미널은 안 돼")."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+        cls.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          await fetch('/api/sessions?token='+T,{method:'POST',headers:{'content-type':'application/json'},
+            body:JSON.stringify({cwd:%s,name:'one'})});})()""" % json.dumps(cls.d.home))
+        time.sleep(3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def send(self, **kw):
+        self.b.ws.call("Input.dispatchMouseEvent", dict(button="left", **kw))
+
+    def test_double_clicking_the_name_edits_it(self):
+        pos = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+          const r=t.el.querySelector('.tb .name').getBoundingClientRect();
+          return {x:r.left+r.width/2, y:r.top+r.height/2};})()""")
+        self.send(type="mousePressed", x=pos["x"], y=pos["y"], clickCount=1, buttons=1)
+        self.send(type="mouseReleased", x=pos["x"], y=pos["y"], clickCount=1, buttons=0)
+        time.sleep(0.08)
+        self.send(type="mousePressed", x=pos["x"], y=pos["y"], clickCount=2, buttons=1)
+        self.send(type="mouseReleased", x=pos["x"], y=pos["y"], clickCount=2, buttons=0)
+        time.sleep(0.3)
+        st = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0]; const inp=t.el.querySelector('.tb input');
+          return {input: !!inp, focused: !!inp && document.activeElement === inp};})()""")
+        self.assertTrue(st["input"], "no editor appeared on the name")
+        self.assertTrue(st["focused"], "the editor appeared but something took the focus back")
+        # Type a name and confirm it: the daemon has to hear it, which is what makes it a rename.
+        self.b.ws.call("Input.insertText", {"text": "two"})
+        self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13})
+        self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13})
+        for _ in range(20):
+            time.sleep(0.2)
+            if any(s["name"] == "two" for s in self.d.panes()):
+                break
+        self.assertIn("two", [s["name"] for s in self.d.panes()], "the daemon never heard the new name")
+
+    def test_a_single_click_still_drags(self):
+        """The name is where a window is grabbed. Catching the double-click must not cost the drag."""
+        before = self.b.ev("(()=>{const t=[...window.palmar.tiles.values()][0]; return [t.el.offsetLeft, t.el.offsetTop];})()")
+        pos = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+          const r=t.el.querySelector('.tb .name').getBoundingClientRect();
+          return {x:r.left+r.width/2, y:r.top+r.height/2};})()""")
+        self.send(type="mousePressed", x=pos["x"], y=pos["y"], clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=pos["x"] + 40 * i, y=pos["y"] + 30 * i, buttons=1)
+        self.send(type="mouseReleased", x=pos["x"] + 120, y=pos["y"] + 90, clickCount=1, buttons=0)
+        time.sleep(0.6)
+        after = self.b.ev("(()=>{const t=[...window.palmar.tiles.values()][0]; return [t.el.offsetLeft, t.el.offsetTop];})()")
+        self.assertEqual([after[0] - before[0], after[1] - before[1]], [120, 90], "the drag by the name broke")
+        self.assertFalse(self.b.ev("!![...window.palmar.tiles.values()][0].el.querySelector('.tb input')"),
+                         "a single grab opened the editor")

@@ -659,6 +659,7 @@ body.fold-r .rail.right .rail-fold       { display: none; }
   content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 3px;
   pointer-events: none; z-index: 3;
   transition: --p .1s linear;
+  display: none;                                   /* the ring is one of two styles — see body.hold-* */
   background: conic-gradient(from -90deg,
               var(--accent) calc(var(--p, 0) * 1%),
               color-mix(in srgb, var(--accent) 20%, transparent) 0);
@@ -669,10 +670,26 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 
 /* Where it will land. Faint on purpose: it is an offer, not a thing that exists yet. */
 .ghost {
-  position: absolute; z-index: 0; pointer-events: none; border-radius: 10px;
+  position: absolute; z-index: 0; pointer-events: none; border-radius: 10px; overflow: hidden;
   border: 2px dashed color-mix(in srgb, var(--accent) 75%, transparent);
   background: color-mix(in srgb, var(--accent) 13%, transparent);
-}                 /* Behaviour: while dragging or resizing it follows instantly */
+  transition: --p .1s linear, border-color .15s;
+}
+/* **The hold, two ways.** body.hold-ring: the line round the window in the hand. body.hold-grow: the
+   landing box fills from the edge against the target towards the far one, so where and how long are
+   one picture — the default. body.hold-both: both. The fill is a clipped layer rather than a gradient
+   so the edge it advances from can change with the side without four gradients. */
+body.hold-ring .tile.arming::after, body.hold-both .tile.arming::after { display: block; }
+.ghost::before {
+  content: ''; position: absolute; inset: 0; display: none;
+  background: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
+.ghost[data-side="right"]::before { clip-path: inset(0 calc((100 - var(--p, 0)) * 1%) 0 0); }
+.ghost[data-side="left"]::before  { clip-path: inset(0 0 0 calc((100 - var(--p, 0)) * 1%)); }
+.ghost[data-side="below"]::before { clip-path: inset(0 0 calc((100 - var(--p, 0)) * 1%) 0); }
+.ghost[data-side="above"]::before { clip-path: inset(calc((100 - var(--p, 0)) * 1%) 0 0 0); }
+.ghost.full { border-style: solid; border-color: var(--accent); }   /* armed: let go and it joins */                 /* Behaviour: while dragging or resizing it follows instantly */
 .tile.focus { border-color: color-mix(in srgb, var(--accent) 60%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent), var(--shadow-2); }
 .tile.fresh { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
 /* A tile from another canvas. **The session and the websocket are both alive; it is only off the screen** —
