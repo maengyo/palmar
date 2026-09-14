@@ -412,18 +412,23 @@ def _env_block(env):
     return ctypes.cast(ctypes.create_unicode_buffer(blob), ctypes.c_void_p)
 
 
-def default_shell(env=None) -> str:
+def default_shell(env=None) -> list:
     """What palmar opens when nobody said otherwise.
 
     There is no $SHELL on Windows. COMSPEC is the closest the OS offers and it is cmd.exe; PowerShell
     is what people actually use. **The client never chooses this** (#14) — this is the daemon's own
-    default and the only place it is decided."""
+    default and the only place it is decided.
+
+    **Returns a list, like the POSIX side.** It used to return a quoted command line, which is a
+    different type for the same call on the same seam — the daemon builds argv as a list, so that
+    asymmetry was a bug waiting for the first Windows pane. `spawn` joins with Windows' own quoting
+    rules anyway (`subprocess.list2cmdline`), so the list is the right shape to hand it."""
     env = os.environ if env is None else env
     for name in ("pwsh.exe", "powershell.exe"):
         found = _which(name, env)
         if found:
-            return '"%s" -NoLogo' % found
-    return env.get("COMSPEC") or "cmd.exe"
+            return [found, "-NoLogo"]
+    return [env.get("COMSPEC") or "cmd.exe"]
 
 
 def _which(name, env):

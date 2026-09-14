@@ -71,9 +71,9 @@ from . import PROTOCOL, __version__
 # **The seam picks itself, once.** Everything below says `Pty()` and never asks which platform it is
 # on -- that was the whole point of moving fifteen `self.master` uses behind an object (#29 step 1).
 if sys.platform == "win32":                      # pragma: no cover - chosen by platform
-    from .conpty import ConPty as Pty
+    from .conpty import ConPty as Pty, default_shell as Pty_default_shell
 else:
-    from .posixpty import PosixPty as Pty
+    from .posixpty import PosixPty as Pty, default_shell as Pty_default_shell
 # `fcntl` was the last import here that simply does not exist on Windows. The seven flock calls were
 # all one pattern, so they went behind a seam too (#29 step 3).
 from .locking import NOFOLLOW, release as unlock_fd, take as lock_fd
@@ -678,8 +678,12 @@ class Session:
         self.pid = self.pty.pid
 
     def _spawn(self, rows: int, cols: int) -> None:
-        # The daemon hard-codes $SHELL. There is no way for a client to pick the command (#29, principle 4).
-        shell = os.environ.get("SHELL") or "/bin/sh"
+        # The daemon hard-codes the shell. There is no way for a client to pick the command
+        # (#29, principle 4) — **and which shell is the platform's answer, not this file's.** There is
+        # no $SHELL on Windows at all, so asking for it there got as far as CreateProcessW and then
+        # failed with "file not found" (measured on a runner, 2026-09-14).
+        argv0 = Pty_default_shell()
+        shell = argv0[0]
         env = {k: v for k, v in os.environ.items()
                if k in KEEP_ENV_EXACT
                or (not k.startswith(STRIP_ENV_PREFIXES) and k not in STRIP_ENV_EXACT)}
@@ -688,7 +692,7 @@ class Session:
         # (measured: one `export PATH="$HOME/.local/bin:$PATH"` line in ~/.zshrc pushed the shim out).
         # For zsh, wrap it with ZDOTDIR so our rc runs **last**. User files are never touched.
         base = os.path.basename(shell)
-        argv = [shell]
+        argv = list(argv0)
         if base == "zsh" and (ZDOT_DIR / ".zshrc").exists():
             env["PALMAR_USER_ZDOTDIR"] = env.get("ZDOTDIR") or str(HOME)
             env["ZDOTDIR"] = str(ZDOT_DIR)
@@ -1413,9 +1417,21 @@ reaper = Reaper()
 
 
 # ── Preparing ~/.palmar (protocol.md "뜨기") ─────────────────────────────────────
+#: **Whether this platform answers with permission bits at all.** On POSIX the 0700 mode and the
+#: owning uid *are* the guarantee. On Windows neither exists in that form: `os.getuid` is absent,
+#: `chmod(0o600)` lands as 0o666 (measured, docs/windows.md), and what actually keeps other users out
+#: of `%USERPROFILE%\.palmar` is the profile directory's ACL, which Windows sets. Pretending to check
+#: mode bits there would print a reassuring line about a guarantee that is not the one in force.
+POSIX_PERMS = sys.platform != "win32"
+
+
 def ensure_private_dir(p: Path) -> None:
     """Creates it 0700. If it exists already it must be mine and must have no group/other write bit (#29).
-    A symlink is refused — the shim lives here and comes first on PATH."""
+    A symlink is refused — the shim lives here and comes first on PATH.
+
+    **On Windows the last three checks do not apply and are not faked.** See POSIX_PERMS above: the
+    directory still has to be a directory and not a link, because that is what stops somebody
+    pointing the shim somewhere else, and that check is real on both."""
     try:
         st = os.lstat(p)
     except FileNotFoundError:
@@ -1423,6 +1439,8 @@ def ensure_private_dir(p: Path) -> None:
         st = os.lstat(p)
     if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
         raise SystemExit(f"palmard: {p} 는 디렉터리여야 한다 (심볼릭 링크 불가, #29)")
+    if not POSIX_PERMS:
+        return
     if st.st_uid != os.getuid():
         raise SystemExit(f"palmard: {p} 의 소유자가 내가 아니다 (#29)")
     if st.st_mode & 0o022:
@@ -1752,7 +1770,13 @@ def setup_palmar_dir() -> str:
 # ── Directories (protocol.md /api/dirs) ───────────────────────────────────────────────
 def owned_by_me(p) -> bool:
     """Is the resolve()d path owned by the current uid? The one predicate that splits the roots (#31).
-    stat follows symlinks — the caller passes in something already resolve()d."""
+    stat follows symlinks — the caller passes in something already resolve()d.
+
+    **Windows has no uid.** The honest answer there is "I cannot tell", and the caller's roots are
+    already confined to the profile, so this says True rather than refusing every directory. It is
+    a weaker statement on that platform and this line is where that is written down."""
+    if not POSIX_PERMS:
+        return True
     try:
         return os.stat(str(p)).st_uid == os.getuid()
     except OSError:
