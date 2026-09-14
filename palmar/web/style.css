@@ -48,7 +48,7 @@
   --accent:   #4a58b8;
   --on-accent:#fcfbf8;
   --accent-2: rgba(74,88,184,.12);
-  --hover:    rgba(31,34,41,.035);
+  --hover:    rgba(31,34,41,.055);   /* a shade the eye catches on the way past (2026-09-15) */
   --btn:      #fcfbf8;
   --kbd:      #fcfbf8;
   --kbd-ink:  #4f5563;
@@ -108,7 +108,7 @@
     --accent:    #d9d0bd;
     --on-accent: #191714;
     --accent-2:  rgba(217,208,189,.14);
-    --hover:     rgba(255,255,255,.05);
+    --hover:     rgba(255,255,255,.07);
     --btn:       #24211c;
     --kbd:       #24211c;
     --kbd-ink:   #b6afa2;
@@ -142,7 +142,7 @@
   --accent:    #d9d0bd;
   --on-accent: #191714;
   --accent-2:  rgba(217,208,189,.14);
-  --hover:     rgba(255,255,255,.05);
+  --hover:     rgba(255,255,255,.07);
   --btn:       #24211c;
   --kbd:       #24211c;
   --kbd-ink:   #b6afa2;
@@ -363,10 +363,11 @@ body.fold-l .rz.l,   body.fold-r .rz.r   { display: none; }
 body.fold-l .rail.left  .rail-fold,
 body.fold-r .rail.right .rail-fold       { display: none; }
 .rail-fold {
-  border: 0; background: none; color: var(--ink-3); cursor: pointer; font-size: 14px; line-height: 1;
-  padding: 0 2px; -webkit-app-region: no-drag; flex: none;
+  border: 0; background: none; color: var(--ink-3); cursor: pointer; font-size: 17px; line-height: 1;
+  width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center;
+  padding: 0; -webkit-app-region: no-drag; flex: none; transition: background .12s, color .12s;
 }
-.rail-fold:hover { color: var(--ink); }
+.rail-fold:hover { color: var(--ink); background: var(--hover); }
 .rail-open {
   position: absolute; top: 50%; transform: translateY(-50%); z-index: 16;
   width: 15px; height: 46px; border: 1px solid var(--line-2); border-radius: 0 7px 7px 0;
@@ -382,15 +383,17 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 }
 .rh .n { color: var(--ink-2); letter-spacing: 0; }
 .rh .sp { flex: 1; }
+/* 26px, not 22: "버튼도 너무 작은 것 같아" (2026-09-15). Same box on both rails. */
 .ib {
-  width: 22px; height: 22px; border-radius: 5px; border: 1px solid var(--line-2);
+  width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line-2);
   background: var(--btn); color: var(--ink-2); display: grid; place-items: center;
-  font-size: 13px; letter-spacing: 0; cursor: pointer;
+  font-size: 14px; letter-spacing: 0; cursor: pointer; transition: border-color .12s, background .12s;
 }
+.ib:hover { background: var(--hover); }
 .ib:hover { border-color: var(--accent); color: var(--ink); }
 /* An ASCII '+' sits smaller and lighter than the fullwidth '＋' that used to be here, so it is given
    the weight back rather than the glyph. The line-height keeps it centred in the 22px box. */
-.ib.plus { font-size: 16px; font-weight: 500; line-height: 1; padding-bottom: 2px; }
+.ib.plus { font-size: 18px; font-weight: 500; line-height: 1; padding-bottom: 2px; }
 .scroll { overflow-y: auto; min-height: 0; flex: 1; }
 /* Thick enough to grab — at 8px the hand kept missing. And **hover is said with color**: the cursor shape
    does not change over a scrollbar, so there is no other way to tell. */
@@ -408,29 +411,39 @@ body.fold-r .rail.right .rail-fold       { display: none; }
    invisible (user report). Fixed three ways: a solid line above, sticky so the header stays while scrolling,
    and the name one step darker. */
 .grp {
-  display: flex; align-items: center; gap: 7px; padding: 9px 14px 5px;
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px 7px;
   font-size: 10.5px; color: var(--ink-3); letter-spacing: .06em; text-transform: uppercase;
   cursor: pointer; user-select: none;
   position: sticky; top: 0; z-index: 2;
   background: var(--rail);            /* without it, rows underneath show through and overlap while scrolling */
-  border-top: 1px solid var(--line); margin-top: 5px;
+  border-top: 1px solid var(--line); margin-top: 6px;
+  transition: background .12s, color .12s;
 }
 .grp:first-child { border-top: 0; margin-top: 0; }
-.grp:hover { color: var(--ink-2); }
+.grp:hover { color: var(--ink-2); background: color-mix(in srgb, var(--rail) 100%, transparent); }
+/* **A canvas is a section; a terminal is a row.** They were the same size and nearly the same colour,
+   one indented step apart, and the eye did not separate them (user, 2026-09-15). The canvas header is
+   larger and heavier, sits on a faint band of its own, and the one being viewed carries the accent
+   down its left edge; the rows below stay 12.5px and lighter. Hover tints both. */
+.grp.cvg { padding: 9px 14px 8px 12px; background: color-mix(in srgb, var(--ink) 3%, var(--rail)); border-left: 3px solid transparent; }
+.grp.cvg:hover { background: color-mix(in srgb, var(--ink) 6%, var(--rail)); }
+.grp.cvg.cur { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--rail)); }
+.grp.cvg.cur:hover { background: color-mix(in srgb, var(--accent) 13%, var(--rail)); }
 /* #31 ③ A group that does not fold (waiting, in the status grouping). It is not for pressing, so it gets no
    pointer and no hover — the cursor says "this one does not fold" first. The caret slot stays empty so the row
    does not shift. */
 .grp.nofold { cursor: default; }
 .grp.nofold:hover { color: var(--ink-3); }
-/* The fold caret is the same glyph and width as the right tree's (.row .car) — so the two never diverge */
-.grp .car { color: var(--ink-3); font-size: 9px; width: 8px; flex: none; letter-spacing: 0; }
-.grp .ct { margin-left: auto; color: var(--ink-3); letter-spacing: 0; }
+/* The fold caret is the same glyph and width as the right tree's (.row .car) — so the two never diverge.
+   11px, not 9: at 9px it was a speck, and a thing meant to be pressed has to look pressable (2026-09-15). */
+.grp .car { color: var(--ink-3); font-size: 11px; width: 12px; flex: none; letter-spacing: 0; text-align: center; }
+.grp .ct { margin-left: auto; color: var(--ink-3); letter-spacing: 0; font-size: 11px; }
 /* #31 ③ The header of a canvas group. The name was given by a person, so it is not uppercased — that splits it
    visually from the status groups (uppercase). Only the header of the canvas being viewed is darker (the same
    meaning as .tab.cur / .ses.cur). */
 .grp.cvg .nm {
   text-transform: none; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 11.5px; font-weight: 500; color: var(--ink-2);   /* not fainter than the rows below */
+  font-size: 13.5px; font-weight: 600; color: var(--ink);       /* a section title, one step above its rows */
 }
 .grp.cvg.cur .nm { color: var(--ink); }
 .grp.cvg .dot { margin-left: 2px; }
@@ -454,6 +467,7 @@ body.fold-r .rail.right .rail-fold       { display: none; }
   align-items: center; padding: 8px 14px 9px 14px; margin: 0 6px; border-radius: 6px;
   cursor: pointer; border: 1px solid transparent;
 }
+.ses { transition: background .12s; }
 .ses:hover { background: var(--hover); }
 /* #31 ③ A row that stays even inside a folded canvas group — it is waiting. Marked with one --st-wait line on
    the left. Not a new color (⑥ is still undecided). It answers "why is this showing when I folded it". */
@@ -933,9 +947,9 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
 .row.found { padding-left: 8px; }
 .row.found .nm { overflow: hidden; text-overflow: ellipsis; }
 .row.found .br { margin-left: auto; }
-.row { display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 5px; color: var(--ink-2); white-space: nowrap; cursor: pointer; }
+.row { display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 5px; color: var(--ink-2); white-space: nowrap; cursor: pointer; transition: background .12s; }
 .row:hover { background: var(--hover); }
-.row .car { color: var(--ink-3); font-size: 9px; width: 8px; flex: none; }
+.row .car { color: var(--ink-3); font-size: 11px; width: 12px; flex: none; text-align: center; }
 .row .car.none { visibility: hidden; }
 .row .nm { overflow: hidden; text-overflow: ellipsis; }
 .row.root { color: var(--ink); font-weight: 500; }
