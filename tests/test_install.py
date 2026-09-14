@@ -31,6 +31,30 @@ class Install(unittest.TestCase):
             env.update(extra_env)
         return subprocess.run(["/bin/sh", INSTALL], capture_output=True, text=True, timeout=60, env=env)
 
+    def test_the_launcher_ignores_a_palmar_in_the_current_directory(self):
+        """`python -m` puts the current directory first on sys.path, so `palmar` typed inside any other
+        checkout ran the palmar of *that* checkout — an old clone kept for testing answered
+        `unrecognized arguments: --stop` while the launcher pointed at the right tree all along
+        (user, 2026-09-15). PYTHONSAFEPATH turns that off on Python 3.11+."""
+        if sys.version_info < (3, 11):
+            self.skipTest("PYTHONSAFEPATH needs Python 3.11; older ones keep the trap")
+        # The launcher has to be built on *this* interpreter, or the guard above is about the wrong
+        # Python: run_install's clean PATH finds /usr/bin/python3, a 3.9 on macOS, and 3.9 ignores
+        # PYTHONSAFEPATH — measured: the shadow won under a 3.13 test runner (2026-09-15).
+        self.run_install(extra_env={"PATH": os.path.dirname(sys.executable) + ":/usr/bin:/bin"})
+        shim = os.path.join(self.prefix, "bin", "palmar")
+        cwd = tempfile.mkdtemp(prefix="palmar-shadow-")
+        self.addCleanup(shutil.rmtree, cwd, ignore_errors=True)
+        os.makedirs(os.path.join(cwd, "palmar"))
+        with open(os.path.join(cwd, "palmar", "__init__.py"), "w") as fh:
+            fh.write("")
+        with open(os.path.join(cwd, "palmar", "__main__.py"), "w") as fh:
+            fh.write("print('SHADOW'); raise SystemExit(3)\n")
+        r = subprocess.run([shim, "--version"], cwd=cwd, capture_output=True, text=True, timeout=60)
+        self.assertNotIn("SHADOW", r.stdout + r.stderr, "the launcher ran the palmar in the cwd")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("palmar ", r.stdout, "the real palmar did not answer --version")
+
     def test_it_is_valid_sh(self):
         r = subprocess.run(["/bin/sh", "-n", INSTALL], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -190,6 +214,7 @@ class InstallPs1(unittest.TestCase):
         self.assertIn("PYTHONPATH", body)
         self.assertIn(REPO, body, "the launcher does not point at this checkout")
         self.assertIn("-m palmar", body)
+        self.assertIn("PYTHONSAFEPATH=1", body, "a palmar in the current directory would shadow the checkout")
 
     def test_it_asks_before_writing(self):
         """Without -Yes it must stop at the question rather than write. Answering nothing is a no."""

@@ -280,6 +280,9 @@ $preArgs = if ($found.Pre.Count) { ($found.Pre -join ' ') + ' ' } else { '' }
   'rem rather than left for you to type every time: you read the warning above before this was'
   'rem written, and nothing else on the machine gets it. Remove this line and `palmar` refuses again.'
   'set "PALMAR_WINDOWS_ANYWAY=1"'
+  'rem PYTHONSAFEPATH: python -m puts the current directory first on sys.path, so palmar typed inside'
+  'rem another checkout ran that checkout. Python 3.11+ honours this; older ones ignore it.'
+  'set "PYTHONSAFEPATH=1"'
   ('set "PYTHONPATH={0};%PYTHONPATH%"' -f $src)
   ('"{0}" {1}-m palmar %*' -f $found.Exe, $preArgs)
 ) | Set-Content -Path $cmd -Encoding ASCII
