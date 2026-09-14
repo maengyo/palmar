@@ -1500,12 +1500,18 @@ function arrangeGroup(ids, lead) {
   // wraps. Within a row each window sits against the last, and a row is as tall as the tallest thing
   // in it — the packing that closes a hole when a member shrinks or goes (2026-09-14) is unchanged.
   // An ㄱ is then simply a top row with more in it than the bottom one.
+  // **And so are their edges.** A row begins where its first window stands, not at the group's left
+  // edge: a window carried under the right one of a pair was previewed under it and packed under the
+  // left one (user, 2026-09-15). A row that wraps for want of room starts at the group's edge, since
+  // nobody placed it. Left of the group's edge is not a place — clamped at zero, as everything is.
   const room = Math.max(1, (cvScroll.clientWidth || 1) - GAP * 2);
-  let x = r.x, y = r.y, rowH = 0, rowStart = 0, rowY = layout[mine[0]].y;
+  let x0 = layout[mine[0]].x, x = x0, y = r.y, rowH = 0, rowStart = 0, rowY = layout[mine[0]].y;
   mine.forEach((id, i) => {
     const q = layout[id];
-    if (i > rowStart && (Math.abs(q.y - rowY) > ROWISH || (x - r.x) + q.w > room)) {
-      x = r.x; y += rowH + GAP; rowH = 0; rowStart = i; rowY = q.y;
+    if (i > rowStart && Math.abs(q.y - rowY) > ROWISH) {
+      x0 = q.x; x = x0; y += rowH + GAP; rowH = 0; rowStart = i; rowY = q.y;
+    } else if (i > rowStart && (x - r.x) + q.w > room) {
+      x0 = r.x; x = x0; y += rowH + GAP; rowH = 0; rowStart = i; rowY = q.y;
     }
     const px = Math.max(0, x), py = Math.max(0, y);
     layout[id] = Object.assign({}, layout[id], { x: px, y: py });

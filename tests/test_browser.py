@@ -1856,9 +1856,10 @@ class Grouping(unittest.TestCase):
 
     def test_grouping_pulls_them_together(self):
         """A group that leaves everyone where they were is a colour, not a group. Sizes are the
-        user's, so members are lined up rather than resized (AGENTS.md) — and **rows stay rows**: two
-        windows far apart vertically come together as a column, not a row, because the row is a thing
-        the hand made and the arranger keeps it (2026-09-15)."""
+        user's, so members are lined up rather than resized (AGENTS.md) — and **rows stay rows, with
+        their own edges**: two windows far apart come up against each other row on row, and each row
+        keeps the x its first window had. The arranger does not invent an x; the hand does, by
+        putting a window down beside its target before this runs (2026-09-15)."""
         r = self.bench("""
           put('g1', 40, 40, 200, 160);
           put('g2', 700, 380, 200, 160);   // far apart and out of line
@@ -1867,8 +1868,8 @@ class Grouping(unittest.TestCase):
           return {a: at('g1'), b: at('g2')};
         """)
         a, b = r["a"], r["b"]
-        self.assertEqual(a[0], b[0], "they are not in one column: %r %r" % (a, b))
-        self.assertEqual(b[1], a[1] + 160 + 12, "they are not touching: %r %r" % (a, b))
+        self.assertEqual(a, [40, 40], "the first row moved: %r" % (a,))
+        self.assertEqual(b, [700, 40 + 160 + 12], "the second row is not up against the first: %r %r" % (a, b))
 
     def test_the_rows_are_the_rows_the_hand_made(self):
         """**No re-flow.** The arranger used to lay the group out wide-first and wrap, which threw the
@@ -1957,6 +1958,23 @@ class Grouping(unittest.TestCase):
                    for cx, cy in corners]
         self.assertIn(False, covered,
                       "the frame covers every corner — it is still a bounding box: %r" % r["cells"])
+
+    def test_a_row_starts_where_its_first_window_stands(self):
+        """Two grouped side by side; a third carried under the **right** one. The preview showed it
+        under the right one and it landed under the left, because every row was packed from the
+        group's left edge (user, 2026-09-15: "오른쪽이 아닌 왼쪽에 정렬돼서 붙어"). A row begins where
+        its first window stands — the rows are the rows the hand made, and so are their edges."""
+        r = self.bench("""
+          put('g1', 40, 40, 240, 200); put('g2', 292, 40, 240, 200);
+          P.joinGroups(by('g1').id, by('g2').id);
+          const spot = P.joinPreview(by('g2').id, 'below', by('g3').id);
+          put('g3', spot.x, spot.y, 240, 200);
+          P.joinGroups(by('g3').id, by('g1').id);
+          P.arrangeGroup(P.groupOf(by('g1').id), by('g3').id);
+          return {spot: [spot.x, spot.y], c: at('g3'), a: at('g1'), b: at('g2')};
+        """)
+        self.assertEqual(r["c"], r["spot"], "shown at %r, landed at %r" % (r["spot"], r["c"]))
+        self.assertEqual([r["a"], r["b"]], [[40, 40], [292, 40]], "the pair moved: %r" % r)
 
     def test_an_L_is_a_top_row_with_more_in_it(self):
         """Three 400px windows, one alone on top and two below: the rows they stood in are the rows
