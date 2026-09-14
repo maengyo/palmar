@@ -118,6 +118,51 @@ def _locking():
 wall("which msvcrt.locking works", _locking)
 
 
+def _attrs():
+    """**Every `os.X` / `signal.X` / `stat.X` the source names, checked against this platform at once.**
+
+    Found one at a time, each of these costs a CI round and a person's afternoon: `os.getuid`,
+    `os.fchmod`, `os.O_NOFOLLOW`, and then `os.O_NONBLOCK` buried inside git_branch, which made the
+    directory rail come up empty with nothing on screen to say why. Reading the source and asking the
+    platform is a few milliseconds and finds the rest of them together."""
+    import ast
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    import os as _os
+    import signal as _signal
+    import stat as _stat
+    mods = {"os": _os, "signal": _signal, "stat": _stat}
+    missing = []
+    looked = 0
+    for name in sorted(os.listdir(os.path.join(repo, "palmar"))):
+        if not name.endswith(".py"):
+            continue
+        path = os.path.join(repo, "palmar", name)
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute) or not isinstance(node.value, ast.Name):
+                continue
+            mod = mods.get(node.value.id)
+            if mod is None:
+                continue
+            looked += 1
+            if not hasattr(mod, node.attr):
+                missing.append("%s:%d  %s.%s" % (name, node.lineno, node.value.id, node.attr))
+    say("    checked %d references across palmar/*.py" % looked)
+    if missing:
+        for m in sorted(set(missing)):
+            say(NO, "   ", m)
+        raise RuntimeError("%d name(s) this platform does not have" % len(set(missing)))
+    say(OK, "every os/signal/stat name in the source exists here")
+
+
+wall("names the source uses that this platform lacks", _attrs)
+
+
 D = {}
 
 

@@ -1955,6 +1955,16 @@ def under_roots(p: Path) -> bool:
 META_MAX = 4096
 
 
+#: **Zero on Windows, and that is not a gap.** The flag is here because a `.git/HEAD` that is a FIFO
+#: makes `open()` wait for a writer and stops the whole daemon, not one pane. Windows has no FIFOs in
+#: the filesystem namespace — named pipes live under `\\.\pipe\` and cannot appear inside a folder —
+#: so there is nothing there for it to defend against. The other two defences below are not
+#: platform-specific and still run: the file must be regular, and only META_MAX bytes are read.
+#: It was `os.O_NONBLOCK` inline, which does not exist there — so **every** directory entry raised
+#: AttributeError and the rail came up empty (found with `--doctor`, 2026-09-14).
+NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+
+
 def read_meta(p: Path) -> str:
     """Reads one piece of folder metadata **without ever blocking**. Empty string if it cannot be read.
 
@@ -1969,7 +1979,7 @@ def read_meta(p: Path) -> str:
     """
     fd = None
     try:
-        fd = os.open(str(p), os.O_RDONLY | os.O_NONBLOCK)
+        fd = os.open(str(p), os.O_RDONLY | NONBLOCK)
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             return ""                       # FIFO, device, socket — not ours to read
         return os.read(fd, META_MAX).decode("utf-8", "replace")
@@ -3076,8 +3086,15 @@ def doctor(port: int) -> int:
     # The pane's character encoding. If it is not UTF-8, Korean, Japanese and Chinese input breaks — on screen it looks like "it will not type".
     loc = " ".join("%s=%s" % (k, os.environ[k]) for k in ("LC_ALL", "LC_CTYPE", "LANG") if os.environ.get(k))
     utf8 = has_utf8(os.environ)
-    out("  locale    %s%s" % (loc or "(none)", "" if utf8 else "   <- not UTF-8"))
-    out("  panes get %s" % ("this, unchanged" if utf8 else "LC_CTYPE=" + (UTF8_CTYPE[0] or pick_utf8_locale())))
+    if sys.platform == "win32":
+        # **There is no LANG on Windows and there does not need to be.** A ConPTY speaks UTF-8 and
+        # Python decodes filenames as UTF-8 there regardless, so "(none) <- not UTF-8" was a warning
+        # about a problem that does not exist on that platform (user, 2026-09-14).
+        out("  locale    %s   <- not used on Windows; the console is UTF-8" % (loc or "(none)"))
+        out("  panes get the console's own UTF-8")
+    else:
+        out("  locale    %s%s" % (loc or "(none)", "" if utf8 else "   <- not UTF-8"))
+        out("  panes get %s" % ("this, unchanged" if utf8 else "LC_CTYPE=" + (UTF8_CTYPE[0] or pick_utf8_locale())))
     out("  home      %s" % PALMAR_DIR)
     out("")
 
