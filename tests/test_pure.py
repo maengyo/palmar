@@ -6,12 +6,15 @@ regression somebody already paid for once; the point of writing it down is that 
 from __future__ import annotations
 
 import os
+import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -443,6 +446,80 @@ class TheFontStackOrder(unittest.TestCase):
                     i, generic,
                     "%s is named before the generic, so on Linux it becomes the font for Latin too "
                     "and the whole UI changes shape. Stack: %s" % (fam, stack))
+
+
+class TopOfTheMachine(unittest.TestCase):
+    """`tops()` — where the directory rail lets you browse down from.
+
+    **The rail came up empty on Windows** (user, 2026-09-14). The root list opened with a hard-coded
+    "/", which on Windows names the root of whichever drive happens to be current — wrong, and not
+    even stable. With nothing to pick, *Open terminal here* stayed disabled, so the whole rail was
+    dead.
+
+    A top is not a root. `roots()` is still the floor `under_roots` checks, so appearing here does
+    not make a place one a terminal can be opened in."""
+
+    def test_posix_has_one_top_and_it_is_slash(self):
+        self.assertEqual(D.tops(), ["/"])
+
+    def test_windows_gets_drives_instead(self):
+        """Probed rather than listed: os.listdrives is 3.12 and the floor here is 3.9."""
+        seen = []
+
+        def isdir(p):
+            seen.append(p)
+            return p in ("C:\\", "D:\\")
+
+        with mock.patch.object(D.sys, "platform", "win32"), \
+             mock.patch.object(D.os.path, "isdir", isdir):
+            self.assertEqual(D.tops(), ["C:\\", "D:\\"])
+        self.assertIn("C:\\", seen)
+        self.assertTrue(all(p.endswith(":\\") for p in seen), seen)
+
+    def test_windows_with_no_drive_still_says_something(self):
+        """An empty list would put the rail back where it started."""
+        with mock.patch.object(D.sys, "platform", "win32"), \
+             mock.patch.object(D.os.path, "isdir", lambda p: False):
+            self.assertEqual(D.tops(), ["C:\\"])
+
+
+class OpeningABrowser(unittest.TestCase):
+    """`browser_argv` on native Windows. It returned None there, so the daemon said it could not
+    find a way to open one and the person had to copy the address by hand (user, 2026-09-14)."""
+
+    def test_windows_goes_through_cmd_start(self):
+        argv = D.browser_argv("http://127.0.0.1:8801/?k=abc", platform="win32")
+        self.assertEqual(argv, ["cmd", "/c", "start", "", "http://127.0.0.1:8801/?k=abc"])
+
+    def test_the_empty_title_is_not_decoration(self):
+        """`start "http://…"` treats a quoted first argument as the window **title** and opens
+        nothing. The empty string takes that slot. The WSL branch has carried this note for days;
+        the native branch needed it too."""
+        argv = D.browser_argv("http://x/?k=1", platform="win32")
+        self.assertEqual(argv[3], "", "the title slot is not empty, so the URL would become a title")
+
+    def test_an_explicit_BROWSER_still_wins_there(self):
+        argv = D.browser_argv("http://x/?k=1", platform="win32", env={"BROWSER": "firefox"})
+        self.assertEqual(argv, ["firefox", "http://x/?k=1"])
+
+
+class FirstStartIsNotAFault(unittest.TestCase):
+    """The very first start on a HOME printed `run/key 를 못 읽었다 (...)` before making one — which
+    reads like something went wrong, and the first thing a person sees on Windows was that line
+    (user, 2026-09-14). A missing key on a fresh HOME is the expected case."""
+
+    def test_a_missing_key_file_says_nothing(self):
+        home = tempfile.mkdtemp(prefix="palmar-key-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        said = []
+        run = pathlib.Path(home) / ".palmar" / "run"
+        run.mkdir(parents=True)
+        with mock.patch.object(D, "KEY_FILE", run / "key"), \
+             mock.patch.object(D, "log", lambda *a: said.append(" ".join(str(x) for x in a))):
+            key = D.load_or_make_key()
+        self.assertTrue(key)
+        self.assertEqual([m for m in said if "run/key" in m], [],
+                         "a fresh HOME was told something had gone wrong: %r" % said)
 
 
 if __name__ == "__main__":

@@ -1827,6 +1827,8 @@ def load_or_make_key() -> str:
     had = KEY_FILE.exists()
     try:
         got = KEY_FILE.read_text("utf-8").strip()
+    except FileNotFoundError:
+        got = ""            # the first start on this HOME. Not worth a line that reads like a fault.
     except (OSError, ValueError, UnicodeDecodeError) as e:
         log(f"run/key 를 못 읽었다 ({e}) — 새로 만든다")
         got = ""
@@ -1889,6 +1891,24 @@ def owned_by_me(p) -> bool:
         return os.stat(str(p)).st_uid == os.getuid()
     except OSError:
         return False
+
+
+def tops() -> list[str]:
+    """The top of the machine, to browse down from. **Not a root** — `roots()` is still the floor
+    `under_roots` checks, so appearing here does not make a place one a terminal can open in.
+
+    POSIX has one top and it is `/`. Windows has one per drive, and `/` there means "the root of
+    whichever drive happens to be current", which is both wrong and unstable — so the directory rail
+    came up **empty** on Windows (user, 2026-09-14). Drives are probed rather than listed because
+    `os.listdrives` is 3.12 and the floor here is 3.9."""
+    if sys.platform != "win32":
+        return ["/"]
+    out = []
+    for c in "CDEFGHIJKLMNOPQRSTUVWXYZAB":
+        d = "%s:\\" % c
+        if os.path.isdir(d):
+            out.append(d)
+    return out or ["C:\\"]
 
 
 def roots() -> list[Path]:
@@ -2689,7 +2709,7 @@ async def handle_request(reader, writer) -> None:
                 # **Mark which one is home.** The browser used to take the first root as home (to
                 # shorten paths to `~`); now that `/` leads the list, home has to be named outright
                 # or `/` would render as `~`.
-                entries = [dir_entry("/", "/")]
+                entries = [dir_entry(t, t) for t in tops()]
                 for r in rs:
                     if str(r) == "/":
                         continue
@@ -2851,6 +2871,11 @@ def browser_argv(url: str, *, platform=None, kind=None, env=None, which=None):
         return [chosen, url]
     if platform == "darwin":
         return ["open", url]
+    if platform == "win32":
+        # Native Windows, not WSL. `start` is a cmd builtin, so it has to go through cmd — and the
+        # empty string is its **title** argument: without it the quoted URL becomes the title and
+        # nothing opens, the same trap the WSL branch below already carries a note about.
+        return ["cmd", "/c", "start", "", url]
     kind = wsl_kind(env=env) if kind is None else kind
     if kind:
         # A Linux browser is only worth it under WSLg, where there is a screen to draw it on.
