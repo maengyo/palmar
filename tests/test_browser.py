@@ -1854,9 +1854,11 @@ class Grouping(unittest.TestCase):
           return P.groupOf(by('g1').id).length;})()""")
         self.assertEqual(n, 1, "it grouped anyway after the hand moved on")
 
-    def test_grouping_lines_them_up(self):
+    def test_grouping_pulls_them_together(self):
         """A group that leaves everyone where they were is a colour, not a group. Sizes are the
-        user's, so members are lined up rather than resized (AGENTS.md)."""
+        user's, so members are lined up rather than resized (AGENTS.md) — and **rows stay rows**: two
+        windows far apart vertically come together as a column, not a row, because the row is a thing
+        the hand made and the arranger keeps it (2026-09-15)."""
         r = self.bench("""
           put('g1', 40, 40, 200, 160);
           put('g2', 700, 380, 200, 160);   // far apart and out of line
@@ -1865,26 +1867,47 @@ class Grouping(unittest.TestCase):
           return {a: at('g1'), b: at('g2')};
         """)
         a, b = r["a"], r["b"]
-        self.assertEqual(a[1], b[1], "they are not on one row: %r %r" % (a, b))
-        self.assertLess(abs(a[0] - b[0]) + abs(a[1] - b[1]), 700,
-                        "they are still scattered: %r %r" % (a, b))
+        self.assertEqual(a[0], b[0], "they are not in one column: %r %r" % (a, b))
+        self.assertEqual(b[1], a[1] + 160 + 12, "they are not touching: %r %r" % (a, b))
 
-    def test_it_lays_a_group_out_across_before_down(self):
-        """**As wide as fits, with no empty cells.** The canvas grows downwards without limit and its
-        width is finite, so a group laid out across spends the space there is instead of the space
-        there always is. A log-of-the-ratio score was tried first and put three windows in a column
-        that ran off the bottom of the screen — right by its own measure, and the measure was wrong
-        for a group (2026-09-14)."""
+    def test_the_rows_are_the_rows_the_hand_made(self):
+        """**No re-flow.** The arranger used to lay the group out wide-first and wrap, which threw the
+        drop side away one step after it had been honoured: a window put *below* another went beside
+        it if the two fit (user, 2026-09-15). Rows come from where the members stand; only running out
+        of room wraps. Here one window sits on its own above two that share a row, and that is the
+        shape it keeps — packed tight, an ㄱ."""
         r = self.bench("""
-          // Narrow enough that three fit across.
           put('g1', 30, 30, 240, 190); put('g2', 600, 320, 240, 190); put('g3', 30, 320, 240, 190);
           P.joinGroups(by('g1').id, by('g2').id);
           P.joinGroups(by('g3').id, by('g1').id);
           P.arrangeGroup(P.groupOf(by('g1').id));
           return {a: at('g1'), b: at('g2'), c: at('g3')};
         """)
-        tops = {r["a"][1], r["b"][1], r["c"][1]}
-        self.assertEqual(len(tops), 1, "three windows did not end up on one row: %r" % r)
+        self.assertEqual(r["a"], [30, 30], "the top row moved: %r" % r)
+        self.assertEqual(r["c"], [30, 30 + 190 + 12], "the second row is not against the first: %r" % r)
+        self.assertEqual(r["b"], [30 + 240 + 12, 30 + 190 + 12], "the second row is not packed: %r" % r)
+
+    def test_it_lands_on_the_side_it_was_carried_to(self):
+        """Every side, exactly where the preview said. joinPreview draws the box; arrangeGroup with the
+        dropped window as `lead` has to put it there and leave the target where it was — the two used
+        to disagree on 'below' and 'above' (user, 2026-09-15)."""
+        r = self.bench("""
+          const a = by('g1').id, b = by('g2').id, out = {};
+          for (const side of ['right', 'left', 'below', 'above']) {
+            put('g2', 400, 300, 240, 200);
+            put('g1', 60, 60, 240, 200);
+            const spot = P.joinPreview(b, side, a);
+            put('g1', spot.x, spot.y, 240, 200);       // what the release does before arranging
+            P.joinGroups(a, b);
+            P.arrangeGroup(P.groupOf(a), a);
+            out[side] = {spot: [spot.x, spot.y], me: at('g1'), target: at('g2')};
+            P.leaveGroup(a);
+          }
+          return out;
+        """)
+        for side, v in r.items():
+            self.assertEqual(v["me"], v["spot"], "%s: shown at %r, landed at %r" % (side, v["spot"], v["me"]))
+            self.assertEqual(v["target"], [400, 300], "%s: the target moved to %r" % (side, v["target"]))
 
     def test_it_wraps_rather_than_running_off_the_side(self):
         """Wide is preferred, not forced. Windows too wide to sit side by side have to wrap."""
@@ -1924,18 +1947,20 @@ class Grouping(unittest.TestCase):
             self.assertLessEqual(c["x"], mx)
             self.assertLessEqual(c["y"], my)
         # **And the corner the group does not use is not covered.** That is the whole point: the
-        # bounding box would reach it, the union does not.
+        # bounding box would reach all four corners, the union leaves one open. Which one depends on
+        # how the rows fell — since 2026-09-15 the lone window is the top row, so it is the top right —
+        # and the test asks for *a* free corner rather than naming it.
         rect = r["rect"]
-        corner = (rect["x"] + rect["w"] - 10, rect["y"] + rect["h"] - 10)
-        inside = any(c["x"] <= corner[0] <= c["x"] + c["w"] and c["y"] <= corner[1] <= c["y"] + c["h"]
-                     for c in r["cells"])
-        self.assertFalse(inside,
-                         "the frame covers the empty corner — it is still a bounding box: %r" % r["cells"])
+        corners = [(rect["x"] + 10, rect["y"] + 10), (rect["x"] + rect["w"] - 10, rect["y"] + 10),
+                   (rect["x"] + 10, rect["y"] + rect["h"] - 10), (rect["x"] + rect["w"] - 10, rect["y"] + rect["h"] - 10)]
+        covered = [any(c["x"] <= cx <= c["x"] + c["w"] and c["y"] <= cy <= c["y"] + c["h"] for c in r["cells"])
+                   for cx, cy in corners]
+        self.assertIn(False, covered,
+                      "the frame covers every corner — it is still a bounding box: %r" % r["cells"])
 
-    def test_it_wraps_into_an_L_rather_than_one_long_row(self):
-        """Windows too wide to sit three across wrap, and that is allowed to look like an ㄱ now —
-        the rule about never leaving an empty cell went away with the bounding box that made it
-        necessary."""
+    def test_an_L_is_a_top_row_with_more_in_it(self):
+        """Three 400px windows, one alone on top and two below: the rows they stood in are the rows
+        they keep, and the bottom row is packed — the ㄱ the frame draws is the shape the members have."""
         r = self.bench("""
           put('g1', 30, 30, 400, 200); put('g2', 700, 300, 400, 200); put('g3', 30, 300, 400, 200);
           P.joinGroups(by('g1').id, by('g2').id);
@@ -1944,9 +1969,10 @@ class Grouping(unittest.TestCase):
           return {at: P.groupOf(by('g1').id).map((id)=>[P.layout()[id].x, P.layout()[id].y])};
         """)
         rows = sorted({p[1] for p in r["at"]})
-        self.assertEqual(len(rows), 2, "three 400px windows did not wrap onto two rows: %r" % r["at"])
-        top = [p for p in r["at"] if p[1] == rows[0]]
-        self.assertEqual(len(top), 2, "the top row is not full: %r" % r["at"])
+        self.assertEqual(len(rows), 2, "the two rows did not stay two rows: %r" % r["at"])
+        bottom = sorted(p for p in r["at"] if p[1] == rows[1])
+        self.assertEqual(len(bottom), 2, "the bottom row is not the pair: %r" % r["at"])
+        self.assertEqual(bottom[1][0] - bottom[0][0], 400 + 12, "the bottom row is not packed: %r" % bottom)
 
     def test_growing_a_member_does_not_land_it_on_its_group_mates(self):
         """**A group is one block to the outside world**, so the ordinary push cannot see an overlap

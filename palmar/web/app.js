@@ -1062,7 +1062,7 @@ class Tile {
         }
         joinGroups(this.id, armed);
         const ids = groupOf(this.id);
-        arrangeGroup(ids);          // writes layout and saves; nothing may read the DOM back after it
+        arrangeGroup(ids, this.id); // writes layout and saves; nothing may read the DOM back after it
         paintGroups();
         const n = ids.length;
         toast([{ b: 'grouped ' + n + (n > 1 ? ' windows' : ' window') },
@@ -1474,42 +1474,38 @@ function undoJoin(changed) {
 //: whatever sizes you gave them (palmar never resizes a window — AGENTS.md), so they are lined up by
 //: their tops on rows as wide as the widest member, which is the arrangement that looks deliberate
 //: without pretending to be a tiler ("딱딱 나름 정렬되게", 2026-09-14).
-function arrangeGroup(ids) {
+function arrangeGroup(ids, lead) {
   const mine = ids.filter((id) => layout[id] && tiles.get(id));
   if (mine.length < 2) return;
   // **Reading order of where they are now**, so the side you dropped on is the order you get: carry a
   // window to the right of another and it is to the right of it afterwards. Sorting by age instead
   // meant the drop position was thrown away and the group came out in an order nobody chose.
   // A row's worth of slack on the vertical compare, or two windows a few pixels apart in height
-  // swap places and the group appears to shuffle itself.
+  // swap places and the group appears to shuffle itself. `lead` wins a tie on x: it is the window
+  // that was just put down, exactly where the next one already sits, and it has to come first or it
+  // lands one slot to the right of where its preview was.
   const ROWISH = Math.max(...mine.map((id) => layout[id].h)) / 2;
   mine.sort((a, b) => {
     const p = layout[a], q = layout[b];
     if (Math.abs(p.y - q.y) > ROWISH) return p.y - q.y;
-    return p.x - q.x;
+    if (Math.abs(p.x - q.x) > 1) return p.x - q.x;
+    return a === lead ? -1 : (b === lead ? 1 : 0);
   });
   const r = groupRect(mine);
-  // **As wide as fits, and it may end up an ㄱ.** The frame follows the shape the members actually
-  // occupy, so a last row with one window in it is not a hole any more — it is the shape (사용자,
-  // 2026-09-14: "굳이 사각형 안에 들어가게 하는 게 아니라 ㄱ 자 모양으로 묶어도 되잖아"). That
-  // removed the rule this used to carry about never leaving an empty cell, and with it the reason
-  // three windows had to be one row or none.
-  //
-  // Wide first, because the canvas grows downwards without limit and its width is finite: across
-  // spends the space there is instead of the space there always is.
-  //
-  // **Each window takes the width it has, not the widest one's.** A grid of equal cells is only tidy
-  // while the windows are equal: give one member a different size and every narrower one sits at the
-  // left of an oversized cell with a hole beside it, which is a group that looks like it has come
-  // apart — reported after growing one member of four and shrinking it back, with the far one left
-  // hanging (user, 2026-09-14). Rows are filled instead, each window against the last, and a row is
-  // as tall as the tallest thing in it. Windows of one size come out exactly as they did before.
+  // **The rows are the rows the hand made.** This used to re-flow the whole group by width — wide
+  // first, wrap when full — which threw the side away again one step later: put a window *below*
+  // another, and if the two fit side by side that is where it went, while the preview had shown it
+  // below (user, 2026-09-15: "아직도 그룹핑 할 때 예정된 점선 지역으로 안붙어"). A member a row's
+  // worth below the first member of its row starts the next row, and only running out of room
+  // wraps. Within a row each window sits against the last, and a row is as tall as the tallest thing
+  // in it — the packing that closes a hole when a member shrinks or goes (2026-09-14) is unchanged.
+  // An ㄱ is then simply a top row with more in it than the bottom one.
   const room = Math.max(1, (cvScroll.clientWidth || 1) - GAP * 2);
-  let x = r.x, y = r.y, rowH = 0, rowStart = 0;
+  let x = r.x, y = r.y, rowH = 0, rowStart = 0, rowY = layout[mine[0]].y;
   mine.forEach((id, i) => {
     const q = layout[id];
-    if (i > rowStart && (x - r.x) + q.w > room) {    // no room left on this row — start the next one
-      x = r.x; y += rowH + GAP; rowH = 0; rowStart = i;
+    if (i > rowStart && (Math.abs(q.y - rowY) > ROWISH || (x - r.x) + q.w > room)) {
+      x = r.x; y += rowH + GAP; rowH = 0; rowStart = i; rowY = q.y;
     }
     const px = Math.max(0, x), py = Math.max(0, y);
     layout[id] = Object.assign({}, layout[id], { x: px, y: py });

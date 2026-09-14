@@ -650,8 +650,11 @@ body.fold-r .rail.right .rail-fold       { display: none; }
    a pale tile. */
 /* Registered so the browser can interpolate it: a custom property that is just a string jumps, a
    <number> tweens, and the ring then glides between ticks instead of stepping. Browsers without
-   @property ignore both lines and step — no worse than before. */
-@property --p { syntax: '<number>'; inherits: false; initial-value: 0; }
+   @property ignore both lines and step — no worse than before.
+   **inherits: true, and it matters.** The value is set on the tile and read in its ::after, and a
+   pseudo-element only sees it by inheritance. Registered with inherits:false the ::after saw the
+   initial value instead — 0 — and the ring vanished (user, 2026-09-15: "이번엔 게이지가 안보이고"). */
+@property --p { syntax: '<number>'; inherits: true; initial-value: 0; }
 .tile.arming::after {
   content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 3px;
   pointer-events: none; z-index: 3;
