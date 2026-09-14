@@ -79,7 +79,7 @@ python -m palmar
 ```
 
 **여전히 기본으로 켜지 않는다.** 아직 없는 것: 훅 shim 이 셸 스크립트라 **상태가 창 제목만**으로
-나고, **터미널을 열 수 있는 곳이 `%USERPROFILE%` 아래뿐**이다(`roots()` 를 넓힐지는 사람이 정할 것).
+나고, **터미널을 열 수 있는 곳이 `%USERPROFILE%` 아래뿐**이다(#31 — `roots()` 를 넓힐지는 사람이 정할 것).
 
 #### 실제 기계가 찾은 것 — 러너로는 하나도 못 봤다
 
@@ -98,7 +98,7 @@ python -m palmar
 (`dev/win-daemon-probe.py` 의 `names the source uses that this platform lacks`). 그 한 판이
 스무 개를 한 번에 냈고 그중 하나(`signal.SIGKILL`)가 진짜였다.
 
-#### 아직 없는 것: 윈도우 shim — 그리고 그게 **두 가지**를 막는다
+#### 아직 없는 것: 윈도우 shim — 그리고 그게 **두 가지**를 막는다 (#30)
 
 POSIX 에서 palmar 는 셸의 PATH 앞에 껍데기를 두어 훅을 붙인다(zsh 는 `ZDOTDIR`, bash 는 `--rcfile`).
 **윈도우에는 그게 없다.** 그 하나가 빠져서 두 가지가 안 된다:
