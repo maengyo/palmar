@@ -57,7 +57,13 @@ if sys.platform == "win32" and not os.environ.get("PALMAR_WINDOWS_ANYWAY"):
     raise SystemExit(
         "palmar does not run natively on Windows yet.\n"
         "  Run the daemon inside WSL and open the address it prints in your Windows browser.\n"
-        "  The native port is tracked at https://github.com/maengyo/palmar/issues/29"
+        "  The native port is tracked at https://github.com/maengyo/palmar/issues/29\n"
+        "\n"
+        "  The port is far enough along to try, if you want to help find what is missing:\n"
+        "      $env:PALMAR_WINDOWS_ANYWAY=1 ; palmar\n"
+        "  A daemon comes up and serves the page (measured on a runner, 2026-09-14). What is not\n"
+        "  there yet: it stays attached to the terminal (no fork on Windows), and the hook shim is\n"
+        "  shell scripts, so status comes from window titles only. docs/windows.md has the list."
     )
 if sys.version_info < (3, 9):
     raise SystemExit("palmar: Python 3.9 or newer is required (/usr/bin/python3 is 3.9.6)")

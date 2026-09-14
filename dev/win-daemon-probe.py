@@ -279,6 +279,26 @@ def _serve():
             "· looks like the app" if b"PALMAR_TOKEN" in body else "· **no token in it**")
         if b"PALMAR_TOKEN" not in body:
             raise RuntimeError("the page has no token script -- it is not palmar's index.html")
+
+        # And a real terminal through the real API, which is the thing the page would do next.
+        tok_file = os.path.join(home, ".palmar", "run", "token")
+        with open(tok_file, encoding="utf-8") as fh:
+            token = fh.read().strip()
+        import json as _json
+        body = _json.dumps({"cwd": repo, "name": "probe"}).encode()
+        req = urllib.request.Request(base + "/api/sessions?token=" + token, data=body,
+                                     headers={"Origin": base, "Content-Type": "application/json"},
+                                     method="POST")
+        with urllib.request.urlopen(req, timeout=20) as r:
+            made = _json.loads(r.read())
+        say("    POST /api/sessions ->", r.status, "· id", made.get("id"), "· status", made.get("status"))
+        req = urllib.request.Request(base + "/api/sessions?token=" + token, headers={"Origin": base})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            listed = _json.loads(r.read())
+        rows = listed.get("sessions", listed if isinstance(listed, list) else [])
+        if not any(x.get("id") == made.get("id") for x in rows):
+            raise RuntimeError("the session was made but is not in the list")
+        say("    it is in the list ·", len(rows), "session(s)")
     finally:
         subprocess.run([sys.executable, "-m", "palmar", "--stop"], cwd=repo, env=env,
                        capture_output=True, timeout=60)
