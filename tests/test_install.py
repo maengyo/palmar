@@ -212,6 +212,22 @@ class InstallPs1(unittest.TestCase):
         self.assertIn("looked in", r.stdout, "it gave up without saying where it looked")
         self.assertIn("-Python", r.stdout, "it does not offer the way out for a Python it missed")
 
+    def test_it_is_pure_ascii(self):
+        """**Windows PowerShell 5.1 reads a BOM-less file in the system code page, not UTF-8.**
+
+        One em dash inside a string became two mojibake characters, the string ended early, and 5.1
+        gave up at line 54 with "Unexpected token 'line'" -- taking the whole script with it. The
+        same file parsed and ran clean under PowerShell 7 on a Mac, which is why a Mac could not see
+        it (2026-09-14). A BOM would fix it too; staying ASCII means never having to remember one.
+
+        Cheap and total: every byte, not a spot check."""
+        with open(self.SCRIPT, "rb") as fh:
+            raw = fh.read()
+        bad = sorted({b for b in raw if b > 0x7F})
+        self.assertEqual(bad, [], "non-ASCII bytes in install.ps1: %r -- PowerShell 5.1 will mangle them"
+                                  % [hex(b) for b in bad[:8]])
+        self.assertFalse(raw.startswith(b"\xef\xbb\xbf"), "a BOM crept in; pure ASCII needs none")
+
     def test_one_bad_step_does_not_take_the_report_down(self):
         """**`$ErrorActionPreference = 'Stop'` was the bug.** On Windows PowerShell 5.1 a *native*
         command writing one line to stderr becomes a terminating NativeCommandError under it, so
