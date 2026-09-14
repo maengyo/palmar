@@ -26,7 +26,9 @@ param(
   # Skip the question. For scripted runs; a person should read the report first.
   [switch]$Yes,
   # Where the launcher goes. Under the profile, so no administrator is involved.
-  [string]$Prefix
+  [string]$Prefix,
+  # A python.exe to use, when the search misses one you know is there. Say where it went wrong.
+  [string]$Python
 )
 
 $ErrorActionPreference = 'Stop'
@@ -80,35 +82,119 @@ if ($onWindows) {
 # **The Store stub is the trap.** Windows ships a zero-length `python.exe` in WindowsApps that opens the
 # Microsoft Store instead of running anything, and Get-Command finds it first. Run each candidate and
 # believe the version it prints, rather than the fact that a file exists.
+function Try-Python {
+  # **Run it and believe what it prints.** A file existing proves nothing on Windows: the alias in
+  # WindowsApps is zero bytes whether Python is installed or not, so length cannot tell a working
+  # Store install from the stub that opens the Store. The version it prints can.
+  param([string]$Exe, [string[]]$Pre = @())
+  if (-not $Exe -or -not (Test-Path -LiteralPath $Exe)) { return $null }
+  try {
+    $out = & $Exe @Pre '-c' 'import sys;print("%d.%d" % sys.version_info[:2])' 2>$null
+  } catch { return $null }
+  if ($LASTEXITCODE -ne 0 -or -not $out) { return $null }
+  $v = ("$out".Trim() -split "`n")[-1].Trim()
+  $parts = $v -split '\.'
+  if ($parts.Count -lt 2) { return $null }
+  try { $maj = [int]$parts[0]; $min = [int]$parts[1] } catch { return $null }
+  return [pscustomobject]@{ Exe = $Exe; Pre = $Pre; Version = $v; Major = $maj; Minor = $min }
+}
+
 function Find-Python {
-  $cands = @()
-  $py = Get-Command py.exe -ErrorAction SilentlyContinue
-  if ($py) { $cands += ,@($py.Source, @('-3')) }
+  # Four places, because PATH alone is not where Python is. **The installer's "Add python.exe to
+  # PATH" box is unticked by default**, so a perfectly good Python is routinely invisible to
+  # Get-Command — which is exactly what happened the first time this ran (2026-09-14, user).
+  $looked = New-Object System.Collections.ArrayList
+  $cands = New-Object System.Collections.ArrayList
+  function Add-Cand { param($e, $pre = @(), $why) 
+    if ($e) { [void]$cands.Add(@($e, $pre, $why)) } }
+
+  # ① PATH — the py launcher first, since it knows about every installed version.
+  foreach ($c in @(Get-Command py.exe -All -ErrorAction SilentlyContinue)) {
+    if ($c.CommandType -eq 'Application') { Add-Cand $c.Source @('-3') 'PATH (py launcher)' }
+  }
   foreach ($n in 'python3.exe','python.exe','python3','python') {
-    foreach ($c in @(Get-Command $n -All -ErrorAction SilentlyContinue)) { $cands += ,@($c.Source, @()) }
+    foreach ($c in @(Get-Command $n -All -ErrorAction SilentlyContinue)) {
+      if ($c.CommandType -eq 'Application') { Add-Cand $c.Source @() 'PATH' }
+    }
   }
+  [void]$looked.Add('PATH')
+
+  if ($onWindows) {
+    # ② The registry, which is where the installer actually records itself — the authority, and
+    # unaffected by the PATH box.
+    foreach ($root in 'HKCU:\SOFTWARE\Python','HKLM:\SOFTWARE\Python','HKLM:\SOFTWARE\WOW6432Node\Python') {
+      foreach ($company in 'PythonCore','ContinuumAnalytics') {
+        $base = Join-Path $root $company
+        if (-not (Test-Path $base)) { continue }
+        foreach ($k in @(Get-ChildItem $base -ErrorAction SilentlyContinue)) {
+          try {
+            $ip = (Get-ItemProperty (Join-Path $k.PSPath 'InstallPath') -ErrorAction Stop)
+            $dir = $ip.'(default)'
+            if (-not $dir) { $dir = $ip.ExecutablePath }
+            if ($dir) {
+              $exe = if ($dir -like '*.exe') { $dir } else { Join-Path $dir 'python.exe' }
+              Add-Cand $exe @() ("registry " + $company + " " + $k.PSChildName)
+            }
+          } catch { }
+        }
+      }
+    }
+    [void]$looked.Add('registry (PythonCore, ContinuumAnalytics)')
+
+    # ③ Where the installers put it when nobody changed the path.
+    $dirs = @()
+    foreach ($b in @($env:LOCALAPPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:USERPROFILE, 'C:\', 'C:\ProgramData')) {
+      if (-not $b) { continue }
+      $dirs += (Join-Path $b 'Programs\Python')
+      $dirs += $b
+    }
+    foreach ($d in $dirs) {
+      if (-not (Test-Path -LiteralPath $d)) { continue }
+      foreach ($sub in @(Get-ChildItem -LiteralPath $d -Directory -ErrorAction SilentlyContinue |
+                         Where-Object { $_.Name -match '^(Python3|Python 3|anaconda3|miniconda3|miniforge3)' })) {
+        Add-Cand (Join-Path $sub.FullName 'python.exe') @() ("folder " + $sub.FullName)
+      }
+    }
+    [void]$looked.Add('the usual install folders')
+
+    # ④ The launcher lives in the Windows directory even when PATH has been emptied.
+    Add-Cand (Join-Path $env:WINDIR 'py.exe') @('-3') 'C:\Windows\py.exe'
+    [void]$looked.Add('C:\Windows\py.exe')
+  }
+
+  $seen = @{}
+  $tooOld = @()
   foreach ($c in $cands) {
-    $exe, $pre = $c
-    if ($exe -like '*\WindowsApps\*' -and (Get-Item $exe).Length -eq 0) {
-      Say ("  python       {0} — the Microsoft Store stub, skipped" -f $exe); continue
+    $exe, $pre, $why = $c
+    $key = "$exe|$($pre -join ' ')"
+    if ($seen.ContainsKey($key)) { continue }
+    $seen[$key] = $true
+    $store = ($exe -like '*\WindowsApps\*')
+    $r = Try-Python -Exe $exe -Pre $pre
+    if (-not $r) {
+      if ($store) { Say ("  python       {0} — the WindowsApps alias answered nothing (Store stub)" -f $exe) }
+      continue
     }
-    try {
-      $out = & $exe @pre '-c' 'import sys;print("%d.%d"%sys.version_info[:2])' 2>$null
-    } catch { continue }
-    if ($LASTEXITCODE -ne 0 -or -not $out) { continue }
-    $parts = ("$out".Trim() -split '\.')
-    if ($parts.Count -lt 2) { continue }
-    if ([int]$parts[0] -gt 3 -or ([int]$parts[0] -eq 3 -and [int]$parts[1] -ge 9)) {
-      return [pscustomobject]@{ Exe = $exe; Pre = $pre; Version = "$out".Trim() }
+    if ($r.Major -gt 3 -or ($r.Major -eq 3 -and $r.Minor -ge 9)) {
+      Say ("  python       {0}  ({1})  via {2}" -f $r.Exe, $r.Version, $why)
+      return $r
     }
-    Say ("  python       {0} is {1} — too old, 3.9 is the floor" -f $exe, "$out".Trim())
+    $tooOld += ("{0} is {1}" -f $exe, $r.Version)
   }
+  foreach ($t in $tooOld) { Say ("  python       {0} — too old, 3.9 is the floor" -f $t) }
+  Say '  python       none 3.9 or newer'
+  Say ("  looked in    {0}" -f ($looked -join ' · '))
+  Say '  ! if you know where it is, pass it: -Python "C:\path\to\python.exe"'
   return $null
 }
 
-$found = Find-Python
-if ($found) { Say ("  python       {0}  ({1})" -f $found.Exe, $found.Version) }
-else        { Say '  python       none 3.9 or newer' }
+if ($Python) {
+  $found = Try-Python -Exe $Python
+  if ($found) { Say ("  python       {0}  ({1})  via -Python" -f $found.Exe, $found.Version) }
+  else        { Say ("  python       -Python {0} did not answer with a version" -f $Python) }
+} else {
+  $found = Find-Python
+}
 Say ("  checkout     {0}" -f $(if ($src) { $src } else { 'not run from one' }))
 Say ''
 

@@ -197,6 +197,27 @@ class InstallPs1(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(prefix, "bin", "palmar.cmd")),
                          "it wrote a launcher without being told to")
 
+    def test_it_looks_past_PATH(self):
+        """**The first real run found nothing** (user, 2026-09-14) on a machine that has Python.
+        Windows' installer leaves "Add python.exe to PATH" unticked by default, so Get-Command is
+        exactly the wrong place to stop. The registry is where the installer records itself and is
+        the authority; the usual install folders and C:\\Windows\\py.exe come after it.
+
+        What is checked here is that the search *names where it looked*, because a bare "none" is a
+        dead end for the person reading it. The registry branch itself only exists on Windows."""
+        env = dict(os.environ, PATH="/nonexistent")
+        r = subprocess.run([pwsh_path(), "-NoProfile", "-ExecutionPolicy", "Bypass",
+                            "-File", self.SCRIPT, "-Check"],
+                           input="", capture_output=True, text=True, timeout=180, cwd=REPO, env=env)
+        self.assertIn("looked in", r.stdout, "it gave up without saying where it looked")
+        self.assertIn("-Python", r.stdout, "it does not offer the way out for a Python it missed")
+
+    def test_a_python_can_be_named_outright(self):
+        """The escape hatch, for the machine that knows better than the search."""
+        r = self.run_ps("-Check", "-Python", sys.executable)
+        self.assertIn("via -Python", r.stdout)
+        self.assertIn(os.path.basename(sys.executable), r.stdout)
+
     def test_it_refuses_outside_a_checkout(self):
         """Run from somewhere else there is nothing to install — the repository is private, so there is
         nothing to download either (#23). It has to say that rather than write a broken launcher."""
