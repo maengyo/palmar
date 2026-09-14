@@ -2272,15 +2272,41 @@ const PROTOCOL = 1;
 let protocolWarned = false;
 function checkProtocol(m) {
   const v = m.v;
-  if (v === undefined || v === PROTOCOL || protocolWarned) return;
+  if (v === undefined || v === PROTOCOL || protocolWarned) return false;
   protocolWarned = true;
   const older = v < PROTOCOL;
   toast([
     'this page speaks protocol ' + PROTOCOL + ', the daemon speaks ' + (v === null ? '?' : v),
-    older ? 'the daemon is older — restart it after pulling'
-          : 'this page is older — reload with a hard refresh',
+    older ? 'the daemon is older — restart it after pulling' : 'this page is older',
     m.daemon ? 'daemon ' + m.daemon : '',
+    // Every reply carries `Cache-Control: no-store`, so an ordinary reload really does fetch the new files —
+    // this used to say "with a hard refresh", which asked for a gesture that was never needed.
+    older ? '' : { a: 'reload', on: () => location.reload() },
   ].filter(Boolean));
+  return true;
+}
+
+//: **The version of the daemon this page attached to.** The UI is served by the daemon, so an update swaps
+//: the daemon's copy of this very file while the tab you are looking at goes on running the old one — and
+//: the tab has no way to notice by itself. The socket drops when the daemon restarts and the version is the
+//: first thing the new one says, so this costs one comparison and reaches nothing outside the machine.
+//:
+//: **It is not an "is there a newer release" check.** palmar opens no outbound connection; whether it ever
+//: should is a separate decision and #23 has to settle first, because there is nothing to check against yet.
+//:
+//: A restart means more than a stale screen. ⑦=b: the daemon comes back only for an update, and when it does
+//: the shell panes are gone and the agents returned through `--resume`. So this line is also the answer to
+//: "where did my shells go".
+let daemonSeen = null;
+function checkVersion(m) {
+  const v = m && m.daemon;
+  if (!v) return false;                     // a daemon older than this field — checkProtocol has that case
+  if (daemonSeen === null) { daemonSeen = v; return false; }   // the attach itself is not news
+  if (v === daemonSeen) return false;
+  daemonSeen = v;
+  toast([{ b: 'palmar ' + v }, 'the daemon restarted on a new version — this screen is still the old one',
+         { a: 'reload', on: () => location.reload() }]);
+  return true;
 }
 
 // ── "working, but quiet" ──────────────────────────────────
@@ -2453,7 +2479,10 @@ function connectEvents() {
     if (!m) return;
     // Within one hello frame every session.canvas is in this canvases list (protocol.md) — put the canvases in first
     if (m.t === 'hello') {
-      checkProtocol(m); setCanvases(m.canvases || []); reconcile(m.sessions || []);
+      // One toast, not two: a protocol mismatch is the louder half of the same news, and the second call
+      // would overwrite the first in the same strip.
+      if (!checkProtocol(m)) checkVersion(m);
+      setCanvases(m.canvases || []); reconcile(m.sessions || []);
       renderRestore(m.restore);
     }
     else if (m.t === 'session' && m.s) upsert(m.s);
@@ -2759,6 +2788,9 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // can also be asked directly — the cascade and the round limit need more windows than a
                   // hand can comfortably drag into place one at a time.
                   pushAside, applyPush, hits,
+                  // Update notice. daemonSeen being set proves the hello handler feeds it; checkVersion is
+                  // here because the alternative is restarting a daemon on a different version mid-test.
+                  checkVersion, daemonSeen: () => daemonSeen,
                   // The switch's state, read-only — a test flips the real checkbox and checks this followed.
                   pushOn: () => pushOn,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while

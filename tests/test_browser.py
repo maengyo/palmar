@@ -963,5 +963,80 @@ class PushAside(unittest.TestCase):
         self.assertIsNone(on, "turning it back on left a key behind; the default must be an absent key")
 
 
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class UpdateNotice(unittest.TestCase):
+    """When the daemon comes back on a new version, the page that is still open says so.
+
+    What was missing: **the UI is served by the daemon.** Update palmar and the daemon has the new
+    app.js while every tab already open goes on running the old one, with nothing to tell it apart.
+    The socket drops on restart and the version is the first thing the new daemon says, so the check
+    reaches nothing outside the machine — this is deliberately not an "is there a newer release"
+    check, which would be palmar's first outbound connection ever and is a separate decision.
+
+    It also answers "where did my shells go": ⑦=b says the daemon restarts only for an update, and
+    the shell panes do not survive it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def setUp(self):
+        self.b.ev("""(()=>{const t=document.querySelector('.toast');
+          if (t) { t.classList.remove('show'); t.textContent=''; } return 1;})()""")
+
+    def toast(self):
+        return self.b.ev("""(()=>{const t=document.querySelector('.toast');
+          return {shown: t.classList.contains('show'), words: t.textContent,
+                  action: !!t.querySelector('.undo')};})()""")
+
+    def test_the_page_knows_which_daemon_it_attached_to(self):
+        """The wiring. Without this the rest of the class tests a function nothing calls."""
+        self.assertTrue(self.b.ev("window.palmar.daemonSeen()"),
+                        "the hello handler never recorded the daemon version")
+
+    def test_attaching_is_not_news(self):
+        """Opening the page must not announce an update. The version at attach is simply this page's."""
+        v = self.b.ev("window.palmar.daemonSeen()")
+        self.assertFalse(self.b.ev("window.palmar.checkVersion({daemon:%s})" % json.dumps(v)))
+        self.assertFalse(self.toast()["shown"], "it announced an update on the version it already had")
+
+    def test_a_different_version_says_so_and_offers_a_reload(self):
+        self.assertTrue(self.b.ev("window.palmar.checkVersion({daemon:'9.9.9'})"))
+        t = self.toast()
+        self.assertTrue(t["shown"], "nothing told the user the daemon had changed")
+        self.assertIn("9.9.9", t["words"])
+        self.assertIn("old one", t["words"])
+        self.assertTrue(t["action"], "no way to act on it — the fix is a reload")
+        # and it does not repeat itself for the same version
+        self.b.ev("document.querySelector('.toast').classList.remove('show')")
+        self.assertFalse(self.b.ev("window.palmar.checkVersion({daemon:'9.9.9'})"),
+                         "it announced the same version twice")
+
+    def test_a_daemon_that_does_not_say_is_not_an_error(self):
+        """Older daemons send no `daemon` field. That is checkProtocol's case, not this one, and it
+        must not throw on the way past."""
+        self.assertFalse(self.b.ev("window.palmar.checkVersion({})"))
+        self.assertFalse(self.b.ev("window.palmar.checkVersion(null)"))
+        self.assertFalse(self.toast()["shown"])
+
+    def test_the_reload_advice_matches_what_the_daemon_sends(self):
+        """It used to ask for a **hard** refresh. Every reply carries `Cache-Control: no-store`, so an
+        ordinary reload already fetches the new files — asking for a gesture nobody needs is how a
+        notice trains people to ignore it."""
+        import urllib.request
+        req = urllib.request.Request(self.d.base + "/app.js", headers={"Origin": self.d.base})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            cc = (r.headers.get("Cache-Control") or "").lower()
+        self.assertIn("no-store", cc,
+                      "static replies lost Cache-Control: no-store, so a plain reload may serve the old page")
+
+
 if __name__ == "__main__":
     unittest.main()
