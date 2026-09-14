@@ -3235,6 +3235,21 @@ async def main(port: int, open_page: bool = True) -> None:
         pass
 
 
+def _restored_cwd(name, fallback):
+    """The folder restore.json holds for a pane, by name. None when it is not in there.
+
+    Matched on the name because the file keeps no ids — a restored pane is a **new** pane, so an id
+    would mean nothing to the daemon that reads it back (protocol.md)."""
+    try:
+        body = json.loads(RESTORE_FILE.read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    for row in body.get("sessions") or []:
+        if row.get("name") == name or (not name and row.get("cwd") == fallback):
+            return row.get("cwd")
+    return None
+
+
 def doctor(port: int) -> int:
     """`palmar --doctor` — puts **this code**, **the running daemon** and **each pane's status** on one screen.
 
@@ -3414,6 +3429,20 @@ def doctor(port: int) -> int:
         moved = len(set(seen)) > 1
         title = s.get("title")
         out("  %s" % (s.get("name") or s.get("cwd")))
+        # **Where it would come back.** `cwd` in the API is the folder the pane was *opened* in; what
+        # a restart actually reopens is what the restore file holds, which is `cwd_of(pid)` — the
+        # folder it is in **now**. Those two being identical for every pane is exactly what "it does
+        # not remember where I cd-ed to" looks like, and there was no way to see it from here
+        # (user, 2026-09-14). Reading the file needs no pid, so the doctor can say it.
+        was = s.get("cwd")
+        now = _restored_cwd(s.get("name"), was)
+        if now is None:
+            out("      folder    %s   <- nothing in restore.json for it yet (saved every %.0fs)"
+                % (was, RESTORE_EVERY_S))
+        elif os.path.normcase(os.path.normpath(now)) == os.path.normcase(os.path.normpath(was)):
+            out("      folder    %s   <- opened here, and still here as far as palmar can tell" % was)
+        else:
+            out("      folder    %s\n                -> %s   <- it followed a cd" % (was, now))
         out("      now       status=%s" % s.get("status"))
         out("      read from %s" % (
             "hooks — %s reports it directly (the most exact)" % s.get("agent") if s.get("agent")
