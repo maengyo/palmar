@@ -1223,12 +1223,22 @@ class Session:
 
 # ── Child-exit detection ──────────────────────────────────────────────────────────────
 class Reaper:
-    """On SIGCHLD, waitpid(WNOHANG) on every pid we know. Signals can coalesce, so never look at just one."""
+    """On SIGCHLD, waitpid(WNOHANG) on every pid we know. Signals can coalesce, so never look at just one.
+
+    **There is no SIGCHLD on Windows.** A pane's death is learned there the other way round: the read
+    path gets EOF from the console and calls `die("pty eof")`, which is a path both platforms already
+    take — Linux reports a dead child as EIO and macOS as empty bytes, so nothing here is new, it is
+    just the *only* route rather than the second one. What is lost is the grace period's backstop
+    (`kill_if_alive`), and the job object is what replaces it: ConPty.close tears down the whole tree
+    (#29, docs/windows.md)."""
 
     def __init__(self):
         self.pids: dict[int, Session] = {}
 
     def install(self, loop) -> None:
+        if not hasattr(signal, "SIGCHLD"):
+            log("SIGCHLD 가 없는 플랫폼 — pane 의 죽음은 콘솔 EOF 로 안다")
+            return
         loop.add_signal_handler(signal.SIGCHLD, self.reap)
 
     def watch(self, s: Session) -> None:
@@ -2850,8 +2860,18 @@ async def main(port: int, open_page: bool = True) -> None:
     except OSError as e:
         raise SystemExit(f"palmard: 127.0.0.1:{port} 에 묶지 못했다 — {e.strerror or e}")
     stop = loop.create_future()
+    # **add_signal_handler is POSIX-only** — the Proactor loop raises NotImplementedError for it,
+    # measured on a runner. `signal.signal` works on both, but its handler runs on the main thread
+    # rather than inside the loop, so it has to hand back across with call_soon_threadsafe.
+    def _stop_now():
+        if not stop.done():
+            stop.set_result(None)
+
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: stop.done() or stop.set_result(None))
+        try:
+            loop.add_signal_handler(sig, _stop_now)
+        except (NotImplementedError, AttributeError, ValueError):
+            signal.signal(sig, lambda *_: loop.call_soon_threadsafe(_stop_now))
     log(f"palmard pid {os.getpid()}  shell={os.environ.get('SHELL') or '/bin/sh'}  web={WEB}"
         f"{'' if (WEB / 'index.html').is_file() else ' (index.html 없음 — 자리표를 낸다)'}")
     # The last line — this is all the user reads to get started. **The key is attached** (#14): only this
