@@ -98,6 +98,25 @@ python -m palmar
 (`dev/win-daemon-probe.py` 의 `names the source uses that this platform lacks`). 그 한 판이
 스무 개를 한 번에 냈고 그중 하나(`signal.SIGKILL`)가 진짜였다.
 
+#### 아직 없는 것: 윈도우 shim — 그리고 그게 **두 가지**를 막는다
+
+POSIX 에서 palmar 는 셸의 PATH 앞에 껍데기를 두어 훅을 붙인다(zsh 는 `ZDOTDIR`, bash 는 `--rcfile`).
+**윈도우에는 그게 없다.** 그 하나가 빠져서 두 가지가 안 된다:
+
+**① 신호등이 사실상 안 움직인다.** PowerShell 은 창 제목을 자기 exe 경로로 한 번 정하고 안 바꾼다
+(`'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'`, 사용자 화면 2026-09-14).
+제목이 안 도니 "제목이 도는 것 = 일하는 중" 이 성립하지 않는다. 출력 기반 판정은 남아 있다.
+
+**② `cd` 를 못 따라간다.** `cwd_of` 가 PEB 에서 프로세스 작업 디렉터리를 읽는데,
+**PowerShell 의 `Set-Location` 은 그걸 안 바꾼다** — PowerShell 자기 위치만 바꾸고
+`SetCurrentDirectory` 를 안 부른다. 그래서 아무리 정확히 읽어도 **시작한 자리**가 나온다.
+확인: `cd C:\ ; [System.IO.Directory]::GetCurrentDirectory()` 가 `C:\` 를 안 찍는다.
+`cmd.exe` 나 `chdir()` 하는 프로그램에는 제대로 동작한다 — **PowerShell 에만 조용한 것이지 틀린 게 아니다.**
+
+**둘 다 같은 것이 푼다: 프롬프트가 경로를 창 제목에 쓰게 하는 것.** palmar 는 이미 제목을 본다.
+POSIX 의 rc 끼우기에 해당하는 것이 PowerShell 에는 `-NoExit -Command <머리말>` 이다 —
+**사용자 프로필을 건너뛰지 않고** 그 뒤에 우리 것을 얹는다. 사용자 파일은 안 건드린다(원칙 3).
+
 #### 잠금 바이트를 다시 바꾸지 마라 — 바꾼다면 이행을 생각해라
 
 새 데몬은 `1 << 30` 번 바이트를 잠근다. **옛 데몬이 도는 동안 새 `--stop` 은 그것을 못 본다** —

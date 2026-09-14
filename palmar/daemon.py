@@ -1632,6 +1632,15 @@ def cwd_of(pid: int):
 #: relied on, but they are not contract — so every step is checked and any failure means `None`,
 #: which is the answer this function has always had for a platform it cannot ask. Falling back to the
 #: folder a pane was opened in is a worse answer, never a wrong one.
+#:
+#: **And it cannot follow a PowerShell `cd`, however correctly it reads.** `Set-Location` moves
+#: PowerShell's *own* location and never calls SetCurrentDirectory, so the process working directory
+#: — which is what the PEB holds — stays where the shell started. Confirmed by the shape of the
+#: report: four panes, all cd-ed, all still reading as their opening folder (user, 2026-09-14).
+#: `cmd.exe` does update it, and so does any program that chdir()s, so this is right for those and
+#: silent for PowerShell rather than wrong. **Following a PowerShell cd needs the shell to say so** —
+#: a prompt that writes the path into the window title, which palmar already watches. That is the
+#: Windows half of the PATH shim, and it is not built (#29, docs/windows.md).
 _NTDLL = [False]
 _PEB_PROCESS_PARAMETERS = 0x20          # PEB.ProcessParameters, x64
 _RUPP_CURRENT_DIRECTORY = 0x38          # RTL_USER_PROCESS_PARAMETERS.CurrentDirectory.DosPath, x64
