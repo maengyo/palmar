@@ -239,6 +239,7 @@ def _serve():
     real entry point, `cli()` included, which is what a person actually runs."""
     import socket
     import subprocess
+    import urllib.error
     import urllib.request
 
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -285,12 +286,19 @@ def _serve():
         with open(tok_file, encoding="utf-8") as fh:
             token = fh.read().strip()
         import json as _json
-        body = _json.dumps({"cwd": repo, "name": "probe"}).encode()
+        # **Inside HOME.** The daemon only opens terminals under roots it will admit, and the checkout
+        # is on another drive from this probe's temporary HOME -- so asking for it came back 400, and
+        # that refusal is the feature working (2026-09-14).
+        body = _json.dumps({"cwd": home, "name": "probe"}).encode()
         req = urllib.request.Request(base + "/api/sessions?token=" + token, data=body,
                                      headers={"Origin": base, "Content-Type": "application/json"},
                                      method="POST")
-        with urllib.request.urlopen(req, timeout=20) as r:
-            made = _json.loads(r.read())
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                made = _json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            # Say **what it said**. A bare "400" sends the next round guessing, which it did.
+            raise RuntimeError("POST /api/sessions -> %d %s" % (e.code, e.read()[:200].decode("utf-8", "replace")))
         say("    POST /api/sessions ->", r.status, "· id", made.get("id"), "· status", made.get("status"))
         req = urllib.request.Request(base + "/api/sessions?token=" + token, headers={"Origin": base})
         with urllib.request.urlopen(req, timeout=20) as r:
