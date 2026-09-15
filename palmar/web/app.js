@@ -84,7 +84,12 @@ const MM_PAD = 4;                                       // inner padding of the 
 // width is 0.6em, but Chrome measured 6.996px at 11.667px — short of 7 (measured). So leave a little room at
 // 11.75px: 7.05px → 7 at dpr 1, 14 → 7 at dpr 2. Indistinguishable from 11.5 by eye. Other dpr values (1.5 and
 // such) still get floored — that is the spot cate hit.
-const FONT_PX = 11.75;
+// **The default text size, and the person can change it.** 11.75 was small on a big screen, and the
+// wheel moved in quarter-pixels so a tick often did nothing visible (user, 2026-09-15). A whole pixel a
+// tick now, and this is a `let`: the options list writes it, panes that never set their own follow it.
+let FONT_PX = 13;
+const LS_FONT = 'palmar.font';
+try { const v = parseFloat(localStorage.getItem(LS_FONT)); if (v >= 8 && v <= 24) FONT_PX = v; } catch (e) {}
 // Text size per pane (#25). The window stays put and only the text changes, so **rows and columns grow and
 // shrink** — see more in the same spot, or see it bigger. What the browser's Ctrl− does to every pane, done to one.
 const FONT_MIN = 6, FONT_MAX = 32, FONT_STEP = 1;
@@ -517,15 +522,50 @@ if (themeMenu) {
 if (darkMq.addEventListener) darkMq.addEventListener('change', () => { if (!root.dataset.theme) rethemeTerminals(); });
 
 // xterm takes colors as values. Read the values out of the CSS variables and hand them over — so a color never lives in two places.
+//: **The sixteen colours a terminal actually prints in.** Only background, foreground and the cursor were
+//: ever set, so the ANSI palette stayed xterm's own — built for a dark terminal. On a light theme a
+//: program printing "bright white" (ls, prompts, spinners) drew near-white on a white tile and the typing
+//: was hard to read (user, 2026-09-15: "light 테마일때 터미널에서 타이핑 하는 글자 잘 안보이는데").
+//: The light set is dark-on-light throughout — brightWhite included, which is the one that matters.
+const ANSI_LIGHT = {
+  black: '#2a2d36', red: '#b03028', green: '#2f7d3a', yellow: '#8a6a00',
+  blue: '#2f5fd0', magenta: '#8a3fa8', cyan: '#0f7c86', white: '#4b5263',
+  brightBlack: '#6b7280', brightRed: '#c0392f', brightGreen: '#237a2e', brightYellow: '#9a6b00',
+  brightBlue: '#3b6fe0', brightMagenta: '#9b4bbd', brightCyan: '#0e8a94', brightWhite: '#1f2229',
+};
+const ANSI_DARK = {
+  black: '#3a3630', red: '#d4655c', green: '#6aa96f', yellow: '#d9a441',
+  blue: '#7fa6e0', magenta: '#c08ad0', cyan: '#6fc2c9', white: '#ded8cd',
+  brightBlack: '#8a8377', brightRed: '#e08078', brightGreen: '#86c08a', brightYellow: '#e8bb63',
+  brightBlue: '#9dbcec', brightMagenta: '#d0a3dd', brightCyan: '#8fd4da', brightWhite: '#f6f1e8',
+};
+function isDarkNow() {
+  return root.dataset.theme === 'dark' || (!root.dataset.theme && darkMq.matches);
+}
 function termTheme() {
-  return {
+  return Object.assign({
     background: cssVar('--tile'),
     foreground: cssVar('--term-ink'),
     cursor: cssVar('--accent'),
     cursorAccent: cssVar('--on-accent'),
     selectionBackground: cssVar('--accent-2'),
     selectionInactiveBackground: cssVar('--accent-2'),
-  };
+  }, isDarkNow() ? ANSI_DARK : ANSI_LIGHT);
+}
+// The base text size, from the options list. Panes that never set their own follow it.
+function setBaseFont(px) {
+  const f = Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(px)));
+  if (f === FONT_PX) return;
+  const was = FONT_PX;
+  FONT_PX = f;
+  try { localStorage.setItem(LS_FONT, String(f)); } catch (e) {}
+  for (const t of tiles.values()) {
+    const own = layout[t.id] && layout[t.id].f;
+    if (own && Math.abs(own - was) > 0.01) continue;      // this pane was set by hand — leave it
+    if (layout[t.id]) { const n = Object.assign({}, layout[t.id]); delete n.f; layout[t.id] = n; }
+    t.setFont(f);
+  }
+  saveLayout();
 }
 function rethemeTerminals() {
   const th = termTheme();
@@ -578,6 +618,9 @@ function buildFrame(t, s) {
     t.szEl = el('span', 'sz');
     t.rnEl = el('span', 'rn'); t.rnEl.title = 'rename (or double-click the name)';
     t.xpEl = el('span', 'xp'); t.xpEl.title = 'expand';
+    // **Wired here, in the shared frame.** It used to be wired in Tile's constructor, so a viewer drew the
+    // button and nothing happened when it was pressed (user, 2026-09-15).
+    t.xpEl.addEventListener('click', (ev) => { ev.stopPropagation(); setMax(t, !t.el.classList.contains('max')); });
     // #31 ① close. **The box is the same body as .rn·.xp** (they sit in one CSS rule together — there is no
     // room for size·border·hover to drift apart) and it joins the same row. Only the drawing inside differs — two strokes (×).
     // The reason no glyph (✕) is the same as for .rn: every font draws it differently (AGENTS.md).
@@ -593,7 +636,7 @@ function buildFrame(t, s) {
     e.addEventListener('wheel', (ev) => {
       if (!ev.ctrlKey && !ev.metaKey) return;
       ev.preventDefault(); ev.stopPropagation();
-      t.setFont((t.term.options.fontSize || FONT_PX) + (ev.deltaY < 0 ? FONT_STEP : -FONT_STEP));
+      t.setFont(Math.round(t.term.options.fontSize || FONT_PX) + (ev.deltaY < 0 ? FONT_STEP : -FONT_STEP));
     }, { passive: false, capture: true });
     // The size readout is the reset button — put it on something already there rather than add another button to the title bar.
     t.szEl.addEventListener('click', (ev) => { ev.stopPropagation(); t.setFont(FONT_PX); });
@@ -835,7 +878,6 @@ class Tile {
       if (this.ws && this.ws.readyState === 1) this.ws.send(b);
     });
 
-    this.xpEl.addEventListener('click', (ev) => { ev.stopPropagation(); setMax(this, !this.el.classList.contains('max')); });
     this.rnEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.rename(); });
     this.clEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.askClose(); });
     // Double-click on the name is caught in dragify's down(), not here: the title bar takes pointer
@@ -963,7 +1005,9 @@ class Tile {
   // The window is left alone. Change only the text and re-measure and rows·columns follow — and that resize
   // reaches the agent (refit → sendResize), so a TUI redraws at the new size.
   setFont(px) {
-    const f = Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(px * 4) / 4));
+    // Whole pixels: a quarter-pixel step is a tick that does nothing you can see, and on a canvas
+    // renderer it is a tick that does nothing at all.
+    const f = Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(px)));
     if (Math.abs(f - (this.term.options.fontSize || FONT_PX)) < 0.01) return;
     this.term.options.fontSize = f;
     this.refit();          // does fit → sendResize → showSize in one go
@@ -1054,6 +1098,7 @@ class Tile {
         }
         nameTap = { t: now, x: ev.clientX, y: ev.clientY };
       }
+      if (!layout[this.id]) this.persist();      // the board entry went missing — do not read undefined below
       mode = m; sx = ev.clientX; sy = ev.clientY;
       ({ x: ox, y: oy, w: ow, h: oh } = this.rect());
       // **Alt takes one window out of its group.** A group moves together, so there has to be a way to
@@ -1309,6 +1354,7 @@ class Viewer {
       const ctype = r.headers.get('content-type') || '';
       if (ctype.startsWith('image/')) {
         const blob = await r.blob();
+        if (this.closed) return;               // closed while it was loading — do not make a URL nobody revokes
         const img = el('img');
         img.alt = this.s.name;
         img.src = URL.createObjectURL(blob);
@@ -1316,6 +1362,7 @@ class Viewer {
         return;
       }
       const text = await r.text();
+      if (this.closed) return;
       const lines = text.split('\n');
       if (lines.length && lines[lines.length - 1] === '') lines.pop();
       const frag = document.createDocumentFragment();
@@ -1333,13 +1380,20 @@ class Viewer {
   }
   close() {
     if (this.closed) return;
-    undoMark('closing a viewer', this.s.canvas);
+    const cv = this.s.canvas;
     const g = layout[this.id] && layout[this.id].g;
-    if (g) leaveGroup(this.id);
+    undoMark('closing a viewer', cv);
     this.dispose();
     tiles.delete(this.id);
     delete layout[this.id];
+    // What is left of its group closes up, and the canvas tidies if that is on — the same two things
+    // closing a terminal does (review, 2026-09-15).
+    if (g) {
+      const rest = dissolveIfAlone(g);
+      if (rest.length > 1) compactGroup(rest);
+    }
     if (focused === this.id) focused = null;
+    if (autoTidy) tidyCanvas(cv);
     saveLayout();
     paintGroups(); renderMinimap(); refreshOff(); paintTidy();
   }
@@ -1349,27 +1403,82 @@ class Viewer {
     this.el.remove();
   }
 }
-function openViewer(path, canvas) {
+function openViewer(path, canvas, at) {
   const cv = canvas || current;
   const id = viewerId(path);
   let v = tiles.get(id);
-  if (v) { focusTile(id, { user: true }); v.el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' }); return v; }
+  if (v) {
+    // Already open. If it is sitting on another canvas, bring it to this one — the click has to do
+    // something, and a window hidden elsewhere looked like nothing happened (review, 2026-09-15).
+    if (at) {                                // dragged again: it moves to where it was let go
+      v.el.style.left = at.x + 'px'; v.el.style.top = at.y + 'px';
+      layout[id] = Object.assign({}, layout[id], { x: at.x, y: at.y });
+      v.el.classList.add('opening');
+      setTimeout(() => v.el.classList.remove('opening'), 260);
+      saveLayout(); settle(id);
+    }
+    if (v.s.canvas !== cv) {
+      v.s.canvas = cv;
+      layout[id] = Object.assign({}, layout[id], { canvas: cv });
+      v.el.classList.toggle('other', !v.visible());
+      saveLayout(); paintGroups(); renderMinimap(); refreshOff();
+    }
+    focusTile(id, { user: true });
+    v.el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    return v;
+  }
   v = new Viewer(id, path, cv);
   tiles.set(id, v);
+  if (at) {                                  // dropped: land under the hand, not in the first free slot
+    v.el.style.left = at.x + 'px'; v.el.style.top = at.y + 'px';
+    layout[id] = Object.assign({}, layout[id], { x: at.x, y: at.y });
+  }
+  v.el.classList.add('opening');
+  setTimeout(() => v.el.classList.remove('opening'), 260);
   v.persist();
+  settle(id);
   paintGroups(); renderMinimap(); refreshOff();
   focusTile(id, { user: true, keyboard: false });
   v.el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
   return v;
 }
+// **Drag a file out of the rail and let go on the canvas**: it opens where it was dropped. The drop
+// point is in canvas coordinates, so it lands under the hand rather than in the first free slot.
+cvScroll.addEventListener('dragover', (ev) => {
+  if (!dragFile) return;
+  ev.preventDefault();
+  try { ev.dataTransfer.dropEffect = 'copy'; } catch (e) {}
+  cv.classList.add('dropping');
+});
+cvScroll.addEventListener('dragleave', (ev) => { if (ev.target === cvScroll) cv.classList.remove('dropping'); });
+cvScroll.addEventListener('drop', (ev) => {
+  const path = dragFile || (ev.dataTransfer && ev.dataTransfer.getData('text/plain'));
+  cv.classList.remove('dropping');
+  if (!path) return;
+  ev.preventDefault();
+  const box = cvScroll.getBoundingClientRect();
+  const at = { x: Math.max(0, Math.round(ev.clientX - box.left + cvScroll.scrollLeft - 60)),
+               y: Math.max(0, Math.round(ev.clientY - box.top + cvScroll.scrollTop - 15)) };
+  openViewer(path, current, at);
+  dragFile = null;
+});
+
 // After the board arrives: every viewer it names comes back, on the canvas it was on.
 function restoreViewers() {
+  let fixed = false;
   for (const [id, r] of Object.entries(layout)) {
     if (!id.startsWith('v:') || r.kind !== 'file' || !r.path || tiles.has(id)) continue;
-    const v = new Viewer(id, r.path, r.canvas || current);
-    tiles.set(id, v);
+    // **Never trust a canvas the page does not know.** A dead id — after a daemon restart, or a canvas
+    // somebody removed — hides the window on every tab and there is no way back to it (review,
+    // 2026-09-15). The repair is saved, so the board stops carrying the dead id.
+    const cv = canvases.has(r.canvas) ? r.canvas : current;
+    if (cv !== r.canvas) fixed = true;
+    tiles.set(id, new Viewer(id, r.path, cv));
   }
+  if (fixed) saveLayout();
   paintGroups();
+  renderMinimap();
+  refreshOff();
 }
 
 function tryWebgl(term, onLoss) {
@@ -1523,7 +1632,8 @@ function layoutSnap(canvasId) {
   for (const t of tiles.values()) {
     if (t.s.canvas !== canvasId || !layout[t.id]) continue;
     const r = layout[t.id];
-    out[t.id] = { x: r.x, y: r.y, w: r.w, h: r.h, g: r.g || null };
+    out[t.id] = { x: r.x, y: r.y, w: r.w, h: r.h, g: r.g || null,
+                  kind: r.kind || null, path: r.path || null, canvas: r.canvas || null };
   }
   return out;
 }
@@ -1541,6 +1651,13 @@ function undoLast() {
   const step = undoStack.pop();
   if (!step) { toast(['nothing to undo on this canvas']); return false; }
   for (const [id, was] of Object.entries(step.snap)) {
+    // A viewer that was closed comes back: it is not a session, so nothing else would ever re-create it,
+    // and "undid closing a viewer" that restored nothing was a lie (review, 2026-09-15).
+    if (!tiles.get(id) && was.kind === 'file' && was.path) {
+      layout[id] = { x: was.x, y: was.y, w: was.w, h: was.h, kind: 'file', path: was.path,
+                     canvas: canvases.has(was.canvas) ? was.canvas : current };
+      tiles.set(id, new Viewer(id, was.path, layout[id].canvas));
+    }
     const t = tiles.get(id);
     if (!t || !layout[id]) continue;
     const next = Object.assign({}, layout[id], { x: was.x, y: was.y, w: was.w, h: was.h });
@@ -2335,8 +2452,9 @@ function railPut(side, px) {   // fixes the width only. No cleanup
 //: first. That is what a window resize did (reported 2026-09-11: minimise and restore, and the rail
 //: is back without being back). Folding is a 0 that has to be set past the clamp, so every path that
 //: sets a width has to come through here.
+const RAIL_STRIP = 30;    // a folded rail keeps this much: the strip that brings it back (2026-09-15)
 function railSync(side) {
-  if (railFolded[side]) document.documentElement.style.setProperty('--rail-' + side, '0px');
+  if (railFolded[side]) document.documentElement.style.setProperty('--rail-' + side, RAIL_STRIP + 'px');
   else railPut(side, railW(side));
 }
 function setRail(side, px, save) {
@@ -2531,6 +2649,9 @@ function canvasById(id) { return canvases.get(id) || null; }
 // No path is built that removes a canvas by killing the shells inside it: a screen action must not kill a running process.
 function canvasEmpty(id) {
   for (const x of sessions.values()) if (x.canvas === id) return false;
+  // A viewer is a window too. Counting sessions alone offered the remove handle on a canvas that had
+  // viewers on it, and removing it stranded them where nothing could reach them (review, 2026-09-15).
+  for (const t of tiles.values()) if (t.s.kind === 'file' && t.s.canvas === id) return false;
   return true;
 }
 function canvasRemovable(id) { return canvasEmpty(id) && canvasOrder.length > 1; }
@@ -3767,6 +3888,16 @@ async function expandNode(n) {
   }
 }
 function collapseNode(n) { n.expanded = false; renderTree(); }
+//: **Three cues, not one.** A folder carries a folder mark in the accent and its name in full ink; a
+//: file carries a page mark in the faint ink, its name a step back, and its size on the right. Drawn,
+//: not typed: a glyph would be a different shape on every machine (AGENTS.md).
+function rowIcon(kind) {
+  const i = el('span', 'ic ' + kind);
+  i.innerHTML = kind === 'dir'
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2l2 2.4h8.8A1.5 1.5 0 0 1 21 9.9v8.6A1.5 1.5 0 0 1 19.5 20h-15A1.5 1.5 0 0 1 3 18.5z"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h7.5L19 8.5V21H6z"/><path d="M13.5 3v5.5H19"/></svg>';
+  return i;
+}
 function fmtSize(n) {
   if (!Number.isFinite(n)) return '';
   if (n < 1024) return n + ' B';
@@ -3775,7 +3906,11 @@ function fmtSize(n) {
 }
 // A found folder: open the tree down to it, one /api/dirs a step, from the root that holds it.
 async function revealDir(path) {
-  const root = tree.roots.find((r) => path === r.path || path.startsWith(r.path.replace(/\/$/, '') + '/'));
+  // **The longest root that holds it.** `/` matches everything, and taking the first match walked the
+  // whole machine from the top instead of starting at home (review, 2026-09-15).
+  const root = tree.roots
+    .filter((r) => path === r.path || path.startsWith(r.path.replace(/\/$/, '') + '/'))
+    .sort((a, b) => b.path.length - a.path.length)[0];
   if (!root) return;
   let n = root;
   while (n) {
@@ -3788,8 +3923,11 @@ async function revealDir(path) {
 // the rail is for looking, and a folder opens on a click (2026-09-15).
 function selectDir(n) {
   selectedDir = n;
+  selectedPath = n.path;
   renderTree();
 }
+let selectedPath = null;      // what carries the mark — a folder or a file
+let dragFile = null;          // the path being dragged onto the canvas, while it is being dragged
 let findResults = null;      // { q, entries } — only while searching. null means the ordinary tree.
 
 function renderTree() {
@@ -3816,7 +3954,13 @@ function renderTree() {
       if (e.git_branch) r.appendChild(el('span', 'br', e.git_branch));
       r.title = e.name;
       // Pick a match and the tree opens down to it — the rail is for looking inside (2026-09-15).
-      const pick = () => { findResults = null; searchEl.value = ''; showSearch(false); revealDir(n.path); };
+      const pick = () => {
+        // Put the search away for good: an answer still in flight would otherwise land after it and
+        // put the results back (review, 2026-09-15).
+        clearTimeout(findTimer); findSeq++;
+        findResults = null; searchEl.value = ''; showSearch(false);
+        revealDir(n.path);
+      };
       r.addEventListener('click', pick);
       r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); pick(); } });
       treeEl.appendChild(r);
@@ -3824,36 +3968,53 @@ function renderTree() {
     return;
   }
   const walk = (n, i) => {
-    const r = el('div', 'row' + (n.depth === 0 ? ' root' : '') + (n === selectedDir ? ' sel' : '') +
+    const r = el('div', 'row' + (n.depth === 0 ? ' root' : '') + (n === selectedDir || n.path === selectedPath ? ' sel' : '') +
                         (n.depth === 0 && n.path !== home ? ' dim' : '') + (n.loading ? ' loading' : ''));
     r.dataset.path = n.path;
     r.tabIndex = 0;
     r.style.paddingLeft = (8 + n.depth * 16) + 'px';
     if (n.depth === 0 && i > 0) r.style.marginTop = '8px';
     if (n.kind === 'file') {
-      // A file: one click and it is on the canvas, in a window of its own.
+      // **A click marks it; opening is a double-click, or a drag onto the canvas** (user, 2026-09-15:
+      // "클릭했을 때 표시만 해주고 … 더블 클릭했을 때 열리거나, 파일을 캔버스로 잡아 끌었을 때").
+      // A single click that opened a window made every glance at a folder cost a window.
       r.classList.add('file');
-      r.appendChild(el('span', 'car none', '▸'));
+      r.setAttribute('role', 'treeitem');
+      r.setAttribute('aria-label', n.name + ', file');
+      r.draggable = true;
+      r.appendChild(el('span', 'car none', ''));
+      r.appendChild(rowIcon('file'));
       r.appendChild(el('span', 'nm', n.name));
       r.appendChild(el('span', 'fsz', fmtSize(n.size)));
-      r.title = n.path;
-      r.addEventListener('click', () => openViewer(n.path));
+      r.title = n.path + ' — double-click to open, or drag it onto the canvas';
+      r.addEventListener('click', () => { selectedPath = n.path; selectedDir = null; renderTree(); });
+      r.addEventListener('dblclick', (ev) => { ev.preventDefault(); openViewer(n.path); });
+      r.addEventListener('dragstart', (ev) => {
+        dragFile = n.path;
+        r.classList.add('dragging');
+        try { ev.dataTransfer.setData('text/plain', n.path); ev.dataTransfer.effectAllowed = 'copy'; } catch (e) {}
+      });
+      r.addEventListener('dragend', () => { dragFile = null; r.classList.remove('dragging'); cv.classList.remove('dropping'); });
       r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); openViewer(n.path); } });
       treeEl.appendChild(r);
       return;
     }
+    r.setAttribute('role', 'treeitem');
+    r.setAttribute('aria-expanded', n.expanded ? 'true' : 'false');
     // has_children counts folders only; a folder of nothing but files must still open — so a click always
     // asks (expandNode goes to the daemon), and only the caret is greyed when no folder is known below.
     const car = el('span', 'car' + (n.hasChildren ? '' : ' none'), n.expanded ? '▾' : '▸');
     car.addEventListener('click', (ev) => { ev.stopPropagation(); if (n.expanded) collapseNode(n); else expandNode(n); });
     r.appendChild(car);
+    if (n.depth > 0) r.appendChild(rowIcon('dir'));
     r.appendChild(el('span', 'nm', n.depth === 0 ? (n.path === home ? '~' : n.path) : n.name));
     if (n.branch) r.appendChild(el('span', 'br', n.branch));
     // One click: select it and open it — a folder is for looking inside, not for arming a button (2026-09-15).
     r.addEventListener('click', () => { selectDir(n); if (n.expanded) collapseNode(n); else expandNode(n); });
     r.addEventListener('keydown', (ev) => {
-      if (ev.key === 'ArrowRight' && n.hasChildren && !n.expanded) { ev.preventDefault(); expandNode(n); }
+      if (ev.key === 'ArrowRight' && !n.expanded) { ev.preventDefault(); expandNode(n); }
       else if (ev.key === 'ArrowLeft' && n.expanded) { ev.preventDefault(); collapseNode(n); }
+      else if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); selectDir(n); if (n.expanded) collapseNode(n); else expandNode(n); }
     });
     treeEl.appendChild(r);
     if (n.expanded && n.children) n.children.forEach((c, j) => walk(c, j));
@@ -3966,6 +4127,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   saveLayout, client: () => CLIENT, layoutOnDaemon: () => layoutOnDaemon,
                   holdStyle: () => holdStyle,
                   palette: () => root.dataset.pal || null, choosePalette, applyTheme, labelOf,
+                  baseFont: () => FONT_PX, setBaseFont, termTheme,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
                   lastOutAt, renderList,
@@ -4246,6 +4408,12 @@ function boot() {
         autoTidy = sw.checked;
         try { if (autoTidy) localStorage.setItem(LS_AUTOTIDY, '1'); else localStorage.removeItem(LS_AUTOTIDY); } catch (e) {}
       });
+    }
+    const fsel = document.getElementById('fontsize');
+    if (fsel) {
+      fsel.value = String(Math.round(FONT_PX));
+      if (fsel.selectedIndex < 0) fsel.value = '13';
+      fsel.addEventListener('change', () => setBaseFont(parseFloat(fsel.value)));
     }
     const hsel = document.getElementById('holdstyle');
     if (hsel) {

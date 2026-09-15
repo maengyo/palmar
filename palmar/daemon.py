@@ -2324,25 +2324,24 @@ def git_branch(d: Path):
     return line[:7] or None
 
 
-def has_subdir(p: str) -> bool:
-    """Is there at least one subfolder that does not start with a dot? Stops at the first."""
+def has_entries(p: str) -> bool:
+    """Is there anything inside that does not start with a dot? Stops at the first.
+
+    **Folders used to be the only thing that counted**, because the rail showed folders only. Now that it
+    shows files too, a folder holding nothing but files answered "empty" and drew no caret, so there was
+    no way to see it had anything in it (user, 2026-09-15)."""
     try:
         with os.scandir(p) as it:
             for e in it:
-                if e.name.startswith("."):
-                    continue
-                try:
-                    if e.is_dir(follow_symlinks=True):
-                        return True
-                except OSError:
-                    pass
+                if not e.name.startswith("."):
+                    return True
     except OSError:
         pass
     return False
 
 
 def dir_entry(name: str, path: str) -> dict:
-    return {"name": name, "kind": "dir", "git_branch": git_branch(Path(path)), "has_children": has_subdir(path)}
+    return {"name": name, "kind": "dir", "git_branch": git_branch(Path(path)), "has_children": has_entries(path)}
 
 
 def list_dirs(path: Path) -> list[dict]:
@@ -2376,7 +2375,12 @@ def list_dirs(path: Path) -> list[dict]:
             entries.append(dir_entry(e.name, e.path))
     entries.sort(key=lambda x: x["name"].casefold())
     files.sort(key=lambda x: x["name"].casefold())
-    return entries + files
+    # A cap, not a budget: a folder of a hundred thousand names would otherwise be stat-ed whole and
+    # shipped whole, and nobody reads that.
+    return (entries + files)[:LIST_MAX]
+
+
+LIST_MAX = 4000        # names per folder in one listing — see list_dirs
 
 
 #: Folder labels. (when it was built, or None, [paths…]) — used only by `find_dirs`.
@@ -2479,8 +2483,11 @@ async def find_dirs(qs: str) -> list:
 #: big" (413). Read-only; there is no PUT. The boundary is the one browsing has (resolve_dir): anywhere
 #: this uid can read — the same files the shell beside it can `cat`, so nothing new is reachable.
 FILE_MAX = 2 * 1024 * 1024
+#: **.svg is not in here on purpose.** It is a document that can carry script, and the viewer hands what it
+#: gets to a blob: URL — "open image in new tab" would then run that script in palmar's own origin (review,
+#: 2026-09-15). An SVG is served as its source, which is also the more useful thing to see.
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
-               ".webp": "image/webp", ".svg": "image/svg+xml", ".bmp": "image/bmp", ".ico": "image/x-icon"}
+               ".webp": "image/webp", ".bmp": "image/bmp", ".ico": "image/x-icon"}
 
 
 def resolve_file(raw) -> Path | None:
@@ -2987,18 +2994,33 @@ async def handle_request(reader, writer) -> None:
         if f is None:
             writer.write(http_error(400, "path must be an absolute file"))
             return
+        # **Bounded by what is read, not by what stat says.** A procfs file reports 0 bytes and goes on
+        # forever — /proc/self/pagemap is 256 GiB of it — so trusting st_size was a way to ask the daemon to
+        # read a machine's memory into a string (review, 2026-09-15). One byte past the limit is enough.
         try:
-            size = f.stat().st_size
-            if size > FILE_MAX:
-                writer.write(http_error(413, f"too big to show ({size} bytes; the limit is {FILE_MAX})"))
-                return
-            data = f.read_bytes()
+            with open(f, "rb") as fh:
+                data = fh.read(FILE_MAX + 1)
         except OSError as e:
             writer.write(http_error(400, f"cannot read: {e.strerror or e}"))
+            return
+        if len(data) > FILE_MAX:
+            writer.write(http_error(413, f"too big to show (the limit is {FILE_MAX} bytes)"))
             return
         ctype = IMAGE_TYPES.get(f.suffix.lower())
         if ctype is None:
             if b"\x00" in data[:8192]:
+                writer.write(http_error(415, "not a text file"))
+                return
+            # **Text goes out as UTF-8, whatever it was.** A file that is not UTF-8 — CP949 is the one that
+            # matters here — came back as replacement characters when it was simply labelled utf-8
+            # (review, 2026-09-15). Decoded with the encodings worth trying and re-encoded, it reads.
+            for enc in ("utf-8", "cp949", "latin-1"):
+                try:
+                    data = data.decode(enc).encode("utf-8")
+                    break
+                except UnicodeDecodeError:
+                    continue
+            else:
                 writer.write(http_error(415, "not a text file"))
                 return
             ctype = "text/plain; charset=utf-8"
@@ -3385,7 +3407,16 @@ async def main(port: int, open_page: bool = True) -> None:
     else:
         registry.new_canvas()
     registry.layout = read_layout()
+    # **A viewer's canvas id has to be remapped like a pane's.** Canvases come back with fresh ids, and a
+    # board entry naming a dead one leaves that window on no canvas at all: hidden on every tab, unreachable
+    # from the rail, never cleaned up (review, 2026-09-15). RESTORE_CV is the same old→new map the restored
+    # panes go through; anything it cannot place lands on the first canvas.
     if registry.layout:
+        dflt = registry.default_canvas().id
+        for e in registry.layout.values():
+            cv = e.get("canvas")
+            if cv is not None and cv not in registry.canvases:
+                e["canvas"] = RESTORE_CV[0].get(cv, dflt)
         log(f"the board came back from {LAYOUT_FILE.name} — {len(registry.layout)} window(s)")
     loop = asyncio.get_running_loop()
     reaper.install(loop)

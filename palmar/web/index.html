@@ -115,6 +115,16 @@
         <div class="tm-h">Windows</div>
         <label class="tm-row" title="drop a window on another and the one that was there moves out of the way, by exactly the overlap"><input type="checkbox" id="pushaside" checked> Push windows aside</label>
         <label class="tm-row" title="when a terminal closes, pull the rest back to the corner on their own"><input type="checkbox" id="autotidy"> Tidy automatically</label>
+        <label class="tm-row" title="the text size a terminal opens at — Ctrl/⌘ + wheel changes one window">Text size
+          <select id="fontsize">
+            <option value="11">11</option>
+            <option value="12">12</option>
+            <option value="13">13</option>
+            <option value="14">14</option>
+            <option value="15">15</option>
+            <option value="16">16</option>
+            <option value="18">18</option>
+          </select></label>
         <label class="tm-row" title="how the wait is shown while holding a window over another">Hold to group
           <select id="holdstyle">
             <option value="grow">landing box fills</option>
@@ -192,8 +202,8 @@
   <div class="body">
     <!-- Re-open tabs, shown only when a rail is collapsed. A collapsed rail is 0 wide, so without
          these there is nothing left to click to bring it back. -->
-    <button class="rail-open l" id="open-l" type="button" hidden title="show the terminal list" aria-label="show the terminal list">›</button>
-    <button class="rail-open r" id="open-r" type="button" hidden title="show the right rail" aria-label="show the right rail">‹</button>
+    <button class="rail-open l" id="open-l" type="button" hidden title="show the terminal list" aria-label="show the terminal list"><i>›</i></button>
+    <button class="rail-open r" id="open-r" type="button" hidden title="show the right rail" aria-label="show the right rail"><i>‹</i></button>
     <!-- The rail-edge grips (#19). Laid on the boundary, not in a grid cell — see `.rz` in style.css. -->
     <div class="rz l" id="rz-l" role="separator" aria-orientation="vertical" tabindex="0"
          aria-label="resize the terminal list — arrow keys, or double-click to reset"></div>

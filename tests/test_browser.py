@@ -200,8 +200,10 @@ class Theme(unittest.TestCase):
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
 class RailFold(unittest.TestCase):
-    """Fold a rail to widen the canvas (2026-09-11). A folded rail is a true 0, not clamped to its
-    minimum, and the state persists so it survives a reload."""
+    """Fold a rail to widen the canvas (2026-09-11). A folded rail keeps a 30px strip — the button that
+    brings it back lives there, where the fold button was, and there is room for what belongs there later
+    (user, 2026-09-15; it used to go to a true 0 with a 15px tab floating over the canvas). It is still
+    far below RAIL_MIN, so nothing clamps it back open, and the state survives a reload."""
 
     @classmethod
     def setUpClass(cls):
@@ -220,19 +222,21 @@ class RailFold(unittest.TestCase):
     def railvar(self, side):
         return self.b.ev("getComputedStyle(document.documentElement).getPropertyValue('--rail-%s').trim()" % side)
 
-    def test_folding_a_rail_widens_the_canvas_to_a_true_zero(self):
+    STRIP = "30px"
+
+    def test_folding_a_rail_widens_the_canvas_to_the_strip(self):
         # start from a known state
         self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
         time.sleep(0.3)
         wide0 = self.cv()
         self.b.ev("document.getElementById('fold-l').click()")
         time.sleep(0.3)
-        self.assertEqual(self.railvar("l"), "0px", "a folded rail was clamped, not zeroed")
+        self.assertEqual(self.railvar("l"), self.STRIP, "a folded rail was clamped, not reduced to the strip")
         self.assertGreater(self.cv(), wide0, "the canvas did not widen")
-        # reopen restores the width, not zero
+        # reopen restores the width, not the strip
         self.b.ev("document.getElementById('open-l').click()")
         time.sleep(0.3)
-        self.assertNotEqual(self.railvar("l"), "0px")
+        self.assertNotEqual(self.railvar("l"), self.STRIP)
         self.assertAlmostEqual(self.cv(), wide0, delta=2)
 
     def test_the_shortcut_toggles(self):
@@ -241,11 +245,11 @@ class RailFold(unittest.TestCase):
         self.b.ev("document.dispatchEvent(new KeyboardEvent('keydown',"
                   "{key:'\\\\',code:'Backslash',metaKey:true,shiftKey:true,bubbles:true}))")
         time.sleep(0.3)
-        self.assertEqual(self.railvar("r"), "0px", "Cmd+Shift+\\ did not fold the right rail")
+        self.assertEqual(self.railvar("r"), self.STRIP, "Cmd+Shift+\\ did not fold the right rail")
         self.b.ev("document.dispatchEvent(new KeyboardEvent('keydown',"
                   "{key:'\\\\',code:'Backslash',metaKey:true,shiftKey:true,bubbles:true}))")
         time.sleep(0.3)
-        self.assertNotEqual(self.railvar("r"), "0px", "it did not toggle back open")
+        self.assertNotEqual(self.railvar("r"), self.STRIP, "it did not toggle back open")
 
     def test_the_reopen_tab_is_there_only_while_folded(self):
         """**It is the only thing on screen that says which state a rail is in**, so it being wrong
@@ -282,17 +286,22 @@ class RailFold(unittest.TestCase):
               return e.hidden && getComputedStyle(e).display!=='none';})()""" % which)
             self.assertNotEqual(shown, True, "#%s is marked hidden and still displayed" % which)
 
-    def test_a_folded_rail_is_really_zero(self):
-        """The grid column goes to 0 but the rail kept its 1px divider, which is both a line marking
-        the edge of a rail that is not there and — at the window's edge — enough to raise a
-        horizontal scrollbar."""
+    def test_a_folded_rail_is_a_strip_with_the_button_in_it(self):
+        """30px, its own contents hidden, and the button that brings it back standing in the strip at
+        the top — where the fold button was, so the two are in the same place either way."""
         self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
         time.sleep(0.3)
         self.b.ev("document.getElementById('fold-l').click(); document.getElementById('fold-r').click()")
         time.sleep(0.4)
         for side, sel in (("left", ".rail.left"), ("right", ".rail.right")):
             w = self.b.ev("document.querySelector('%s').getBoundingClientRect().width" % sel)
-            self.assertEqual(w, 0, "the folded %s rail is %spx wide, not 0" % (side, w))
+            self.assertEqual(w, 30, "the folded %s rail is %spx wide, not the 30px strip" % (side, w))
+        r = self.b.ev("""(()=>{const o=document.getElementById('open-l').getBoundingClientRect();
+          const body=document.querySelector('.body').getBoundingClientRect();
+          return {w: Math.round(o.width), tall: o.height > body.height - 2, top: Math.round(o.top - body.top)};})()""")
+        self.assertEqual(r["w"], 30, "the strip is not the rail's width: %r" % r)
+        self.assertTrue(r["tall"], "the strip does not run the height of the body: %r" % r)
+        self.assertLess(r["top"], 2, "the strip does not start at the top: %r" % r)
 
     def test_folding_takes_the_top_bar_with_it(self):
         """The top bar's outer columns are the rails' widths, so the two line up down the screen —
@@ -340,18 +349,18 @@ class RailFold(unittest.TestCase):
         time.sleep(0.3)
         self.b.ev("document.getElementById('fold-l').click()")
         time.sleep(0.4)
-        self.assertEqual(self.railvar("l"), "0px")
+        self.assertEqual(self.railvar("l"), self.STRIP)
         try:
             self.b.ws.call("Emulation.setDeviceMetricsOverride",
                            {"width": 760, "height": 560, "deviceScaleFactor": 1, "mobile": False})
             time.sleep(0.5)
-            self.assertEqual(self.railvar("l"), "0px", "a resize unfolded it behind the state")
+            self.assertEqual(self.railvar("l"), self.STRIP, "a resize unfolded it behind the state")
         finally:
             self.b.ws.call("Emulation.clearDeviceMetricsOverride")
             time.sleep(0.5)
-        self.assertEqual(self.railvar("l"), "0px", "restoring the window unfolded it behind the state")
+        self.assertEqual(self.railvar("l"), self.STRIP, "restoring the window unfolded it behind the state")
         w = self.b.ev("document.querySelector('.rail.left').getBoundingClientRect().width")
-        self.assertEqual(w, 0, "it is %spx wide while the state says folded" % w)
+        self.assertEqual(w, 30, "it is %spx wide while the state says folded (the strip is 30)" % w)
 
     def test_a_fold_survives_a_reload(self):
         self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
@@ -2742,7 +2751,15 @@ class Viewing(unittest.TestCase):
 
     def test_a_file_opens_in_a_window_on_the_canvas(self):
         self.open_docs()
-        self.b.ev("""(()=>{[...document.querySelectorAll('#tree .row.file')].find(r=>r.querySelector('.nm').textContent==='notes.md').click(); return 1;})()""")
+        r = self.b.ev("""(()=>{const r=[...document.querySelectorAll('#tree .row.file')].find(r=>r.querySelector('.nm').textContent==='notes.md');
+          r.click();
+          // The tree is rebuilt on a click, so the marked row is the new element, not this one.
+          const again = [...document.querySelectorAll('#tree .row.file')].find(x=>x.querySelector('.nm').textContent==='notes.md');
+          const marked = again.classList.contains('sel'), opened = !!document.querySelector('.tile.viewer');
+          again.dispatchEvent(new MouseEvent('dblclick', {bubbles: true}));
+          return {marked, opened};})()""")
+        self.assertTrue(r["marked"], "a click did not mark the file")
+        self.assertFalse(r["opened"], "a single click opened a window — it should only mark (2026-09-15)")
         got = None
         for _ in range(40):
             time.sleep(0.2)
@@ -2776,6 +2793,31 @@ class Viewing(unittest.TestCase):
         paths = [os.path.realpath(p) for p in self.b.ev("[...document.querySelectorAll('.tile.viewer')].map(v=>v.dataset.path)")]
         self.assertIn(os.path.realpath(path), paths, "the viewer that came back shows something else: %r" % paths)
 
+    def test_dragging_a_file_onto_the_canvas_opens_it_where_it_was_dropped(self):
+        """The other way in (user, 2026-09-15). The drop point is in canvas coordinates, so the window
+        lands under the hand rather than in the first free slot."""
+        self.open_docs()
+        # A clean canvas: an earlier test may have left this file open, and then the drag would move
+        # that window rather than open one.
+        self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').forEach(v=>v.close()); 1")
+        r = self.b.ev("""(()=>{const row=[...document.querySelectorAll('#tree .row.file')].find(r=>r.querySelector('.nm').textContent==='notes.md');
+          const dt = new DataTransfer();
+          row.dispatchEvent(new DragEvent('dragstart', {bubbles: true, dataTransfer: dt}));
+          const cv = document.getElementById('cv-scroll'), b = cv.getBoundingClientRect();
+          const at = {x: b.left + 420, y: b.top + 300};
+          cv.dispatchEvent(new DragEvent('dragover', {bubbles: true, dataTransfer: dt, clientX: at.x, clientY: at.y}));
+          const lit = document.getElementById('cv').classList.contains('dropping');
+          cv.dispatchEvent(new DragEvent('drop', {bubbles: true, dataTransfer: dt, clientX: at.x, clientY: at.y}));
+          row.dispatchEvent(new DragEvent('dragend', {bubbles: true, dataTransfer: dt}));
+          const v = document.querySelector('.tile.viewer');
+          return {lit, opened: !!v, x: v ? v.offsetLeft : null, y: v ? v.offsetTop : null,
+                  still: document.getElementById('cv').classList.contains('dropping')};})()""")
+        self.assertTrue(r["lit"], "the canvas did not say it would take the file")
+        self.assertTrue(r["opened"], "the drop opened nothing")
+        self.assertFalse(r["still"], "the canvas is still lit after the drop")
+        self.assertTrue(340 < r["x"] < 380 and 270 < r["y"] < 300,
+                        "it did not land under the hand: %r" % ((r["x"], r["y"]),))
+
     def test_a_new_terminal_opens_at_home_whatever_is_focused(self):
         deep = os.path.join(self.d.home, "docs")
         s = self.d.open_pane(deep, canvas=self.b.ev("window.palmar.canvas()"))
@@ -2795,3 +2837,56 @@ class Viewing(unittest.TestCase):
                 break
         self.assertIsNotNone(new, "no terminal opened")
         self.assertEqual(os.path.realpath(new["cwd"]), os.path.realpath(self.d.home), "it opened somewhere other than home: %r" % new["cwd"])
+
+
+class TextSizeAndColours(unittest.TestCase):
+    """The default text size is the person's (options list), the wheel moves a whole pixel a tick, and a
+    light theme prints in dark ANSI colours — a program's "bright white" used to be white on white
+    (user, 2026-09-15)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def test_the_default_is_thirteen_and_the_options_list_changes_it(self):
+        self.assertEqual(self.b.ev("window.palmar.baseFont()"), 13)
+        r = self.b.ev("""(()=>{const s=document.getElementById('fontsize'); s.value='16';
+          s.dispatchEvent(new Event('change'));
+          return [window.palmar.baseFont(), localStorage.getItem('palmar.font')];})()""")
+        self.assertEqual(r, [16, "16"])
+        self.b.ev("window.palmar.setBaseFont(13)")
+
+    def test_a_wheel_tick_is_a_whole_pixel(self):
+        s = self.d.open_pane(self.d.home, canvas=self.b.ev("window.palmar.canvas()"))
+        self.addCleanup(self.d.delete, "/api/sessions/" + s["id"])
+        for _ in range(40):
+            time.sleep(0.25)
+            if self.b.ev("[...window.palmar.tiles.values()].some(t=>t.id===%s)" % json.dumps(s["id"])):
+                break
+        sizes = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.id===%s);
+          const out=[t.term.options.fontSize];
+          for (let i=0;i<3;i++) { t.el.dispatchEvent(new WheelEvent('wheel',{deltaY:-100, ctrlKey:true, bubbles:true, cancelable:true}));
+                                  out.push(t.term.options.fontSize); }
+          return out;})()""" % json.dumps(s["id"]))
+        steps = [round(b - a, 3) for a, b in zip(sizes, sizes[1:])]
+        self.assertEqual(steps, [1, 1, 1], "a tick is not a whole pixel: %r" % sizes)
+
+    def test_a_light_theme_prints_in_dark_ink(self):
+        r = self.b.ev("""(()=>{const root=document.documentElement;
+          root.dataset.theme='light'; const light=window.palmar.termTheme();
+          root.dataset.theme='dark';  const dark=window.palmar.termTheme();
+          delete root.dataset.theme;
+          return {light, dark};})()""")
+        lum = lambda h: (lambda r, g, b: 0.2126 * r + 0.7152 * g + 0.0722 * b)(
+            *[int(h.lstrip("#")[i:i+2], 16) / 255 for i in (0, 2, 4)])
+        for key in ("brightWhite", "white", "foreground"):
+            self.assertLess(lum(r["light"][key]), 0.35, "%s is too pale for a light theme: %s" % (key, r["light"][key]))
+            self.assertGreater(lum(r["dark"][key]), 0.5, "%s is too dark for a dark theme: %s" % (key, r["dark"][key]))
+        self.assertNotEqual(r["light"]["brightWhite"], r["dark"]["brightWhite"])

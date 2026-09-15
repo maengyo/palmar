@@ -111,7 +111,7 @@ python3 -m palmar            # 127.0.0.1:8801. --port 만 받는다. host 옵션
 | `PATCH` | `/api/canvases/<id>?token=` | `{"name": …}` (문자열 또는 `null`) | `Canvas` (200) · 없으면 `404` · 이름이 규칙에 안 맞으면 `400` |
 | `DELETE` | `/api/canvases/<id>?token=` | | `204` · 없으면 `404` · **세션이 하나라도 있으면 `409`** · **마지막 하나면 `409`** (아래 "캔버스") |
 | `GET` | `/api/dirs?path=&token=` | | `Dirs` · `path` 없으면 뿌리 목록(아래 모양) · 뿌리 밖이면 `400`. 항목은 폴더 먼저(`kind:"dir"`) 그다음 파일(`kind:"file"`, `size`) — 점으로 시작하는 것은 뺀다 (2026-09-15) |
-| `GET` | `/api/file?path=&token=` | | 파일 그대로: 이미지는 `image/*`, 그 밖은 `text/plain; charset=utf-8` · 앞 8KB 에 NUL 이 있으면 `415` · 2MB 초과 `413` · 파일이 아니면 `400` · **읽기만 있다**, 경계는 `/api/dirs?path=` 와 같다 (2026-09-15) |
+| `GET` | `/api/file?path=&token=` | | 파일 그대로: 이미지는 `image/*`, 그 밖은 **UTF-8 로 바꿔서** `text/plain; charset=utf-8`(utf-8 → cp949 → latin-1 순으로 해독) · 앞 8KB 에 NUL 이 있으면 `415` · 2MB 초과 `413`(읽은 바이트로 판단한다 — `st_size` 는 procfs 에서 거짓말을 한다) · 파일이 아니면 `400` · `.svg` 는 이미지가 아니라 **소스**로 준다(스크립트를 품을 수 있다) · **읽기만 있다**, 경계는 `/api/dirs?path=` 와 같다 (2026-09-15) |
 | `GET` | `/api/dirs?find=&token=` | | `{"find": "…", "entries": [DirEntry]}` — 뿌리 아래 폴더 찾기(아래 "폴더 찾기") |
 | `POST` | `/api/dirs?token=` | `{"path": "/abs/parent", "name": "new"}` | `201 {"path": "/abs/parent/new"}` · 이미 있으면 `409` · `name` 이 한 조각이 아니면(`/`·`.`·`..`·빈 것) `400`. **만들기만 있다** — 지우기·이름 바꾸기 없음 |
 | `POST` | `/hook/claude?pane=<id>&token=` | Claude Code 훅 JSON | `200 {}` — **항상.** 모르는 pane·틀린 토큰도 200 (무시할 뿐이다 — 훅은 0 으로 끝나야 한다) |
