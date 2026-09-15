@@ -161,6 +161,84 @@
   --shadow-2: 0 16px 40px -12px rgba(0,0,0,.9);
 }
 
+/* ── palettes (2026-09-15) ──
+   Eight to choose from — four on the light side, four on the dark — after "둘 다 약간 칙칙하다":
+   the two above are paper and earth, both with a brown cast, and these are the same interface on
+   cool or clean neutrals with one clear accent each. The person picks one per side in the panel.
+   **One attribute, set by JS to the palette that is in effect** — the light choice when the page is
+   light, the dark choice when it is dark, nothing for the two defaults — so a light palette can
+   never leak into the dark theme through the cascade: these rules only ever see the attribute that
+   applies. Placed after both dark blocks at equal specificity, so the later rule wins.
+   Every one was measured: text 7:1 on the ground, secondary 4.5:1 on a tile, the faintest 4.5:1
+   on the rail, terminal text 7:1 on the terminal. Status lights (--st-*) are ⑥ and untouched. */
+:root[data-pal="sky"] {
+  --ground: #f4f6f9; --canvas: #eef1f5; --dot: #cfd6e0; --rail: #f8fafc;
+  --tile: #ffffff; --tile-bar: #f3f5f8; --line: #d9dee6; --line-2: #c4ccd7;
+  --ink: #16202b; --ink-2: #48556a; --ink-3: #5e6b82;
+  --accent: #2f6fed; --on-accent: #ffffff; --accent-2: rgba(47,111,237,.12); --hover: rgba(22,32,43,.055);
+  --btn: #ffffff; --kbd: #ffffff; --kbd-ink: #48556a;
+  --float: rgba(255,255,255,.94); --topbar: rgba(248,250,252,.75); --search: rgba(255,255,255,.8);
+  --term-ink: #1f2a36; --term-box: #8794a8;
+  --atmo-1: rgba(47,111,237,.08); --atmo-2: rgba(120,160,220,.08);
+  --shadow: 0 1px 0 rgba(255,255,255,.6) inset, 0 10px 28px -14px rgba(22,32,43,.28); --shadow-2: 0 14px 36px -14px rgba(22,32,43,.35);
+}
+:root[data-pal="porcelain"] {
+  --ground: #f6f8f8; --canvas: #f0f3f3; --dot: #ccd6d6; --rail: #fbfcfc;
+  --tile: #ffffff; --tile-bar: #f4f6f6; --line: #d5dcdc; --line-2: #bfc9c9;
+  --ink: #142024; --ink-2: #44565b; --ink-3: #5b6e74;
+  --accent: #0e8a7d; --on-accent: #ffffff; --accent-2: rgba(14,138,125,.12); --hover: rgba(20,32,36,.055);
+  --btn: #ffffff; --kbd: #ffffff; --kbd-ink: #44565b;
+  --float: rgba(255,255,255,.94); --topbar: rgba(251,252,252,.75); --search: rgba(255,255,255,.8);
+  --term-ink: #1d2a2e; --term-box: #85979b;
+  --atmo-1: rgba(14,138,125,.08); --atmo-2: rgba(120,170,160,.08);
+  --shadow: 0 1px 0 rgba(255,255,255,.6) inset, 0 10px 28px -14px rgba(20,32,36,.28); --shadow-2: 0 14px 36px -14px rgba(20,32,36,.35);
+}
+:root[data-pal="lilac"] {
+  --ground: #f5f4f8; --canvas: #efeef4; --dot: #d2d0dd; --rail: #faf9fc;
+  --tile: #ffffff; --tile-bar: #f4f3f8; --line: #dcdae4; --line-2: #c7c4d1;
+  --ink: #1b1a2a; --ink-2: #4c4a62; --ink-3: #65637b;
+  --accent: #6d4de6; --on-accent: #ffffff; --accent-2: rgba(109,77,230,.12); --hover: rgba(27,26,42,.055);
+  --btn: #ffffff; --kbd: #ffffff; --kbd-ink: #4c4a62;
+  --float: rgba(255,255,255,.94); --topbar: rgba(250,249,252,.75); --search: rgba(255,255,255,.8);
+  --term-ink: #24233a; --term-box: #8e8ca6;
+  --atmo-1: rgba(109,77,230,.08); --atmo-2: rgba(170,150,220,.08);
+  --shadow: 0 1px 0 rgba(255,255,255,.6) inset, 0 10px 28px -14px rgba(27,26,42,.28); --shadow-2: 0 14px 36px -14px rgba(27,26,42,.35);
+}
+:root[data-pal="graphite"] {
+  --ground: #15171a; --canvas: #1c1f23; --dot: #363b43; --rail: #191c20;
+  --tile: #101214; --tile-bar: #1b1e22; --line: #2a2f36; --line-2: #3b424b;
+  --ink: #e8ecf1; --ink-2: #b3bcc8; --ink-3: #8590a0;
+  --accent: #7cb3ff; --on-accent: #0e1216; --accent-2: rgba(124,179,255,.14); --hover: rgba(255,255,255,.07);
+  --btn: #22262c; --kbd: #22262c; --kbd-ink: #b3bcc8;
+  --float: rgba(21,23,26,.94); --topbar: rgba(25,28,32,.78); --search: rgba(16,18,20,.6);
+  --term-ink: #dfe5ec; --term-box: #8a95a3;
+  --atmo-1: rgba(124,179,255,.08); --atmo-2: rgba(90,110,140,.08);
+  --shadow: 0 1px 0 rgba(255,255,255,.02) inset, 0 12px 32px -12px rgba(0,0,0,.8); --shadow-2: 0 16px 40px -12px rgba(0,0,0,.9);
+}
+:root[data-pal="deep"] {
+  --ground: #0f1518; --canvas: #151d21; --dot: #2b3a40; --rail: #121a1e;
+  --tile: #0b1114; --tile-bar: #142024; --line: #223036; --line-2: #2f4048;
+  --ink: #e6f0ef; --ink-2: #a9bdba; --ink-3: #7d928f;
+  --accent: #5fd3bf; --on-accent: #0b1114; --accent-2: rgba(95,211,191,.14); --hover: rgba(255,255,255,.07);
+  --btn: #1a262b; --kbd: #1a262b; --kbd-ink: #a9bdba;
+  --float: rgba(15,21,24,.94); --topbar: rgba(18,26,30,.78); --search: rgba(11,17,20,.6);
+  --term-ink: #d9e6e4; --term-box: #7f9491;
+  --atmo-1: rgba(95,211,191,.08); --atmo-2: rgba(60,110,120,.08);
+  --shadow: 0 1px 0 rgba(255,255,255,.02) inset, 0 12px 32px -12px rgba(0,0,0,.8); --shadow-2: 0 16px 40px -12px rgba(0,0,0,.9);
+}
+:root[data-pal="midnight"] {
+  --ground: #12131c; --canvas: #191a26; --dot: #33354a; --rail: #15161f;
+  --tile: #0d0e15; --tile-bar: #171826; --line: #262838; --line-2: #363a4e;
+  --ink: #ecebf5; --ink-2: #b5b4c8; --ink-3: #8886a0;
+  --accent: #f2b84b; --on-accent: #14121a; --accent-2: rgba(242,184,75,.14); --hover: rgba(255,255,255,.07);
+  --btn: #1e2030; --kbd: #1e2030; --kbd-ink: #b5b4c8;
+  --float: rgba(18,19,28,.94); --topbar: rgba(21,22,31,.78); --search: rgba(13,14,21,.6);
+  --term-ink: #e0dfea; --term-box: #8a88a3;
+  --atmo-1: rgba(242,184,75,.08); --atmo-2: rgba(110,100,160,.08);
+  --shadow: 0 1px 0 rgba(255,255,255,.02) inset, 0 12px 32px -12px rgba(0,0,0,.8); --shadow-2: 0 16px 40px -12px rgba(0,0,0,.9);
+}
+
+
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {

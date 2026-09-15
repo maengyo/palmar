@@ -62,6 +62,16 @@ const DEFAULT_W = 520, DEFAULT_H = 360;                 // ⑩ provisional defau
 const MIN_W = 220, MIN_H = 110;
 const LS_TILES = 'palmar-tiles';                        // ③ provisional
 const LS_THEME = 'palmar-theme';
+// Palettes — one choice per side, the browser's taste like the theme. The defaults (paper, earth)
+// are the tokens on :root and in the dark blocks and write nothing to the store.
+const LS_PAL_L = 'palmar.pal-light', LS_PAL_D = 'palmar.pal-dark';
+const PALETTES = { light: ['paper', 'sky', 'porcelain', 'lilac'], dark: ['earth', 'graphite', 'deep', 'midnight'] };
+let palLight = 'paper', palDark = 'earth';
+try {
+  const l = localStorage.getItem(LS_PAL_L), d = localStorage.getItem(LS_PAL_D);
+  if (PALETTES.light.indexOf(l) >= 0) palLight = l;
+  if (PALETTES.dark.indexOf(d) >= 0) palDark = d;
+} catch (e) {}
 const LS_GROUPS = 'palmar-groups';                      // list group fold — the browser's alone (⑪)
 const LS_CVGROUPS = 'palmar-canvas-groups';             // canvas group fold — keyed by canvas id (#31 ③)
 // Where a session whose canvas is gone falls. The contract says this cannot happen (protocol.md: within one
@@ -396,8 +406,28 @@ function storedTheme() {
   try { const v = localStorage.getItem(LS_THEME); return v === 'light' || v === 'dark' ? v : null; }
   catch (e) { return null; }
 }
+// Which palette is in effect right now: the dark choice when the page is dark, the light one
+// otherwise. One attribute, so the CSS never has to reason about theme × palette.
+function applyPalette() {
+  const dark = root.dataset.theme === 'dark' || (!root.dataset.theme && darkMq.matches);
+  const pal = dark ? palDark : palLight;
+  if (pal === 'paper' || pal === 'earth') delete root.dataset.pal; else root.dataset.pal = pal;
+}
+function choosePalette(side, name) {
+  if (side === 'light' && PALETTES.light.indexOf(name) >= 0) palLight = name;
+  if (side === 'dark' && PALETTES.dark.indexOf(name) >= 0) palDark = name;
+  try {
+    if (palLight === 'paper') localStorage.removeItem(LS_PAL_L); else localStorage.setItem(LS_PAL_L, palLight);
+    if (palDark === 'earth') localStorage.removeItem(LS_PAL_D); else localStorage.setItem(LS_PAL_D, palDark);
+  } catch (e) {}
+  applyPalette();
+  if (typeof renderBadge === 'function') renderBadge(true);
+  rethemeTerminals();
+}
+darkMq.addEventListener('change', applyPalette);   // the system flipped: the other side's choice takes over
 function applyTheme(mode) {   // mode: 'light' | 'dark' | null (system)
   if (mode) root.dataset.theme = mode; else delete root.dataset.theme;
+  applyPalette();
   themeBtn.dataset.mode = mode || 'system';
   // **The word is the point** (#16). Three marks cannot say which is which on their own; the only
   // explanation used to be the title attribute, which needs a hover nobody performs.
@@ -3642,6 +3672,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // to the daemon — a test with two browsers needs to tell the two apart.
                   saveLayout, client: () => CLIENT, layoutOnDaemon: () => layoutOnDaemon,
                   holdStyle: () => holdStyle,
+                  palette: () => root.dataset.pal || null, choosePalette,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
                   lastOutAt, renderList,
@@ -3888,6 +3919,12 @@ function boot() {
         autoTidy = sw.checked;
         try { if (autoTidy) localStorage.setItem(LS_AUTOTIDY, '1'); else localStorage.removeItem(LS_AUTOTIDY); } catch (e) {}
       });
+    }
+    for (const side of ['light', 'dark']) {
+      const sel = document.getElementById('pal-' + side);
+      if (!sel) continue;
+      sel.value = side === 'light' ? palLight : palDark;
+      sel.addEventListener('change', () => choosePalette(side, sel.value));
     }
     const hsel = document.getElementById('holdstyle');
     if (hsel) {

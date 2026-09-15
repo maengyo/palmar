@@ -2338,3 +2338,56 @@ class RenamingByHand(unittest.TestCase):
         self.assertEqual([after[0] - before[0], after[1] - before[1]], [120, 90], "the drag by the name broke")
         self.assertFalse(self.b.ev("!![...window.palmar.tiles.values()][0].el.querySelector('.tb input')"),
                          "a single grab opened the editor")
+
+
+class Palettes(unittest.TestCase):
+    """Eight palettes, chosen one per side; the attribute carries only the one in effect, so a light
+    choice never leaks into the dark theme and the other way round (2026-09-15: "테마 다 좋은데,
+    다 적용해 줄 수 있나")."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def accent(self):
+        return self.b.ev("getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()")
+
+    def test_each_side_keeps_its_own_choice(self):
+        r = self.b.ev("""(()=>{const P=window.palmar, root=document.documentElement;
+          const theme=(m)=>{ if (m) root.dataset.theme=m; else delete root.dataset.theme;
+                             document.querySelector('[data-mode]').click(); };   // cycle to re-run applyTheme
+          const out = {};
+          root.dataset.theme = 'dark'; document.querySelector('[data-mode]').click();   // → system
+          document.querySelector('[data-mode]').click();                                // → light
+          P.choosePalette('light', 'sky'); P.choosePalette('dark', 'graphite');
+          out.lightPal = P.palette(); out.lightAccent = getComputedStyle(root).getPropertyValue('--accent').trim();
+          document.querySelector('[data-mode]').click();                                // → dark
+          out.darkPal = P.palette(); out.darkAccent = getComputedStyle(root).getPropertyValue('--accent').trim();
+          out.kept = [localStorage.getItem('palmar.pal-light'), localStorage.getItem('palmar.pal-dark')];
+          P.choosePalette('dark', 'earth');
+          out.backToDefault = P.palette();
+          out.theme = root.dataset.theme;
+          return out;})()""")
+        self.assertEqual(r["theme"], "dark", "the theme did not end up where the test thinks: %r" % r)
+        self.assertEqual([r["lightPal"], r["lightAccent"]], ["sky", "#2f6fed"], "the light choice did not apply: %r" % r)
+        self.assertEqual([r["darkPal"], r["darkAccent"]], ["graphite", "#7cb3ff"], "the dark choice did not apply: %r" % r)
+        self.assertEqual(r["kept"], ["sky", "graphite"], "the choices were not kept")
+        self.assertIsNone(r["backToDefault"], "the default palette still carries an attribute")
+
+    def test_a_choice_survives_a_reload(self):
+        self.b.ev("""(()=>{window.palmar.choosePalette('light', 'lilac'); const root=document.documentElement;
+          root.dataset.theme='light'; localStorage.setItem('palmar-theme','light'); return 1;})()""")
+        self.b.ev("location.reload()")
+        for _ in range(40):
+            time.sleep(0.25)
+            if self.b.ev("!!(window.palmar && window.palmar.palette)"):
+                break
+        self.assertEqual(self.b.ev("window.palmar.palette()"), "lilac")
+        self.assertEqual(self.accent(), "#6d4de6")
