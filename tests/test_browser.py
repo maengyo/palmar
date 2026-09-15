@@ -3103,3 +3103,23 @@ class ADifferentKeyIsADifferentDaemon(unittest.TestCase):
         time.sleep(0.5)
         self.assertEqual([k for k in fresh.get("/api/layout")["layout"] if k.startswith("v:")], [],
                          "and it was pushed to the fresh daemon")
+
+
+class InstallableAsAnApp(unittest.TestCase):
+    """The page links its manifest itself, from the address it was opened with — so it can be
+    installed as an app from Edge or Chrome while index.html carries no key (#14)."""
+
+    def test_the_manifest_link_is_built_from_the_address(self):
+        d = Daemon().start()
+        self.addCleanup(d.stop)
+        b = Browser().start()
+        self.addCleanup(b.stop)
+        b.open(d.url)
+        time.sleep(0.8)
+        key = d.url.split("k=", 1)[1]
+        r = b.ev("""(async()=>{const l=document.querySelector('link[rel=manifest]');
+          if(!l) return {href:null};
+          const m=await (await fetch(l.href)).json(); return {href:l.href, start:m.start_url, display:m.display};})()""")
+        self.assertEqual(r["href"], d.url.split("/?", 1)[0] + "/manifest.webmanifest?k=" + key)
+        self.assertEqual(r["start"], "/?k=" + key)
+        self.assertEqual(r["display"], "standalone")

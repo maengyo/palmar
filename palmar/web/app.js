@@ -136,6 +136,20 @@ const LINE_HEIGHT = 1.15;
 const cv = $('#cv'), cvScroll = $('#cv-scroll'), listEl = $('#list'), treeEl = $('#tree');
 const tabsEl = $('#tabs'), mmEl = $('#mm'), mmWorldEl = $('#mm-w'), mmVpEl = $('#mm-vp');
 const toastEl = $('#toast'), searchEl = $('#search'), searchBox = $('#searchbox');
+
+// **Installable as an app.** Edge and Chrome install a page as an app of its own — icon, window, Start
+// Menu entry — from a web app manifest. Its start_url has to carry the key, and index.html never does
+// (#14), so the link is built here from the address this page was opened with: the key is already in
+// location, so nothing is exposed that was not. Without a key (an older way in) there is no link.
+try {
+  const k = new URLSearchParams(location.search).get('k');
+  if (k) {
+    const l = document.createElement('link');
+    l.rel = 'manifest';
+    l.href = '/manifest.webmanifest?k=' + encodeURIComponent(k);
+    document.head.appendChild(l);
+  }
+} catch (e) {}
 // The search field floats now (2026-09-15) — the same input, shown on Ctrl/⌘K or from the options
 // list, so everything that reads it (the list's fold, the tree's filter) is untouched.
 function showSearch(on) {

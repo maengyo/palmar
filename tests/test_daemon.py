@@ -550,6 +550,7 @@ class TwoWaysIn(unittest.TestCase):
         env = dict(os.environ, HOME=home)
         env.pop("LC_ALL", None)
         env["PALMAR_APP"] = "0"      # never the real window — the same rule as tests.helpers.Daemon
+        env["PALMAR_CHROMIUM"] = "0"
         env.update(extra_env or {})
         return subprocess.run([PYTHON, "-m", "palmar"] + list(args), cwd=REPO,
                               capture_output=True, text=True, timeout=40, env=env)
@@ -1498,10 +1499,27 @@ class TheWindowOpensFirst(unittest.TestCase):
 
     def test_web_asks_for_a_browser_outright(self):
         app, browser, app_ran, browser_ran = self.fakes()
-        with Daemon(env={"PALMAR_APP": app, "BROWSER": browser}, browser=True, web=True) as d:
+        with Daemon(env={"PALMAR_APP": app, "PALMAR_CHROMIUM": app, "BROWSER": browser}, browser=True, web=True) as d:
             self.assertTrue(self.wait_for(browser_ran), "--web opened no browser")
             time.sleep(0.5)
-            self.assertFalse(os.path.exists(app_ran), "--web opened the window too")
+            self.assertFalse(os.path.exists(app_ran), "--web opened a window too")
+
+    def test_without_a_window_of_our_own_a_chromium_opens_in_app_mode(self):
+        """"Does Windows really need an exe?" — no. The same fake stands in for Edge here: it gets
+        the address on --app=, the browser fake gets nothing until the web button asks for a tab."""
+        app, browser, app_ran, browser_ran = self.fakes()
+        with Daemon(env={"PALMAR_APP": "0", "PALMAR_CHROMIUM": app, "BROWSER": browser}, browser=True) as d:
+            self.assertTrue(self.wait_for(app_ran), "no window in app mode")
+            with open(app_ran) as fh:
+                self.assertEqual(fh.read().strip(), "--app=" + d.url)
+            said = stderr_so_far(d, "app mode")
+            self.assertIn("opening a window with palmar-app (app mode", said)
+            time.sleep(0.5)
+            self.assertFalse(os.path.exists(browser_ran), "a tab opened as well as the window")
+            self.assertEqual(d.raw("POST", "/api/address/open")[0], 204)
+            self.assertTrue(self.wait_for(browser_ran), "the web button opened no tab")
+            with open(browser_ran) as fh:
+                self.assertEqual(fh.read().strip(), d.url, "the web button must open a plain tab, not app mode")
 
     def test_a_window_that_dies_gives_way_to_the_browser(self):
         app, browser, app_ran, browser_ran = self.fakes()
@@ -1515,3 +1533,53 @@ class TheWindowOpensFirst(unittest.TestCase):
     def test_the_web_button_says_when_no_browser_can_be_opened(self):
         with Daemon(env={"BROWSER": "/nonexistent/definitely-not-here"}) as d:
             self.assertEqual(d.raw("POST", "/api/address/open")[0], 500, "the 500 the protocol promises")
+
+
+class InstalledAsAnApp(unittest.TestCase):
+    """"Isn't app mode still a browser?" (user, 2026-09-15). The next step up needs no binary either:
+    a web app manifest lets Edge and Chrome install the page as an app of its own. The manifest holds
+    the key in start_url, so it goes out only with the key, like index.html (#14)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.d.stop()
+
+    def get(self, path):
+        base = self.d.url.split("/?", 1)[0]
+        try:
+            with urllib.request.urlopen(base + path, timeout=5) as f:
+                return f.status, f.headers.get("content-type", ""), f.read()
+        except urllib.error.HTTPError as e:
+            return e.code, "", e.read()
+
+    def test_the_manifest_needs_the_key_and_carries_it(self):
+        key = self.d.url.split("k=", 1)[1]
+        code, ctype, body = self.get("/manifest.webmanifest?k=" + key)
+        self.assertEqual(code, 200)
+        self.assertIn("manifest+json", ctype)
+        m = json.loads(body)
+        self.assertEqual(m["start_url"], "/?k=" + key)
+        self.assertEqual(m["display"], "standalone")
+        self.assertEqual(m["name"], "palmar")
+        self.assertTrue(any(i["sizes"] == "512x512" for i in m["icons"]))
+        self.assertEqual(self.get("/manifest.webmanifest")[0], 403, "the manifest went out without the key — it holds it")
+        self.assertEqual(self.get("/manifest.webmanifest?k=nope")[0], 403)
+
+    def test_the_icons_are_plain_files_and_the_page_still_holds_no_key(self):
+        """The link to the manifest is the page's to build from its own address (app.js) — index.html
+        carrying the key is exactly what #14 closed, and TheAddress guards that too."""
+        key = self.d.url.split("k=", 1)[1]
+        code, ctype, body = self.get("/?k=" + key)
+        self.assertEqual(code, 200)
+        self.assertNotIn(key.encode(), body)
+        self.assertNotIn(b"manifest", body)
+        self.assertIn(b'<link rel="icon" href="icon-192.png">', body)
+        for icon in ("/icon-192.png", "/icon-512.png"):
+            code, ctype, body = self.get(icon)
+            self.assertEqual(code, 200, icon)
+            self.assertEqual(ctype, "image/png")
+            self.assertEqual(body[:8], b"\x89PNG\r\n\x1a\n", icon + " is not a PNG")

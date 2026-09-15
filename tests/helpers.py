@@ -65,6 +65,7 @@ class Daemon:
         # one, and this checkout has a build — a test that let it would pop a window on the screen of
         # whoever runs the suite. A test about the window passes its own PALMAR_APP (a fake).
         env["PALMAR_APP"] = "0"
+        env["PALMAR_CHROMIUM"] = "0"      # nor a real Chrome in app mode
         env.update(self._extra)
         self.proc = subprocess.Popen(
             [PYTHON, "-m", "palmar", "--port", str(self.port)]

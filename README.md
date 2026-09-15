@@ -70,8 +70,10 @@ what is still rough there is in [`docs/windows.md`](docs/windows.md).
 palmar
 ```
 
-It prints its address, opens palmar's own window when one is installed and a browser otherwise, and
-comes straight back — the daemon detaches, so closing the terminal does not take your shells with it. Run `palmar` again and you get the same address
+It prints its address, opens a window — palmar's own when one is installed, else a Chromium-family
+browser in app mode (Windows always has Edge), else a browser tab — and comes straight back. To make
+it an app of its own with no exe, install it once from Edge or Chrome (menu → Apps → Install palmar):
+it gets its own icon, window and Start Menu entry, and `palmar` opens that from then on — the daemon detaches, so closing the terminal does not take your shells with it. Run `palmar` again and you get the same address
 rather than a second daemon; `palmar --stop` ends it. Lost the address: `cat ~/.palmar/run/url`.
 If 8801 is busy — a palmar on Windows beside one in WSL, say — it takes the next free port and says so.
 

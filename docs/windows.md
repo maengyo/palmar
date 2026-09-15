@@ -254,6 +254,19 @@ WSL 과 배포판 · **파이썬 3.9 이상** · 체크아웃인지.
 - **윈도우 쪽 판이 WSL 데몬에 나타남.** 브라우저의 `localStorage` 가 origin 단위라 한 포트의 두
   데몬이 한 저장소를 썼고, 판 복사본이 빈 데몬에 넘어갔다. 복사본을 없앴다 (decisions ③).
 
+## 창 — exe 없이 (2026-09-15)
+
+윈도우 창은 우리 exe 가 없어도 된다: `palmar` 는 `palmar-app` 이 없으면 **Edge 를 `--app=` 모드**로
+연다(`Program Files (x86)\Microsoft\Edge\Application\msedge.exe`, 없으면 Chrome). 탭도 주소창도 없는
+창이고, 회사 PC 처럼 exe 를 못 받는 곳에서 바로 되는 길이다. WSL 의 데몬도 같은 Edge 를 C: 마운트
+너머로 연다. 탭이 필요하면 창 안의 web 버튼이나 `palmar --web`. 러너로는 못 잰다 — 경로 선택은
+`tests/test_pure.py` 의 순수 함수로, 실제 열림은 그 기계에서 확인해야 한다.
+
+한 단계 더: Edge 에서 palmar 를 열고 **메뉴 → 앱 → "palmar 설치"** 를 한 번 누르면 PWA 가 된다 —
+자기 아이콘, 시작 메뉴 항목, 브라우저 UI 없는 창. 데몬이 매니페스트와 아이콘을 내므로 다른 것은
+필요 없고, 그 뒤 `palmar` 는 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\palmar.lnk` 를 찾아
+그것을 연다(Chrome 은 `Programs\Chrome Apps\`). 포트가 옮겨진 채로 설치했다면 그 주소로 굳는다.
+
 ## 어떻게 시험하나
 
 ```sh

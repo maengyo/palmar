@@ -16,6 +16,12 @@ launcher), then `app/target/{universal,release}/palmar-app` inside the checkout.
 a browser instead, and the web button inside the window always does. Under WSL the window is only
 used with WSLg; on Linux only with a DISPLAY.
 
+**Without this binary, a Chromium-family browser in app mode is the window** — `--app=`, no tabs, no
+address bar. Windows always has Edge, so no exe is needed there; from WSL it is the Windows Edge.
+`$PALMAR_CHROMIUM` names the browser to use, or `0` turns that off. And the page can be **installed
+as an app** from Edge or Chrome (the daemon serves a manifest and icons): then it has its own icon,
+window and Start Menu entry, and `palmar` opens that installed app before anything else here.
+
 ## Why not Electron, and why not the Tauri CLI
 
 Being heavy is the thing this project is avoiding: `cate` ships a 496 MB dmg and installs 1.1 GB

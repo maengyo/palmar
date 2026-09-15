@@ -3361,6 +3361,25 @@ async def handle_request(reader, writer) -> None:
     if method not in ("GET", "HEAD"):
         writer.write(http(405))
         return
+    if path == "/manifest.webmanifest":
+        # **palmar as an installed app, with no binary of ours.** A web app manifest is what lets
+        # Edge and Chrome install the page as an app — its own icon, name, Start Menu entry and window
+        # with no browser UI ("isn't app mode still a browser?", user, 2026-09-15). start_url holds
+        # the key, so this is served only with the key, exactly like index.html (#14) — and the page
+        # builds the <link rel=manifest> from its own address, so index.html never carries the key.
+        if not key_ok(q):
+            writer.write(http(403))
+            return
+        body = json.dumps({
+            "name": "palmar", "short_name": "palmar",
+            "description": "Many terminals, one place, and each one keeps where you put it.",
+            "start_url": f"/?k={KEY[0]}", "scope": "/", "display": "standalone",
+            "background_color": "#f6f3ec", "theme_color": "#1f2329",
+            "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+                      {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"}],
+        }).encode()
+        writer.write(http(200, body, "application/manifest+json; charset=utf-8", head_only=(method == "HEAD")))
+        return
     writer.write(serve_static(path, head_only=(method == "HEAD"), has_key=key_ok(q),
                               key_given=bool(qget(q, "k", ""))))   # HEAD carries no body (#8)
 
@@ -3544,6 +3563,105 @@ def find_app(env=None, which=None, exists=None, kind=None, platform=None) -> str
 #: webkit library dies within a few hundred ms and says so on stderr; a live one is still up.
 APP_GRACE_S = 0.8
 
+#: Chromium-family browsers, by name, that take `--app=`: the page in a window with no tabs and no
+#: address bar. That is a window without a binary of ours — "does Windows really need an exe?"
+#: (user, 2026-09-15). No: Windows always has an Edge. Firefox has no such mode, so it is not here.
+CHROMIUM_NAMES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+                  "microsoft-edge", "microsoft-edge-stable")
+
+
+def chromium_candidates(platform, env, kind="", cdrive=""):
+    """Where a Chromium-family browser sits when it is not on PATH — Edge first on Windows, since
+    every Windows has one; from WSL the same Windows programs through the C: mount, because a window
+    on the Windows side is the one a person at that machine can see."""
+    if platform == "win32":
+        pf = env.get("ProgramFiles") or r"C:\Program Files"
+        pf86 = env.get("ProgramFiles(x86)") or r"C:\Program Files (x86)"
+        la = env.get("LOCALAPPDATA") or ""
+        out = []
+        for rel in (r"Microsoft\Edge\Application\msedge.exe", r"Google\Chrome\Application\chrome.exe"):
+            for base in (pf86, pf, la):
+                if base:
+                    out.append(base.rstrip("\\") + "\\" + rel)
+        return out
+    if kind:
+        c = (cdrive or "/mnt/c").rstrip("/")
+        return [c + "/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+                c + "/Program Files/Microsoft/Edge/Application/msedge.exe",
+                c + "/Program Files/Google/Chrome/Application/chrome.exe",
+                c + "/Program Files (x86)/Google/Chrome/Application/chrome.exe"]
+    if platform == "darwin":
+        return ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Chromium.app/Contents/MacOS/Chromium",
+                "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"]
+    return []
+
+
+def installed_pwa(env=None, exists=None, platform=None) -> str:
+    """Where a browser put palmar when it was installed as an app — a Start Menu shortcut on Windows
+    (Edge puts it in Programs, Chrome under Chrome Apps), an .app under ~/Applications on a Mac — or
+    '' when it has not been installed. Launching that is launching the app the person installed, with
+    its own icon and window, rather than a generic app-mode window."""
+    env = os.environ if env is None else env
+    exists = os.path.exists if exists is None else exists
+    platform = sys.platform if platform is None else platform
+    if platform == "win32":
+        base = (env.get("APPDATA") or "").rstrip("\\")
+        if base:
+            for rel in (r"Microsoft\Windows\Start Menu\Programs\palmar.lnk",
+                        r"Microsoft\Windows\Start Menu\Programs\Chrome Apps\palmar.lnk"):
+                if exists(base + "\\" + rel):
+                    return base + "\\" + rel
+    elif platform == "darwin":
+        home = (env.get("HOME") or "").rstrip("/")
+        if home:
+            for rel in ("Applications/Chrome Apps.localized/palmar.app",
+                        "Applications/Edge Apps.localized/palmar.app",
+                        "Applications/Chromium Apps.localized/palmar.app"):
+                if exists(home + "/" + rel):
+                    return home + "/" + rel
+    return ""
+
+
+def pwa_argv(path: str, platform=None):
+    """The command that launches an installed app by its shortcut or bundle."""
+    platform = sys.platform if platform is None else platform
+    if platform == "win32":
+        return ["cmd", "/c", "start", "", path]
+    return ["open", path]
+
+
+def app_mode_argv(url: str, *, platform=None, kind=None, env=None, which=None, exists=None, cdrive=None):
+    """The command that opens `url` as a window in a Chromium-family browser (`--app=`), or None.
+
+    `$PALMAR_CHROMIUM` names the browser to use (a path), or says `0` for none. Pure, like
+    browser_argv: every input is injectable (tests/test_pure.py)."""
+    platform = sys.platform if platform is None else platform
+    env = os.environ if env is None else env
+    which = shutil.which if which is None else which
+    exists = (lambda p: Path(p).is_file()) if exists is None else exists
+    chosen = env.get("PALMAR_CHROMIUM")
+    if chosen is not None:
+        chosen = chosen.strip()
+        if chosen in ("", "0", "no", "off"):
+            return None
+        if exists(chosen):
+            return [chosen, "--app=" + url]
+        log(f"PALMAR_CHROMIUM points at nothing ({chosen}) — looking elsewhere")
+    if kind is None:
+        kind = wsl_kind(env=env) if platform.startswith("linux") else ""
+    if kind and cdrive is None:
+        s32 = windows_system32()
+        cdrive = str(Path(s32).parent.parent) if s32 else ""
+    for p in chromium_candidates(platform, env, kind, cdrive or ""):
+        if exists(p):
+            return [p, "--app=" + url]
+    if platform != "win32":
+        for n in CHROMIUM_NAMES:
+            if which(n):
+                return [n, "--app=" + url]
+    return None
+
 
 def show_page(url: str, web: bool = False) -> str:
     """Show the address: **the window when there is one, else a browser.** One line back, for the
@@ -3553,13 +3671,15 @@ def show_page(url: str, web: bool = False) -> str:
     `palmar` that opened a tab while the window sat right there had the two backwards. `--web` asks
     for a browser outright; PALMAR_APP=0 says there is no window to open. The window finds the daemon
     by run/url on its own, so it is started with no arguments and never handed the address."""
+    lead = ""
     app = "" if web else find_app()
     if app:
         try:
             proc = subprocess.Popen([app], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.PIPE, start_new_session=True)
         except OSError as e:
-            log(f"could not start the window {app} ({e}) — opening a browser instead")
+            log(f"could not start the window {app} ({e}) — trying the next way")
+            lead = f"the window did not start ({e}) — "
         else:
             try:
                 code = proc.wait(timeout=APP_GRACE_S)
@@ -3567,14 +3687,40 @@ def show_page(url: str, web: bool = False) -> str:
                 code = None
             if code in (None, 0):
                 log(f"opening the window ({app})")
-                return "opening the window (palmar-app; --web opens a browser instead)"
+                return "opening the window (palmar-app; --web opens a browser tab instead)"
             said = (proc.stderr.read() or b"").decode("utf-8", "replace").strip().splitlines()
             why = said[-1] if said else f"exit {code}"
-            log(f"the window did not start ({why}) — opening a browser instead")
-            ok, note = open_browser(url)
-            return f"the window did not start ({why}) — " + note
+            log(f"the window did not start ({why}) — trying the next way")
+            lead = f"the window did not start ({why}) — "
+    # **The app the person installed** — the page installed from Edge or Chrome as an app (PWA): its
+    # own icon, its own window, a Start Menu entry, and no binary of ours.
+    pwa = "" if web else installed_pwa()
+    if pwa:
+        try:
+            subprocess.Popen(pwa_argv(pwa), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as e:
+            log(f"could not open the installed app {pwa} ({e}) — trying the next way")
+            lead += "the installed app did not open — "
+        else:
+            log(f"opening the installed app ({pwa})")
+            return lead + "opening palmar as the installed app (--web opens a tab instead)"
+    # **No binary of ours: a Chromium-family browser in app mode.** Same page, its own window, no
+    # tabs and no address bar. Windows always has an Edge, so a window there needs no exe at all
+    # (user, 2026-09-15); from WSL it is the Windows Edge, reached through interop.
+    argv = None if web else app_mode_argv(url)
+    if argv:
+        try:
+            subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as e:
+            log(f"could not open a window with {Path(argv[0]).name} ({e}) — opening a browser tab instead")
+            lead += f"could not open a window with {Path(argv[0]).name} — "
+        else:
+            log(f"opening a window with {Path(argv[0]).name} (app mode)")
+            return lead + f"opening a window with {Path(argv[0]).name} (app mode; --web opens a tab instead)"
     ok, note = open_browser(url)
-    return note
+    return lead + note
 
 
 def open_browser(url: str):
@@ -3925,9 +4071,13 @@ def doctor(port: int) -> int:
         out("  ! the rail would fail here — %s: %s" % (type(e).__name__, e))
     out("  browser   %s%s" % (Path(tab[0]).name if tab else "(found no way to open one — open the address yourself)",
                               "   <- $BROWSER" if (os.environ.get("BROWSER") or "").strip() else ""))
-    # The window comes before the browser when `palmar` opens the page — say whether there is one.
-    app = find_app()
-    out("  window    %s" % (app if app else "(none found — `palmar` opens a browser; app/README.md says how to get one)"))
+    # The window comes before the browser when `palmar` opens the page — say which one it would be:
+    # palmar's own, a Chromium-family browser in app mode, or none (a tab, then).
+    app = find_app() or installed_pwa()
+    mode = None if app else app_mode_argv("http://127.0.0.1:%d/" % port)
+    out("  window    %s" % (app if app else
+                            (Path(mode[0]).name + " in app mode (--app=)") if mode else
+                            "(none — `palmar` opens a browser tab; a Chromium-family browser or app/README.md gives it a window)"))
     # The pane's character encoding. If it is not UTF-8, Korean, Japanese and Chinese input breaks — on screen it looks like "it will not type".
     loc = " ".join("%s=%s" % (k, os.environ[k]) for k in ("LC_ALL", "LC_CTYPE", "LANG") if os.environ.get(k))
     utf8 = has_utf8(os.environ)

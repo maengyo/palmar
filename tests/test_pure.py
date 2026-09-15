@@ -716,5 +716,70 @@ class TheWindowFirst(unittest.TestCase):
                                     exists=lambda p: True, platform="win32"), "C:/u/palmar-app.exe")
 
 
+class AWindowWithoutAnExe(unittest.TestCase):
+    """"Does Windows really need an exe?" (user, 2026-09-15). No: a Chromium-family browser's
+    `--app=` is a window with no tabs and no address bar, and every Windows has an Edge. Where it is
+    looked for, per platform, and that the URL rides on --app=."""
+
+    def test_windows_takes_edge_first_then_chrome(self):
+        env = {"ProgramFiles": r"C:\Program Files", "ProgramFiles(x86)": r"C:\Program Files (x86)", "LOCALAPPDATA": r"C:\Users\me\AppData\Local"}
+        edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+        chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        both = lambda p: p in (edge, chrome)   # noqa: E731
+        self.assertEqual(D.app_mode_argv(URL, platform="win32", env=env, which=lambda n: None, exists=both),
+                         [edge, "--app=" + URL])
+        self.assertEqual(D.app_mode_argv(URL, platform="win32", env=env, which=lambda n: None, exists=lambda p: p == chrome),
+                         [chrome, "--app=" + URL])
+        self.assertIsNone(D.app_mode_argv(URL, platform="win32", env=env, which=lambda n: "/x", exists=lambda p: False),
+                          "on Windows a PATH name is not tried — the .exe paths are the whole search")
+
+    def test_wsl_reaches_the_windows_edge_through_the_c_mount(self):
+        edge = "/mnt/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
+        argv = D.app_mode_argv(URL, platform="linux", kind="wsl", env={}, which=lambda n: None,
+                               exists=lambda p: p == edge, cdrive="/mnt/c")
+        self.assertEqual(argv, [edge, "--app=" + URL])
+        argv = D.app_mode_argv(URL, platform="linux", kind="wslg", env={}, which=lambda n: None,
+                               exists=lambda p: p == edge, cdrive="/mnt/c")
+        self.assertEqual(argv[0], edge, "under WSLg too — a Windows window is the one the person sees")
+
+    def test_a_mac_and_a_linux(self):
+        chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        self.assertEqual(D.app_mode_argv(URL, platform="darwin", env={}, which=lambda n: None, exists=lambda p: p == chrome),
+                         [chrome, "--app=" + URL])
+        self.assertEqual(D.app_mode_argv(URL, platform="linux", kind="", env={}, which=having("chromium"), exists=lambda p: False),
+                         ["chromium", "--app=" + URL])
+        self.assertIsNone(D.app_mode_argv(URL, platform="linux", kind="", env={}, which=having("firefox"), exists=lambda p: False),
+                          "Firefox has no app mode")
+
+    def test_palmar_chromium_names_it_or_turns_it_off(self):
+        self.assertEqual(D.app_mode_argv(URL, platform="darwin", env={"PALMAR_CHROMIUM": "/opt/b/chrome"}, which=lambda n: None,
+                                         exists=lambda p: p == "/opt/b/chrome"), ["/opt/b/chrome", "--app=" + URL])
+        self.assertIsNone(D.app_mode_argv(URL, platform="darwin", env={"PALMAR_CHROMIUM": "0"}, which=having("chromium"),
+                                          exists=lambda p: True))
+
+
+class TheInstalledApp(unittest.TestCase):
+    """Once the page is installed as an app, `palmar` opens that — the shortcut Edge or Chrome made on
+    Windows, the .app they made on a Mac. Nothing of this can run on the machine the test runs on, so
+    the lookup is pure and measured here."""
+
+    def test_windows_finds_the_start_menu_shortcut(self):
+        env = {"APPDATA": r"C:\Users\me\AppData\Roaming"}
+        edge = r"C:\Users\me\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\palmar.lnk"
+        chrome = r"C:\Users\me\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Chrome Apps\palmar.lnk"
+        self.assertEqual(D.installed_pwa(env=env, exists=lambda p: p == edge, platform="win32"), edge)
+        self.assertEqual(D.installed_pwa(env=env, exists=lambda p: p == chrome, platform="win32"), chrome)
+        self.assertEqual(D.installed_pwa(env=env, exists=lambda p: False, platform="win32"), "")
+        self.assertEqual(D.pwa_argv(edge, platform="win32"), ["cmd", "/c", "start", "", edge])
+
+    def test_a_mac_finds_the_app_bundle(self):
+        env = {"HOME": "/Users/me"}
+        app = "/Users/me/Applications/Chrome Apps.localized/palmar.app"
+        self.assertEqual(D.installed_pwa(env=env, exists=lambda p: p == app, platform="darwin"), app)
+        self.assertEqual(D.pwa_argv(app, platform="darwin"), ["open", app])
+        self.assertEqual(D.installed_pwa(env={"HOME": "/Users/me"}, exists=lambda p: False, platform="darwin"), "")
+        self.assertEqual(D.installed_pwa(env={}, exists=lambda p: True, platform="linux"), "", "not looked for on Linux yet")
+
+
 if __name__ == "__main__":
     unittest.main()
