@@ -1776,36 +1776,47 @@ def _cwd_of_win(pid: int):
         k32.CloseHandle(h)
 
 
+def _write_then_replace(path: Path, data: bytes, mode: int) -> None:
+    """A fresh temp file beside `path` — a name nobody could have planted — then rename over it.
+
+    **The temp name used to be fixed** (`<name>.palmar-tmp`), and the folder is a cloned repository's
+    to fill: a FIFO by that name blocked the open until somebody read it (the daemon is one thread —
+    everything stopped), a hard link by that name was truncated in place, taking the file it linked
+    to with it. mkstemp is O_CREAT|O_EXCL on a random name: it makes a new file or fails, never opens
+    what was there (Codex review, 2026-09-15)."""
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix="." + path.name + ".", suffix=".palmar-tmp")
+    try:
+        if POSIX_PERMS:
+            os.fchmod(fd, mode)   # a no-op on Windows anyway; see POSIX_PERMS
+        os.write(fd, data)
+        os.close(fd)
+        fd = -1
+        os.replace(tmp, path)
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def write_atomic(path: Path, data: bytes) -> float:
     """Write beside it and rename over it, so the file is never half-written — and keep the mode it had.
     Returns the new mtime, which is the stamp the next save has to match."""
-    tmp = path.with_name(path.name + ".palmar-tmp")
     try:
         mode = path.stat().st_mode & 0o777
     except OSError:
         mode = 0o644
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | NOFOLLOW | BINARY, mode)
-    try:
-        if POSIX_PERMS:
-            os.fchmod(fd, mode)
-        os.write(fd, data)
-    finally:
-        os.close(fd)
-    os.replace(tmp, path)
+    _write_then_replace(path, data, mode)
     return path.stat().st_mtime
 
 
 def write_private(path: Path, data: bytes, mode: int) -> None:
     """Writes anew with mode. Writes a temp file and renames — never leaves a running shim half-written."""
-    tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | NOFOLLOW | BINARY, mode)
-    try:
-        if POSIX_PERMS:
-            os.fchmod(fd, mode)   # a no-op on Windows anyway; see POSIX_PERMS
-        os.write(fd, data)
-    finally:
-        os.close(fd)
-    os.replace(tmp, path)
+    _write_then_replace(path, data, mode)
 
 
 def write_pane_settings(sid: str) -> None:
@@ -2031,9 +2042,9 @@ def stop_daemon() -> int:
     try:
         fd = os.open(str(path), os.O_RDWR | NOFOLLOW | BINARY)
     except FileNotFoundError:
-        print("palmar: no daemon is running" if not answering else
-              "palmar: 주소는 응답하는데 run/lock 이 없다 — 그 데몬은 palmar 가 만든 것이 아니거나 파일이 지워졌다")
-        return 0 if not answering else 1
+        print("palmar: no daemon is running" + ("" if not answering else
+              f" (something else answers at {said.split('/?')[0]} — not palmar's)"))
+        return 0
     except OSError as e:
         print(f"palmar: could not open run/lock — {e}")
         return 1
@@ -2043,12 +2054,15 @@ def stop_daemon() -> int:
         except OSError:
             pass                                    # held — a daemon is alive, which is the point
         else:
+            # **A free lock is the answer.** A live daemon holds it for exactly as long as it lives,
+            # and run/url is removed when it stops or when a new one starts — so a free lock with an
+            # address that answers is a squatter on the old port, or a file a kill -9 left behind.
+            # This used to send that listener the token and SIGTERM whatever pid the stale lock line
+            # named (review, 2026-09-15).
             unlock_fd(fd)
-            if not answering:
-                print("palmar: no daemon is running")
-                return 0
-            # The lock is free and the address still answers. An older build locked a different byte.
-            print("palmar: the lock is free but the address answers — trying the pid in run/lock")
+            print("palmar: no daemon is running" + ("" if not answering else
+                  f" (something else answers at {said.split('/?')[0]} — not palmar's)"))
+            return 0
         raw, why = _read_lock_line(fd)
         if raw is None:
             print(f"palmar: could not read run/lock — {why}")
@@ -2399,7 +2413,10 @@ def list_dirs(path: Path) -> list[dict]:
             try:
                 if not e.is_dir(follow_symlinks=True):
                     if e.is_file(follow_symlinks=True):
-                        files.append({"name": e.name, "kind": "file", "size": e.stat(follow_symlinks=True).st_size})
+                        row = {"name": e.name, "kind": "file", "size": e.stat(follow_symlinks=True).st_size}
+                        if e.is_symlink():
+                            row["link"] = True          # the page can say so; PUT refuses it either way
+                        files.append(row)
                     continue
             except OSError:
                 continue
@@ -2551,6 +2568,49 @@ def editable(f: Path) -> bool:
     return f.suffix.lower() in EDITABLE or not f.suffix
 
 
+#: What the system opener runs rather than shows. POSIX: anything with an execute bit, plus the
+#: bundles and launchers it runs without one. Windows: the script and shortcut types WSH and the
+#: shell execute.
+RUNS_POSIX = frozenset({".command", ".tool", ".terminal", ".app", ".desktop", ".pkg", ".jar", ".run"})
+RUNS_WIN = frozenset({".bat", ".cmd", ".exe", ".com", ".msi", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh",
+                      ".ps1", ".lnk", ".scr", ".pif", ".hta", ".url", ".reg", ".jar"})
+
+
+def would_run(target: Path, platform=None, mode=None) -> bool:
+    """Would the system opener execute this file instead of showing it?"""
+    platform = sys.platform if platform is None else platform
+    suffix = target.suffix.lower()
+    if platform == "win32":
+        return suffix in RUNS_WIN
+    if mode is None:
+        try:
+            mode = target.stat().st_mode
+        except OSError:
+            return True
+    return bool(mode & 0o111) or suffix in RUNS_POSIX
+
+
+def through_a_link(raw: str) -> bool:
+    """Does this path go through a symlink anywhere below a root? A cloned repository decides where
+    its links point — `notes.txt -> ~/.zshrc` — and a save to what looks like a repo file would land
+    on the target (review, 2026-09-15). Links above the roots (`/var` on a Mac) are the system's."""
+    p = Path(raw)
+    cur = Path(p.anchor) if p.anchor else Path(".")
+    inside = False
+    for part in p.parts[1:] if p.anchor else p.parts:
+        cur = cur / part
+        if inside and cur.is_symlink():
+            return True
+        if not inside:
+            try:
+                inside = under_roots(cur.resolve())
+            except (OSError, RuntimeError):
+                inside = False
+            if inside and cur.is_symlink():
+                return True
+    return False
+
+
 def resolve_file(raw) -> Path | None:
     """Absolute path string → resolve() → an existing regular file, or None. No root check — browsing's rule."""
     if not isinstance(raw, str) or not raw or "\x00" in raw:
@@ -2605,7 +2665,8 @@ def http(status: int, body: bytes = b"", ctype: str = "application/json; charset
     # iframe for clickjacking or keystroke bait (#10). A HEAD reply is headers only, but keeps Content-Length (#8).
     head = (f"HTTP/1.1 {status} {REASONS.get(status, 'Unknown')}\r\n"
             f"Content-Length: {len(body)}\r\nCache-Control: no-store\r\nConnection: close\r\n"
-            "X-Frame-Options: DENY\r\nContent-Security-Policy: frame-ancestors 'none'\r\n")
+            "X-Frame-Options: DENY\r\nContent-Security-Policy: frame-ancestors 'none'\r\n"
+            "X-Content-Type-Options: nosniff\r\n")
     if body:
         head += f"Content-Type: {ctype}\r\n"
     head += extra                      # a route's own headers, each already ending in CRLF
@@ -2696,8 +2757,15 @@ def serve_static(path: str, head_only: bool = False, has_key: bool = False, key_
         if not has_key:
             return http(403, WRONG_KEY_PAGE if key_given else NO_KEY_PAGE,
                         "text/html; charset=utf-8", head_only=head_only)
-        tag = f'<script>window.PALMAR_TOKEN="{TOKEN[0]}"</script>'.encode()
+        # **Only scripts this daemon serves run in the page, plus this one line.** The page holds the
+        # token, and everything it shows — titles, process names, file names, a cloned repository's
+        # files — is somebody else's text. Its DOM discipline (textContent, a sandboxed frame) is the
+        # first wall; this is the second: an injected <script> is inert without the nonce.
+        nonce = secrets.token_urlsafe(16)
+        tag = f'<script nonce="{nonce}">window.PALMAR_TOKEN="{TOKEN[0]}"</script>'.encode()
         body = body.replace(b"</head>", tag + b"</head>", 1) if b"</head>" in body else tag + body
+        return http(200, body, "text/html; charset=utf-8", head_only=head_only,
+                    extra=f"Content-Security-Policy: script-src 'self' 'nonce-{nonce}'; object-src 'none'; base-uri 'none'\r\n")
     ctype = CONTENT_TYPES.get(suffix, "application/octet-stream")
     if ctype.startswith("text/") or ctype.endswith(("json", "javascript", "xml")):
         ctype += "; charset=utf-8"
@@ -3100,6 +3168,9 @@ async def handle_request(reader, writer) -> None:
             if not under_roots(f):
                 writer.write(http_error(400, "a file outside your home is read-only here"))
                 return
+            if through_a_link(qget(q, "path", "")):
+                writer.write(http_error(400, "that path goes through a link — edit the file it points to"))
+                return
             if not editable(f):
                 writer.write(http_error(415, "only text files can be edited here"))
                 return
@@ -3196,6 +3267,13 @@ async def handle_request(reader, writer) -> None:
         target = resolve_file(obj.get("path"))
         if target is None or not under_roots(target):
             writer.write(http_error(400, "path must be a file under your home"))
+            return
+        # **Open, never run.** The system opener executes some things instead of showing them: an
+        # executable script goes to Terminal on a Mac, .bat/.vbs/.lnk run outright on Windows, a
+        # .desktop file's Exec line on some Linux desktops. The file's name and bits come from a
+        # cloned repository, so those are refused here (review, 2026-09-15).
+        if would_run(target):
+            writer.write(http_error(415, "that file would run, not open — use the shell beside it"))
             return
         try:
             if sys.platform == "win32":
@@ -3398,6 +3476,17 @@ async def handle_request(reader, writer) -> None:
     if method not in ("GET", "HEAD"):
         writer.write(http(405))
         return
+    if path.startswith("/once/"):
+        # The one-time address a command line carried (launch_target): spent on first use, dead
+        # after a minute. Anything else gets a page, not the key.
+        if take_once(path[len("/once/"):]):
+            writer.write(http(302, b"", extra=f"Location: /?k={KEY[0]}\r\n"))
+            return
+        writer.write(http(404, b"<!doctype html><meta charset=\"utf-8\"><title>palmar</title>"
+                          b"<p style=\"font:15px system-ui;margin:12vh auto;max-width:34rem\">"
+                          b"This link opened palmar once and is spent. Run <code>palmar</code> again.</p>",
+                          "text/html; charset=utf-8", head_only=(method == "HEAD")))
+        return
     if path == "/manifest.webmanifest":
         # **palmar as an installed app, with no binary of ours.** A web app manifest is what lets
         # Edge and Chrome install the page as an app — its own icon, name, Start Menu entry and window
@@ -3512,7 +3601,7 @@ def wsl_kind(env=None, osrelease=None, wslg=None) -> str:
     return "wsl"
 
 
-def browser_argv(url: str, *, platform=None, kind=None, env=None, which=None, sys32=None):
+def browser_argv(url: str, *, platform=None, kind=None, env=None, which=None, sys32=None, bundle=None):
     """The command that hands `url` to whatever opens links, or None if this machine offers no way.
 
     Pure: the platform, the WSL kind, the environment and "is this program here" all arrive as
@@ -3524,7 +3613,9 @@ def browser_argv(url: str, *, platform=None, kind=None, env=None, which=None, sy
     if chosen:
         return [chosen, url]
     if platform == "darwin":
-        return ["open", url]
+        # By bundle id, to the browser that handles http. Plain `open` on the file:// stand-in would
+        # go to whatever opens .html files, and on a developer's Mac that is often an editor.
+        return ["open", "-b", bundle or default_browser_bundle(), url]
     if platform == "win32":
         # Native Windows, not WSL. `start` is a cmd builtin, so it has to go through cmd — and the
         # empty string is its **title** argument: without it the quoted URL becomes the title and
@@ -3708,6 +3799,22 @@ def progid_from_reg_output(text: str) -> str:
         if len(f) >= 3 and f[0] == "ProgId":
             return f[-1]
     return ""
+
+
+def default_browser_bundle() -> str:
+    """macOS: the bundle id of the browser that handles http, Safari when nothing says otherwise."""
+    try:
+        import plistlib
+        f = Path.home() / "Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist"
+        with open(f, "rb") as fh:
+            for h in plistlib.load(fh).get("LSHandlers", []):
+                if h.get("LSHandlerURLScheme") == "http":
+                    b = h.get("LSHandlerRoleAll") or h.get("LSHandlerRoleViewer") or ""
+                    if b:
+                        return b
+    except Exception:
+        pass
+    return "com.apple.Safari"
 
 
 def default_browser(platform=None, kind=None) -> str:
@@ -3896,7 +4003,7 @@ def notifier_argv(title: str, body: str, platform=None, env=None, which=None):
         q = lambda t: t.replace("\\", "\\\\").replace('"', '\\"')   # noqa: E731 - AppleScript string quoting
         return ["osascript", "-e", f'display notification "{q(body)}" with title "{q(title)}"']
     if platform.startswith("linux") and which("notify-send"):
-        return ["notify-send", "--app-name=palmar", title, body]
+        return ["notify-send", "--app-name=palmar", "--", title, body]   # a title starting with - is not an option
     return None
 
 
@@ -3947,6 +4054,9 @@ def _start_app(url: str):
         code = None
     if code in (None, 0):
         log(f"opening the window ({app})")
+        # Keep reading what it says: a pipe nobody drains fills, and a window that writes to a full
+        # pipe blocks on its next line (review, 2026-09-15).
+        threading.Thread(target=lambda: proc.stderr.read(), daemon=True).start()
         return "opening the window (palmar-app; --web opens a browser tab instead)", ""
     said = (proc.stderr.read() or b"").decode("utf-8", "replace").strip().splitlines()
     why = said[-1] if said else f"exit {code}"
@@ -3974,7 +4084,12 @@ def _start_mode(url: str):
     """Tier "mode": a Chromium-family browser in app mode — the page in its own window, no tabs, no
     address bar. Windows always has an Edge, so a window there needs no exe at all (user,
     2026-09-15); from WSL it is the Windows one, reached through interop."""
-    argv = app_mode_argv(url)
+    try:
+        target = launch_target(url)           # never the keyed address on a command line
+    except OSError as e:
+        log(f"could not write run/open.html ({e}) — trying the next way")
+        return "", "could not write the opening file — "
+    argv = app_mode_argv(target)
     if not argv:
         return "", ""
     try:
@@ -4011,14 +4126,67 @@ def show_page(url: str, web: bool = False) -> str:
     return lead + note
 
 
+#: One opening each: a nonce that `GET /once/<nonce>` turns into the keyed address once, within a
+#: minute. What goes on a command line where the keyed address cannot be replaced by a file.
+ONCE: dict = {}
+ONCE_TTL_S = 60
+OPEN_FILE = RUN_DIR / "open.html"
+
+
+def mint_once() -> str:
+    now = time.time()
+    for n in [n for n, exp in ONCE.items() if exp < now]:
+        ONCE.pop(n, None)
+    n = secrets.token_urlsafe(24)
+    ONCE[n] = now + ONCE_TTL_S
+    return n
+
+
+def take_once(n: str) -> bool:
+    exp = ONCE.pop(n, None)
+    return exp is not None and exp >= time.time()
+
+
+def launch_target(url: str, platform=None, kind=None) -> str:
+    """What a browser is handed in place of the keyed address — never the address itself.
+
+    **The key was on the command line.** `open URL`, `chrome --app=URL`, `xdg-open URL` all put the
+    keyed address in argv, and argv is public: /proc/<pid>/cmdline is world-readable, `ps` shows every
+    account's arguments on a Mac, and a first-instance Chromium keeps its argv for as long as the
+    window lives. Another account on the machine — the adversary decisions.md names — read the key
+    with one `ps | grep k=` and had the token, and shells, a moment later (review, 2026-09-15).
+
+    On a Mac or a Linux the browser gets a **file**: `~/.palmar/run/open.html`, 0600, a refresh to
+    the keyed address. argv shows a path only this uid can read. Where a file cannot cross — from
+    WSL to the Windows browser, or on Windows itself — it gets a **one-time address**,
+    `/once/<nonce>`, that the daemon turns into the keyed one exactly once, within a minute."""
+    platform = sys.platform if platform is None else platform
+    kind = wsl_kind() if kind is None else kind      # from the environment, so a test can say "WSL" anywhere
+    if platform == "win32" or kind:
+        return f"http://127.0.0.1:{PORT[0]}/once/{mint_once()}"
+    page = ('<!doctype html><meta charset="utf-8"><title>palmar</title>'
+            f'<meta http-equiv="refresh" content="0;url={url}">'
+            f'<script>location.replace({json.dumps(url)})</script>'
+            '<p style="font:15px system-ui;margin:12vh auto;max-width:34rem">Opening palmar…</p>\n')
+    write_private(OPEN_FILE, page.encode(), 0o600)
+    return OPEN_FILE.resolve().as_uri()
+
+
 def open_browser(url: str):
     """Hand the address to a browser and do not wait. Returns `(ok, line)` — whether one was
     started, and one line saying how that went, for the printout next to the address.
 
+    `url` is the keyed address; what reaches the command line is launch_target's stand-in for it.
+
     **Never raises.** Failing to open one is not a reason for the daemon not to run: the address is
     on stdout and in run/url either way. Everything it says goes to stderr, because stdout's last
     line is the address and that is a contract (docs/protocol.md)."""
-    argv = browser_argv(url)
+    try:
+        target = launch_target(url)
+    except OSError as e:
+        log(f"could not write run/open.html ({e}) — not opening a browser; open the address above yourself")
+        return False, "could not write the opening file — open the address yourself"
+    argv = browser_argv(target)
     if not argv:
         where = " — on Windows, for a palmar in WSL" if wsl_kind() else ""
         log("found no way to open a browser — open the address above yourself")

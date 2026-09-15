@@ -293,8 +293,8 @@ class WhereItOpens(unittest.TestCase):
                 ["my-browser", URL], "%s/%s ignored $BROWSER" % (platform, kind))
 
     def test_a_mac_uses_open(self):
-        self.assertEqual(D.browser_argv(URL, platform="darwin", env={}, which=having()),
-                         ["open", URL])
+        self.assertEqual(D.browser_argv(URL, platform="darwin", bundle="com.apple.Safari", env={}, which=having()),
+                         ["open", "-b", "com.apple.Safari", URL])
 
     def test_wsl_without_a_screen_hands_the_address_to_windows(self):
         """No WSLg, so there is nothing inside Linux to show it on. wslu first — it is the package
@@ -854,7 +854,7 @@ class TheOsSaysIt(unittest.TestCase):
 
     def test_a_linux_uses_notify_send(self):
         self.assertEqual(D.notifier_argv("t", "b", platform="linux", env={}, which=having("notify-send")),
-                         ["notify-send", "--app-name=palmar", "t", "b"])
+                         ["notify-send", "--app-name=palmar", "--", "t", "b"])   # `--`: a title starting with - is not an option
         self.assertIsNone(D.notifier_argv("t", "b", platform="linux", env={}, which=having()))
         self.assertIsNone(D.notifier_argv("t", "b", platform="win32", env={}, which=lambda n: "/x"),
                           "Windows shows the page in a browser that has the API — nothing needed yet")
@@ -863,6 +863,44 @@ class TheOsSaysIt(unittest.TestCase):
         self.assertEqual(D.notifier_argv("t", "b", platform="darwin", env={"PALMAR_NOTIFIER": "/opt/say"}, which=having("osascript")),
                          ["/opt/say", "t", "b"])
         self.assertIsNone(D.notifier_argv("t", "b", platform="darwin", env={"PALMAR_NOTIFIER": "0"}, which=having("osascript")))
+
+
+class NothingRuns(unittest.TestCase):
+    """The system opener executes some things instead of showing them. What /api/open refuses."""
+
+    def test_posix_refuses_an_execute_bit_and_the_launcher_types(self):
+        self.assertTrue(D.would_run(pathlib.Path("/r/x.sh"), platform="darwin", mode=0o755))
+        self.assertFalse(D.would_run(pathlib.Path("/r/x.sh"), platform="darwin", mode=0o644), "a script with no execute bit opens in an editor")
+        for ext in (".command", ".app", ".desktop", ".pkg", ".jar"):
+            self.assertTrue(D.would_run(pathlib.Path("/r/x" + ext), platform="linux", mode=0o644), ext)
+        self.assertFalse(D.would_run(pathlib.Path("/r/x.pdf"), platform="linux", mode=0o644))
+
+    def test_windows_refuses_what_the_shell_executes(self):
+        for ext in (".bat", ".cmd", ".exe", ".vbs", ".js", ".lnk", ".ps1", ".hta", ".url"):
+            self.assertTrue(D.would_run(pathlib.Path(r"C:\\r\\x" + ext), platform="win32"), ext)
+        self.assertFalse(D.would_run(pathlib.Path(r"C:\\r\\x.xlsx"), platform="win32"))
+
+
+class TheKeyStaysOffTheCommandLine(unittest.TestCase):
+    """What a browser is handed instead of the keyed address: a 0600 file on a Mac or a Linux, a
+    one-time address where a file cannot cross (Windows, WSL)."""
+
+    def test_windows_and_wsl_get_a_one_time_address(self):
+        D.PORT[0] = 8801
+        t = D.launch_target("http://127.0.0.1:8801/?k=SECRET", platform="win32")
+        self.assertTrue(t.startswith("http://127.0.0.1:8801/once/"), t)
+        self.assertNotIn("SECRET", t)
+        n = t.rsplit("/", 1)[1]
+        self.assertTrue(D.take_once(n), "the nonce did not open once")
+        self.assertFalse(D.take_once(n), "the nonce opened twice")
+        t = D.launch_target("http://127.0.0.1:8801/?k=SECRET", platform="linux", kind="wsl")
+        self.assertTrue(t.startswith("http://127.0.0.1:8801/once/"))
+
+    def test_a_spent_or_unknown_nonce_is_nothing(self):
+        self.assertFalse(D.take_once("never-minted"))
+        n = D.mint_once()
+        D.ONCE[n] = 0                                # expired
+        self.assertFalse(D.take_once(n))
 
 
 if __name__ == "__main__":

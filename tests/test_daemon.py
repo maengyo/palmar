@@ -18,6 +18,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -513,14 +514,19 @@ class OpeningTheBrowser(unittest.TestCase):
 
     def test_it_opens_the_real_address(self):
         """Not some address — **the one with the key on it**. Handing over a keyless URL would open
-        the "no key" page and look like palmar was broken."""
+        the "no key" page and look like palmar was broken. The key rides inside a 0600 file the
+        browser is handed, never on the command line (review, 2026-09-15)."""
         opener, note = self.recorder()
         with Daemon(env={"BROWSER": opener}, browser=True) as d:
             got = self.wait_for(note)
             self.assertIsNotNone(got, "the daemon never started $BROWSER")
-            self.assertIn(d.url.strip(), got.strip(),
-                          "the browser was handed something other than the daemon's own address")
-            self.assertIn("?k=", got, "the address handed over carried no key")
+            self.assertNotIn("k=", got, "the key went onto the browser's command line")
+            self.assertTrue(got.strip().startswith("file://"), "the browser was handed something other than the opening file: %r" % got)
+            path = urllib.request.url2pathname(got.strip()[len("file://"):])
+            with open(path, encoding="utf-8") as fh:
+                page = fh.read()
+            self.assertIn(d.url.strip(), page, "the opening file does not carry the daemon's own address")
+            self.assertIn("?k=", page, "the address inside carried no key")
 
     def test_no_browser_opens_nothing(self):
         """The flag the app (app/) passes, and what every test here uses."""
@@ -575,7 +581,9 @@ class TwoWaysIn(unittest.TestCase):
             time.sleep(0.4)
             self.assertTrue(os.path.exists(note), "it attached but opened nothing")
             with open(note) as fh:
-                self.assertIn(d.url, fh.read())
+                got = fh.read()
+            self.assertNotIn("k=", got, "the key went onto the command line")
+            self.assertIn("file://", got, "the browser was not handed the opening file: %r" % got)
 
     def test_it_leaves_the_running_daemon_alone(self):
         """The refusal existed because a second start rotates the token and deletes run/*.json,
@@ -734,6 +742,15 @@ class TheAddress(unittest.TestCase):
                 time.sleep(0.1)
             self.assertTrue(os.path.exists(note), "nothing was opened")
             with open(note) as fh:
+                argv = fh.read().split("\n")
+            # **Never the key on a command line** (review, 2026-09-15): the browser gets a 0600 file
+            # that opens the address, and the address is inside that file only.
+            self.assertFalse(any("k=" in a for a in argv), "the key went onto the browser's command line: %r" % argv)
+            target = [a for a in argv if a.startswith("file://")]
+            self.assertTrue(target, "no file:// stand-in was handed to the browser: %r" % argv)
+            path = urllib.request.url2pathname(target[0][len("file://"):])
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600, "the opening file is readable by others")
+            with open(path, encoding="utf-8") as fh:
                 self.assertIn(d.url, fh.read())
 
     def test_it_refuses_the_wrong_methods(self):
@@ -945,14 +962,16 @@ class StoppingTrustsTheAddress(unittest.TestCase):
     while the daemon went on serving (user, 2026-09-14). The address answering is direct evidence,
     and app/ has always trusted it over the file."""
 
-    def test_it_stops_a_daemon_whose_lock_looks_free(self):
+    def test_a_free_lock_is_not_stopped_even_when_something_answers(self):
+        """**Reversed 2026-09-15 (review).** This used to assert the opposite: a lock nobody holds
+        with an address that answers was taken for a daemon from an older build (one that locked a
+        different byte, the Windows case of 2026-09-14) and stopped by the pid in the lock line. But
+        a free lock with an answering address is also exactly what a squatter on a stale port looks
+        like, and --stop was sending it the token and SIGTERMing a pid that could be anyone's. The
+        lock is the only thing another account cannot fake, so it decides: say so, touch nothing."""
         from tests.helpers import PYTHON, REPO
         with Daemon() as d:
             self.assertTrue(d.get("/api/sessions") is not None)
-            # **Make the lock observably free without touching the daemon.** Replacing the file
-            # leaves the daemon holding its descriptor on the old one, so what --stop can see is a
-            # lock nobody holds and an address that still answers -- which is the Windows case, where
-            # an older build holds a different byte, reproduced here deterministically.
             lock = os.path.join(d.home, ".palmar", "run", "lock")
             with open(lock, "rb") as fh:
                 had = fh.read()
@@ -962,8 +981,10 @@ class StoppingTrustsTheAddress(unittest.TestCase):
             r = subprocess.run([PYTHON, "-m", "palmar", "--stop"], cwd=REPO,
                                env=dict(os.environ, HOME=d.home, PYTHONPATH=REPO),
                                capture_output=True, text=True, timeout=60)
-            self.assertNotIn("no daemon is running", r.stdout,
-                             "it called a running daemon dead: %r" % r.stdout)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("no daemon is running", r.stdout)
+            self.assertIn("not palmar's", r.stdout, "it should say something answers there")
+            self.assertEqual(d.raw("GET", "/api/sessions")[0], 200, "it killed a process the lock did not vouch for")
 
     def test_it_asks_over_the_socket(self):
         """**Signals cannot reach a daemon with no console.** A detached process on Windows is in no
@@ -1495,7 +1516,9 @@ class TheWindowOpensFirst(unittest.TestCase):
             self.assertEqual(d.raw("POST", "/api/address/open")[0], 204)
             self.assertTrue(self.wait_for(browser_ran), "the web button opened nothing")
             with open(browser_ran) as fh:
-                self.assertIn(d.url, fh.read())
+                arg = fh.read().strip()
+            self.assertTrue(arg.startswith("file://"), "the web button must hand the browser the file stand-in: " + arg)
+            self.assertNotIn("k=", arg, "the key went onto the command line")
 
     def test_web_asks_for_a_browser_outright(self):
         app, browser, app_ran, browser_ran = self.fakes()
@@ -1511,7 +1534,9 @@ class TheWindowOpensFirst(unittest.TestCase):
         with Daemon(env={"PALMAR_APP": "0", "PALMAR_CHROMIUM": app, "BROWSER": browser}, browser=True) as d:
             self.assertTrue(self.wait_for(app_ran), "no window in app mode")
             with open(app_ran) as fh:
-                self.assertEqual(fh.read().strip(), "--app=" + d.url)
+                arg = fh.read().strip()
+            self.assertTrue(arg.startswith("--app=file://"), "app mode must get the file stand-in, not the keyed address: " + arg)
+            self.assertNotIn("k=", arg)
             said = stderr_so_far(d, "app mode")
             self.assertIn("opening a window with palmar-app (app mode", said)
             time.sleep(0.5)
@@ -1519,7 +1544,8 @@ class TheWindowOpensFirst(unittest.TestCase):
             self.assertEqual(d.raw("POST", "/api/address/open")[0], 204)
             self.assertTrue(self.wait_for(browser_ran), "the web button opened no tab")
             with open(browser_ran) as fh:
-                self.assertEqual(fh.read().strip(), d.url, "the web button must open a plain tab, not app mode")
+                arg = fh.read().strip()
+            self.assertTrue(arg.startswith("file://") and "--app=" not in arg, "the web button must open a plain tab, not app mode: " + arg)
 
     def test_a_window_that_dies_gives_way_to_the_browser(self):
         app, browser, app_ran, browser_ran = self.fakes()
@@ -1635,3 +1661,146 @@ class TheAddressDiesWithTheDaemon(unittest.TestCase):
         self.addCleanup(d.stop)
         with open(d.url_file) as fh:
             self.assertNotIn("stale", fh.read())
+
+
+class OnWslTheAddressOpensOnce(unittest.TestCase):
+    """From WSL the browser is on the Windows side and a Linux file cannot cross, so the command
+    line carries a one-time address: /once/<nonce> turns into the keyed address exactly once."""
+
+    def test_the_nonce_opens_once(self):
+        box = tempfile.mkdtemp(prefix="palmar-once-")
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        note = os.path.join(box, "argv")
+        opener = os.path.join(box, "opener.sh")
+        with open(opener, "w") as fh:
+            fh.write('#!/bin/sh\nprintf "%s\\n" "$@" > ' + note + '\n')
+        os.chmod(opener, 0o755)
+        # WSL_DISTRO_NAME alone makes wsl_kind() say "wsl" — the seam the WSL tests already use.
+        with Daemon(env={"BROWSER": opener, "WSL_DISTRO_NAME": "Ubuntu"}) as d:
+            self.assertEqual(d.raw("POST", "/api/address/open")[0], 204)
+            end = time.time() + 10
+            while time.time() < end and not os.path.exists(note):
+                time.sleep(0.1)
+            with open(note) as fh:
+                argv = fh.read().split("\n")
+            once = [a for a in argv if "/once/" in a]
+            self.assertTrue(once, "no one-time address on the command line: %r" % argv)
+            self.assertFalse(any("k=" in a for a in argv), "the key went onto the command line: %r" % argv)
+            base = d.url.split("/?", 1)[0]
+            path = "/once/" + once[0].rsplit("/once/", 1)[1]
+            code, headers = self.head(base + path)
+            self.assertEqual(code, 302)
+            self.assertEqual(headers.get("Location"), "/?k=" + d.url.split("k=", 1)[1])
+            code, _ = self.head(base + path)
+            self.assertEqual(code, 404, "the one-time address opened twice")
+
+    def head(self, url):
+        import http.client
+        u = urllib.parse.urlsplit(url)
+        c = http.client.HTTPConnection(u.hostname, u.port, timeout=5)
+        c.request("GET", u.path)
+        r = c.getresponse()
+        r.read()
+        return r.status, dict(r.getheaders())
+
+
+class NothingRunsFromTheViewer(unittest.TestCase):
+    def test_an_executable_is_refused_by_open(self):
+        with Daemon() as d:
+            f = os.path.join(d.home, "run.sh")
+            with open(f, "w") as fh:
+                fh.write("#!/bin/sh\necho hi\n")
+            os.chmod(f, 0o755)
+            code, body = d.raw("POST", "/api/open", json.dumps({"path": f}).encode())
+            self.assertEqual(code, 415, body)
+            self.assertIn(b"would run", body)
+
+
+class LinksAreNotWrittenThrough(unittest.TestCase):
+    """A cloned repository decides where its links point — `notes.txt -> ~/.zshrc` — and a save to
+    what looks like a repo file used to land on the target (review, 2026-09-15)."""
+
+    def test_the_listing_says_link_and_put_refuses(self):
+        with Daemon() as d:
+            repo = os.path.join(d.home, "repo"); os.makedirs(repo)
+            secret = os.path.join(d.home, ".zshrc")
+            with open(secret, "w") as fh:
+                fh.write("export SECRET=1\n")
+            os.symlink(secret, os.path.join(repo, "notes.txt"))
+            rows = d.get("/api/dirs?path=" + urllib.parse.quote(repo))
+            rows = rows.get("entries", rows) if isinstance(rows, dict) else rows
+            row = [r for r in (rows if isinstance(rows, list) else []) if r.get("name") == "notes.txt"]
+            self.assertTrue(row and row[0].get("link"), "the listing does not say it is a link: %r" % rows)
+            code, body = d.raw("PUT", "/api/file?path=" + urllib.parse.quote(os.path.join(repo, "notes.txt")), b"owned\n")
+            self.assertEqual(code, 400, body)
+            with open(secret) as fh:
+                self.assertEqual(fh.read(), "export SECRET=1\n", "the save went through the link")
+
+
+class ATempNameNobodyCouldPlant(unittest.TestCase):
+    """The temp file beside a saved file used to have a fixed name, and the folder is a cloned
+    repository's to fill: a FIFO by that name blocked the daemon, a hard link by that name was
+    truncated in place with the file it pointed at (Codex review, 2026-09-15)."""
+
+    def test_a_fifo_by_the_old_name_does_not_block_the_save(self):
+        with Daemon() as d:
+            f = os.path.join(d.home, "notes.txt")
+            with open(f, "w") as fh:
+                fh.write("one\n")
+            os.mkfifo(os.path.join(d.home, "notes.txt.palmar-tmp"))
+            code, body = d.raw("PUT", "/api/file?path=" + urllib.parse.quote(f), b"two\n")
+            self.assertEqual(code, 200, body)
+            with open(f) as fh:
+                self.assertEqual(fh.read(), "two\n")
+
+    def test_a_hard_link_by_the_old_name_does_not_truncate_its_target(self):
+        with Daemon() as d:
+            f = os.path.join(d.home, "notes.txt")
+            victim = os.path.join(d.home, "victim.txt")
+            for p, text in ((f, "one\n"), (victim, "keep me\n")):
+                with open(p, "w") as fh:
+                    fh.write(text)
+            os.link(victim, os.path.join(d.home, "notes.txt.palmar-tmp"))
+            code, body = d.raw("PUT", "/api/file?path=" + urllib.parse.quote(f), b"two\n")
+            self.assertEqual(code, 200, body)
+            with open(victim) as fh:
+                self.assertEqual(fh.read(), "keep me\n", "the hard link's target was truncated")
+
+
+class StopTrustsTheLock(unittest.TestCase):
+    """A free lock means no daemon, whatever answers on the old address: --stop used to send that
+    listener the token and SIGTERM the pid a stale lock line named (review, 2026-09-15)."""
+
+    def test_a_squatter_on_a_stale_address_is_not_a_daemon(self):
+        home = tempfile.mkdtemp(prefix="palmar-stopsq-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        run = os.path.join(home, ".palmar", "run"); os.makedirs(run, mode=0o700)
+        sq = socket.socket(); sq.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); sq.bind(("127.0.0.1", 0)); sq.listen(1)
+        self.addCleanup(sq.close)
+        port = sq.getsockname()[1]
+        with open(os.path.join(run, "url"), "w") as fh:
+            fh.write("http://127.0.0.1:%d/?k=stale\n" % port)
+        with open(os.path.join(run, "lock"), "w") as fh:
+            fh.write("pid %d http://127.0.0.1:%d\n" % (os.getpid(), port))     # our own pid: a SIGTERM would be felt
+        from tests.helpers import PYTHON, REPO
+        r = subprocess.run([PYTHON, "-m", "palmar", "--stop"], cwd=REPO, capture_output=True, text=True, timeout=30,
+                           env=dict(os.environ, HOME=home, PYTHONPATH=REPO))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("no daemon is running", r.stdout)
+        self.assertIn("not palmar's", r.stdout)
+
+
+class ThePageIsFenced(unittest.TestCase):
+    def test_index_html_carries_a_script_src_policy_with_a_nonce(self):
+        with Daemon() as d:
+            import http.client
+            u = urllib.parse.urlsplit(d.url)
+            c = http.client.HTTPConnection(u.hostname, u.port, timeout=5)
+            c.request("GET", "/?" + u.query)
+            r = c.getresponse(); body = r.read().decode("utf-8", "replace")
+            csp = [v for k, v in r.getheaders() if k.lower() == "content-security-policy"]
+            self.assertTrue(any("script-src 'self' 'nonce-" in v for v in csp), csp)
+            self.assertTrue(any("frame-ancestors 'none'" in v for v in csp), csp)
+            nonce = [v for v in csp if "nonce-" in v][0].split("nonce-", 1)[1].split("'", 1)[0]
+            self.assertIn('<script nonce="%s">window.PALMAR_TOKEN=' % nonce, body)
+            self.assertEqual(dict(r.getheaders()).get("X-Content-Type-Options"), "nosniff")

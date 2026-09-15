@@ -714,6 +714,15 @@ class Tile {
       scrollback: 1000,
       cursorBlink: false,
       allowProposedApi: true,
+      // A link in terminal output (OSC 8) is somebody else's text: only http(s), and opened detached
+      // so the new page gets no handle on this one (review, 2026-09-15).
+      linkHandler: {
+        activate(e, uri) {
+          let u; try { u = new URL(uri); } catch (err) { return; }
+          if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
+          window.open(u.href, '_blank', 'noopener,noreferrer');
+        },
+      },
     });
     this.fit = new FitAddon.FitAddon();
     this.term.loadAddon(this.fit);
@@ -1503,7 +1512,10 @@ class Viewer {
       // **Sandboxed, and no exception to it.** The page is somebody's file; without this it would run
       // its script in palmar's own origin, next to the token.
       f.setAttribute('sandbox', '');
-      f.srcdoc = this.text;
+      // The file's own markup cannot loosen a policy that is already there — policies only intersect —
+      // so an <img src="https://…"> in a cloned repository's page does not phone home when it is
+      // looked at (review, 2026-09-15). Inline styles and data: images still show.
+      f.srcdoc = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: blob:; style-src \'unsafe-inline\'; font-src data:">' + this.text;
       box.appendChild(f);
       return;
     }

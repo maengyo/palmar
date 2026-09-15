@@ -113,6 +113,13 @@ else
   # exit — the launcher then pointed at nothing. It lives under the prefix, and a reinstall replaces it.
   TMP="$(mktemp -d)"
   trap 'rm -rf "$TMP"' EXIT
+  # By shape, not by existence: the default URL read as a *relative path* is
+  # `https:/codeload.github.com/…/main`, and a repository can carry exactly that file (review, 2026-09-15).
+  case "$PALMAR_TARBALL" in
+    *://*) : ;;
+    /*)    [ -f "$PALMAR_TARBALL" ] || die "PALMAR_TARBALL=$PALMAR_TARBALL is not a file" ;;
+    *)     die "PALMAR_TARBALL must be a URL or an absolute path" ;;
+  esac
   if [ -f "$PALMAR_TARBALL" ]; then
     cp "$PALMAR_TARBALL" "$TMP/palmar.tar.gz"
   else
@@ -143,13 +150,33 @@ else
   # world-writable bin, or one owned by someone else (a shared prefix, /tmp), lets any other account
   # replace the launcher — and every command, since it is first on PATH. The daemon refuses the same
   # for ~/.palmar (#29); the installer did not for this (review, 2026-09-15).
+  # The same rule sshd applies to ~/.ssh, all the way up: every directory above must be owned by you
+  # or root and not writable by others unless it is sticky (/tmp) — a rename needs the *parent*, so a
+  # writable parent lets another account swap the whole tree (review, 2026-09-15).
   for d in "$PREFIX/bin" "$SRC"; do
-    "$PY" - "$d" <<'OWN_EOF' || die "$d must be owned by you and writable by nobody else (chmod go-w, or pick another PALMAR_PREFIX)"
+    "$PY" - "$d" <<'OWN_EOF' || die "$d, or a directory above it, is not yours alone: owned by you (or root), writable by nobody else, or sticky. chmod go-w it, or pick another PALMAR_PREFIX"
 import os, sys
-st = os.stat(sys.argv[1])
-raise SystemExit(0 if st.st_uid == os.getuid() and not (st.st_mode & 0o022) else 1)
+p = os.path.realpath(sys.argv[1])
+me = os.getuid()
+st = os.stat(p)
+if st.st_uid != me or st.st_mode & 0o022:
+    raise SystemExit(1)
+while True:
+    parent = os.path.dirname(p)
+    if parent == p:
+        break
+    p = parent
+    st = os.stat(p)
+    if st.st_uid not in (me, 0) or (st.st_mode & 0o022 and not st.st_mode & 0o1000):
+        raise SystemExit(1)
 OWN_EOF
   done
+  # These are written into a shell line inside double quotes; a path that would break out of them
+  # is refused rather than escaped.
+  case "$PREFIX$SRC$PY" in
+    *[\"\$\`]*|*"
+"*) die "the install paths must not contain a double quote, a dollar sign, a backtick or a newline" ;;
+  esac
   SHIM="$PREFIX/bin/palmar"
   # A launcher, not a copy: it runs the tree in place, so a `git pull` in the checkout updates palmar
   # with no reinstall — the daemon already expects to live that way (⑦=b). By **script path**, not
@@ -174,6 +201,10 @@ SHIM_EOF
   APP_DEST="$PREFIX/bin/palmar-app"
   APP_FROM=""
   if [ -n "${PALMAR_APP_URL:-}" ]; then
+    case "$PALMAR_APP_URL" in
+      *://*|/*) : ;;
+      *) die "PALMAR_APP_URL must be a URL or an absolute path" ;;
+    esac
     if [ -f "$PALMAR_APP_URL" ]; then
       cp "$PALMAR_APP_URL" "$APP_DEST" && chmod +x "$APP_DEST" && APP_FROM="$PALMAR_APP_URL"
     elif curl -fsSL "$PALMAR_APP_URL" -o "$APP_DEST.new"; then

@@ -250,9 +250,10 @@ fn daemon_alive() -> Option<bool> {
 
 /// The address to show: a daemon already up, or one we start.
 fn find_or_start() -> Result<String, String> {
-    if daemon_alive() == Some(false) {
-        // The lock is free: whatever run/url says, no daemon of ours is behind it. Start one — it
-        // removes the stale file on its way up and writes its own once it is bound.
+    if daemon_alive() != Some(true) {
+        // The lock is free, or cannot be asked: whatever run/url says, no daemon of ours is known to
+        // be behind it. Start one — it removes the stale file on its way up and writes its own once
+        // it is bound, and a daemon that is up answers the start with its own address.
         return spawn_daemon();
     }
     if let Some(path) = url_file() {
