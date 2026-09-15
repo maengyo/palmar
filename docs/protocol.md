@@ -110,7 +110,8 @@ python3 -m palmar            # 127.0.0.1:8801. --port 만 받는다. host 옵션
 | `POST` | `/api/canvases/order?token=` | `{"order": ["<id>", …]}` — **지금 있는 전부를 새 순서로** | `[Canvas]` (200, `order` 순) · 배열이 아니거나 원소가 문자열이 아니면 `400` · 지금 집합과 다르면(빠짐·더함·중복) `409` |
 | `PATCH` | `/api/canvases/<id>?token=` | `{"name": …}` (문자열 또는 `null`) | `Canvas` (200) · 없으면 `404` · 이름이 규칙에 안 맞으면 `400` |
 | `DELETE` | `/api/canvases/<id>?token=` | | `204` · 없으면 `404` · **세션이 하나라도 있으면 `409`** · **마지막 하나면 `409`** (아래 "캔버스") |
-| `GET` | `/api/dirs?path=&token=` | | `Dirs` · `path` 없으면 뿌리 목록(아래 모양) · 뿌리 밖이면 `400` |
+| `GET` | `/api/dirs?path=&token=` | | `Dirs` · `path` 없으면 뿌리 목록(아래 모양) · 뿌리 밖이면 `400`. 항목은 폴더 먼저(`kind:"dir"`) 그다음 파일(`kind:"file"`, `size`) — 점으로 시작하는 것은 뺀다 (2026-09-15) |
+| `GET` | `/api/file?path=&token=` | | 파일 그대로: 이미지는 `image/*`, 그 밖은 `text/plain; charset=utf-8` · 앞 8KB 에 NUL 이 있으면 `415` · 2MB 초과 `413` · 파일이 아니면 `400` · **읽기만 있다**, 경계는 `/api/dirs?path=` 와 같다 (2026-09-15) |
 | `GET` | `/api/dirs?find=&token=` | | `{"find": "…", "entries": [DirEntry]}` — 뿌리 아래 폴더 찾기(아래 "폴더 찾기") |
 | `POST` | `/api/dirs?token=` | `{"path": "/abs/parent", "name": "new"}` | `201 {"path": "/abs/parent/new"}` · 이미 있으면 `409` · `name` 이 한 조각이 아니면(`/`·`.`·`..`·빈 것) `400`. **만들기만 있다** — 지우기·이름 바꾸기 없음 |
 | `POST` | `/hook/claude?pane=<id>&token=` | Claude Code 훅 JSON | `200 {}` — **항상.** 모르는 pane·틀린 토큰도 200 (무시할 뿐이다 — 훅은 0 으로 끝나야 한다) |
@@ -142,6 +143,7 @@ python3 -m palmar            # 127.0.0.1:8801. --port 만 받는다. host 옵션
   "status": "unknown",       // 아래 "상태"
   "title": null,             // 에이전트가 마지막으로 세운 창 제목. 상태를 여기서 읽는다 (#38)
   "fg": null,                // 앞단에서 도는 명령의 이름 (comm_of). 프롬프트면 null. 윈도우는 아직 늘 null (#30)
+  // 판(layout)의 항목에는 세션 id 외에 뷰어 창 `v:<hash>` 가 올 수 있다: {x,y,w,h,z, kind:"file", path, canvas} (2026-09-15)
   "since": 1788900000.0,     // 지금 status 가 **언제부터**인가 (unix). 10분째 기다리는 판과 방금
                              //   물어본 판은 다른 일이다 — 브라우저는 붙어 있던 동안밖에 모른다
   "quiet": 12.4,             // 마지막으로 **화면에 남는 것**을 낸 지 몇 초 (커서 틱은 안 센다).

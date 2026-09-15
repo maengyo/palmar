@@ -1183,3 +1183,64 @@ class WhatRunsInAPane(unittest.TestCase):
                 if fg is None:
                     break
             self.assertIsNone(fg, "it still names a command at a prompt: %r" % fg)
+
+
+class LookingAtADocument(unittest.TestCase):
+    """The rail stopped being a launcher and became the way to look at a document (user, 2026-09-15).
+    The listing carries files, and GET /api/file serves one back as it is — text as text, images as
+    images, nothing else — within the boundary browsing already has."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.dir = os.path.join(cls.d.home, "docs")
+        os.makedirs(os.path.join(cls.dir, "sub"))
+        with open(os.path.join(cls.dir, "notes.md"), "w", encoding="utf-8") as fh:
+            fh.write("# 메모\n\nhello, 팔마\n")
+        with open(os.path.join(cls.dir, "blob.bin"), "wb") as fh:
+            fh.write(b"\x00\x01\x02 not text")
+        with open(os.path.join(cls.dir, "dot.png"), "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 40)
+        with open(os.path.join(cls.dir, "huge.txt"), "wb") as fh:
+            fh.write(b"x" * (2 * 1024 * 1024 + 1))
+        with open(os.path.join(cls.dir, ".hidden"), "w") as fh:
+            fh.write("no")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.d.stop()
+
+    def test_the_listing_has_folders_then_files(self):
+        d = self.d.get("/api/dirs?path=" + self.dir)
+        kinds = [(e["name"], e["kind"]) for e in d["entries"]]
+        self.assertEqual(kinds[0], ("sub", "dir"), "folders do not come first: %r" % kinds)
+        self.assertIn(("notes.md", "file"), kinds)
+        self.assertNotIn(".hidden", [n for n, _ in kinds], "a dot file was listed")
+        notes = [e for e in d["entries"] if e["name"] == "notes.md"][0]
+        self.assertEqual(notes["size"], os.path.getsize(os.path.join(self.dir, "notes.md")))
+
+    def test_text_comes_back_as_text(self):
+        st, b = self.d.raw("GET", "/api/file?path=" + os.path.join(self.dir, "notes.md"))
+        self.assertEqual(st, 200, b)
+        self.assertEqual(b.decode("utf-8"), "# 메모\n\nhello, 팔마\n")
+
+    def test_an_image_comes_back_as_an_image(self):
+        st, b = self.d.raw("GET", "/api/file?path=" + os.path.join(self.dir, "dot.png"))
+        self.assertEqual(st, 200)
+        self.assertTrue(b.startswith(b"\x89PNG"))
+
+    def test_what_is_neither_is_refused(self):
+        st, b = self.d.raw("GET", "/api/file?path=" + os.path.join(self.dir, "blob.bin"))
+        self.assertEqual(st, 415, b)
+        st, b = self.d.raw("GET", "/api/file?path=" + os.path.join(self.dir, "huge.txt"))
+        self.assertEqual(st, 413, b)
+        st, b = self.d.raw("GET", "/api/file?path=" + self.dir)
+        self.assertEqual(st, 400, "a folder was served as a file")
+        st, b = self.d.raw("GET", "/api/file?path=" + os.path.join(self.dir, "notes.md"), token=False)
+        self.assertEqual(st, 403, "a file went out without the token")
+
+    def test_the_board_keeps_a_viewer(self):
+        st, b = self.d.raw("PUT", "/api/layout", {"layout": {"v:abc": {"x": 1, "y": 2, "w": 300, "h": 200, "kind": "file",
+                                                                        "path": "/tmp/x.md", "canvas": "c1"}}})
+        self.assertEqual(st, 200, b)
+        self.assertEqual(self.d.get("/api/layout")["layout"]["v:abc"]["path"], "/tmp/x.md")

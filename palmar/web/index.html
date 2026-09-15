@@ -165,7 +165,7 @@
   <div class="keys" id="keys" hidden role="dialog" aria-modal="false" aria-label="keyboard shortcuts">
     <div class="keys-h">Keyboard <button class="keys-x" id="keys-x" type="button" aria-label="close">×</button></div>
     <dl>
-      <dt><kbd class="mod">Ctrl</kbd><kbd>⏎</kbd></dt><dd>new terminal, in the folder of the one you are on</dd>
+      <dt><kbd class="mod">Ctrl</kbd><kbd>⏎</kbd></dt><dd>new terminal, in your home folder</dd>
       <dt><kbd class="mod">Ctrl</kbd><kbd>Shift</kbd><kbd>⏎</kbd></dt><dd>new canvas</dd>
       <dt><kbd class="mod">Ctrl</kbd><kbd>K</kbd></dt><dd>search sessions and folders</dd>
       <dt><kbd class="mod">Ctrl</kbd><kbd>\</kbd></dt><dd>fold the left rail — <kbd class="mod">Ctrl</kbd><kbd>Shift</kbd><kbd>\</kbd> the right</dd>
@@ -219,7 +219,7 @@
              The daemon does not even know it is there (protocol.md "없는 것"). -->
         <!-- Shown only while the right rail is folded (style.css body.fold-r .fab): the rail's
              "Open terminal here" goes with the rail, and this is what is left to press. -->
-        <button class="fab" id="fab-new" type="button" title="new terminal, in the folder of the one you are on (Ctrl/⌘ ⏎)"
+        <button class="fab" id="fab-new" type="button" title="new terminal, in your home folder (Ctrl/⌘ ⏎)"
                 aria-label="new terminal">+</button>
         <div class="mm" id="mm" hidden title="drag to move the viewport">
           <div class="mm-w" id="mm-w"></div>
@@ -244,12 +244,10 @@
       <div class="rh"><button class="rail-fold r" id="fold-r" type="button" title="collapse (⌘\)" aria-label="collapse the right rail">›</button><span class="t">Directories</span><span class="sp"></span><span class="ib plus" id="mkdir" title="new folder">+</span><span class="ib" id="refresh" title="refresh">↻</span></div>
       <div class="scroll">
         <div class="tree" id="tree"></div>
-        <div class="hint2" id="tree-hint">folders only · read when expanded</div>
+        <div class="hint2" id="tree-hint">click a file to view it · read when expanded</div>
       </div>
-      <div class="launch">
-        <div class="path" id="launch-path">select a folder</div>
-        <button class="btn" id="launch" type="button" disabled>Open terminal here <kbd>⏎</kbd></button>
-      </div>
+      <!-- The launcher that stood here ("Open terminal here") is gone: terminals open at home, from ＋,
+           Ctrl/⌘⏎ or the round button, and the rail is for looking at what is in a folder (2026-09-15). -->
     </aside>
   </div>
 

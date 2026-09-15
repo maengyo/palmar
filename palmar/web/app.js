@@ -140,7 +140,6 @@ function showSearch(on) {
   if (on) { searchEl.focus(); searchEl.select(); }
   else if (searchEl.value) { searchEl.value = ''; searchEl.dispatchEvent(new Event('input')); }
 }
-const launchBtn = $('#launch'), launchPath = $('#launch-path');
 
 // ── state ───────────────────────────────────────────────
 // The truth is the daemon (AGENTS.md "구조"). sessions is a copy /events sent, swapped out on every hello.
@@ -564,39 +563,29 @@ async function api(method, path, body) {
 }
 
 // ── tiles ───────────────────────────────────────────────
-class Tile {
-  constructor(s) {
-    this.id = s.id;
-    this.s = s;
-    this.closed = false;
-    this.ws = null;
-    this.lastOffset = 0;     // from= for the next connect. hello.offset − hello.replayed + bytes received since
-    this.base = 0;
-    this.received = 0;
-    this.sentCols = 0; this.sentRows = 0;
-    this.retry = 0;
-    this.lastLine = '';
-    this.off = false;
-
-    const e = this.el = el('div', 'tile');
+//: **One frame for every window on the canvas.** A terminal and a viewer (2026-09-15) share the title
+//: bar, the grip, the placement from the board and the text-size wheel; only what fills the body differs.
+//: Lifted out of Tile's constructor rather than written twice, so the two cannot drift apart.
+function buildFrame(t, s) {
+    const e = t.el = el('div', 'tile');
     e.dataset.id = s.id;
     // If it belongs to another canvas it is only absent from the screen — session and websocket stay alive (principle 2)
     if (current !== null && s.canvas !== current) e.classList.add('other');
     const tb = el('div', 'tb');
-    this.dotEl = el('span', 'dot');
-    this.nameEl = el('span', 'name');
-    this.pillEl = el('span', 'st');
-    this.szEl = el('span', 'sz');
-    this.rnEl = el('span', 'rn'); this.rnEl.title = 'rename (or double-click the name)';
-    this.xpEl = el('span', 'xp'); this.xpEl.title = 'expand';
+    t.dotEl = el('span', 'dot');
+    t.nameEl = el('span', 'name');
+    t.pillEl = el('span', 'st');
+    t.szEl = el('span', 'sz');
+    t.rnEl = el('span', 'rn'); t.rnEl.title = 'rename (or double-click the name)';
+    t.xpEl = el('span', 'xp'); t.xpEl.title = 'expand';
     // #31 ① close. **The box is the same body as .rn·.xp** (they sit in one CSS rule together — there is no
     // room for size·border·hover to drift apart) and it joins the same row. Only the drawing inside differs — two strokes (×).
     // The reason no glyph (✕) is the same as for .rn: every font draws it differently (AGENTS.md).
     // The only difference is that it is a <button> — destroying has to be reachable from the keyboard too
     // (#31 ④). It looks like the spans.
-    this.clEl = el('button', 'cl'); this.clEl.type = 'button';
-    this.clEl.title = 'close terminal'; this.clEl.setAttribute('aria-label', 'close terminal');
-    tb.append(this.dotEl, this.nameEl, this.pillEl, this.szEl, this.rnEl, this.xpEl, this.clEl);
+    t.clEl = el('button', 'cl'); t.clEl.type = 'button';
+    t.clEl.title = 'close terminal'; t.clEl.setAttribute('aria-label', 'close terminal');
+    tb.append(t.dotEl, t.nameEl, t.pillEl, t.szEl, t.rnEl, t.xpEl, t.clEl);
     // #25 text size per pane. Ctrl/⌘+wheel is also browser zoom, so it must be blocked — leave it and reaching
     // to enlarge one window enlarges the whole page. A plain wheel is left alone so xterm's scrollback lives.
     // **Take it on the capture phase.** On bubble, xterm's scrollback handler eats it at the child first, and it
@@ -604,13 +593,13 @@ class Tile {
     e.addEventListener('wheel', (ev) => {
       if (!ev.ctrlKey && !ev.metaKey) return;
       ev.preventDefault(); ev.stopPropagation();
-      this.setFont((this.term.options.fontSize || FONT_PX) + (ev.deltaY < 0 ? FONT_STEP : -FONT_STEP));
+      t.setFont((t.term.options.fontSize || FONT_PX) + (ev.deltaY < 0 ? FONT_STEP : -FONT_STEP));
     }, { passive: false, capture: true });
     // The size readout is the reset button — put it on something already there rather than add another button to the title bar.
-    this.szEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.setFont(FONT_PX); });
-    this.termEl = el('div', 'term');
-    this.gripEl = el('div', 'grip');
-    e.append(tb, this.termEl, this.gripEl);
+    t.szEl.addEventListener('click', (ev) => { ev.stopPropagation(); t.setFont(FONT_PX); });
+    t.termEl = el('div', 'term');
+    t.gripEl = el('div', 'grip');
+    e.append(tb, t.termEl, t.gripEl);
 
     // Position: whatever was saved, else a free slot (⑩ provisional)
     const saved = layout[s.id];
@@ -633,6 +622,26 @@ class Tile {
     // The frame is painted by upsert, **after** this tile is in `tiles` — painted from here it cannot
     // see itself, so the second member of a restored pair drew nothing and the group came back
     // unframed in every browser but the one that made it (measured 2026-09-14).
+
+    return saved;
+}
+
+class Tile {
+  constructor(s) {
+    this.id = s.id;
+    this.s = s;
+    this.closed = false;
+    this.ws = null;
+    this.lastOffset = 0;     // from= for the next connect. hello.offset − hello.replayed + bytes received since
+    this.base = 0;
+    this.received = 0;
+    this.sentCols = 0; this.sentRows = 0;
+    this.retry = 0;
+    this.lastLine = '';
+    this.off = false;
+
+    const saved = buildFrame(this, s);
+    const e = this.el, tb = e.firstChild;   // the rest of this constructor speaks of the element as `e`
 
     // xterm — the browser does the terminal emulation (AGENTS.md principle 1)
     this.term = new Terminal({
@@ -1005,9 +1014,11 @@ class Tile {
     const r = this.rect();
     // **Keep the group.** This rewrites the entry wholesale, which is how the text size was thrown
     // away once before (see below) — membership would have gone the same way on every drag.
-    const g = layout[this.id] && layout[this.id].g;
+    const was = layout[this.id] || {};
+    const g = was.g;
     layout[this.id] = { x: r.x, y: r.y, w: r.w, h: r.h, z: parseInt(this.el.style.zIndex, 10) || 0 };
     if (g) layout[this.id].g = g;
+    if (was.kind) { layout[this.id].kind = was.kind; layout[this.id].path = was.path; layout[this.id].canvas = was.canvas; }   // a viewer is kept by what it shows
     const f = this.term.options.fontSize;
     if (f && Math.abs(f - FONT_PX) > 0.01) layout[this.id].f = f;   // the default is not written
     saveLayout();
@@ -1214,6 +1225,151 @@ class Tile {
     try { this.term.dispose(); } catch (e) {}
     this.el.remove();
   }
+}
+
+//: **A viewer is a window that shows a file.** Same frame, same board, same groups and pushes as a
+//: terminal — it lives in `tiles` under an id of its own (`v:` + a hash of the path), so everything that
+//: walks the tiles treats it as one more window. It is not a session: the daemon never hears of it, and
+//: it comes back after a reload from the board alone (kind, path, canvas). Read-only: the shell beside it
+//: is where files are changed (2026-09-15).
+const VIEW_MAX_LINES = 20000;
+function viewerId(path) {
+  let h = 5381;
+  for (let i = 0; i < path.length; i++) h = ((h * 33) ^ path.charCodeAt(i)) >>> 0;
+  return 'v:' + h.toString(36) + path.length.toString(36);
+}
+function viewerSession(id, path, canvas) {
+  const name = path.split(/[\\/]/).pop() || path;
+  return { id, kind: 'file', path, name, cwd: path.replace(/[\\/][^\\/]*$/, '') || path, canvas, status: 'idle', cols: 0, rows: 0 };
+}
+class Viewer {
+  constructor(id, path, canvas) {
+    this.id = id;
+    this.s = viewerSession(id, path, canvas);
+    this.closed = false;
+    this.off = false;
+    // What the rest of the page asks of a window's terminal, answered harmlessly.
+    this.term = { rows: 0, cols: 0, options: {}, focus() {}, blur() {}, dispose() {}, resize() {},
+                  hasSelection: () => false, getSelection: () => '', textarea: null };
+    const saved = buildFrame(this, this.s);
+    layout[this.id] = Object.assign({}, layout[this.id], { kind: 'file', path, canvas });
+    this.el.classList.add('viewer');
+    this.el.dataset.path = path;
+    this.termEl.className = 'view';
+    this.termEl.tabIndex = 0;
+    this.szEl.hidden = true;                      // there are no columns to say
+    this.clEl.title = 'close'; this.clEl.setAttribute('aria-label', 'close viewer');
+    this.clEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.close(); });
+    this.el.addEventListener('pointerdown', () => focusTile(this.id, { user: true, keyboard: false }), true);
+    this.dragify();
+    this.update(this.s);
+    this.setFont((saved && saved.f) || FONT_PX, true);
+    this.load();
+  }
+  visible() { return current === null || this.s.canvas === current; }
+  rect() { return { x: this.el.offsetLeft, y: this.el.offsetTop, w: this.el.offsetWidth, h: this.el.offsetHeight }; }
+  persist() { Tile.prototype.persist.call(this); }
+  dragify() { Tile.prototype.dragify.call(this); }
+  rename() {}
+  refit() {}
+  sendResize() {}
+  showSize() {}
+  noteOutput() {}
+  connect() {}
+  askClose() { this.close(); }
+  setFont(px, quiet) {
+    const f = Math.max(FONT_MIN, Math.min(FONT_MAX, px));
+    this.termEl.style.fontSize = f + 'px';
+    this.term.options.fontSize = f;
+    if (!quiet) this.persist();
+  }
+  update(s) {
+    this.s = s;
+    this.dotEl.className = 'dot idle';
+    this.pillEl.hidden = true;
+    if (!this.nameEl.querySelector('input')) {
+      this.nameEl.textContent = '';
+      this.nameEl.append(s.name + ' ', el('span', null, '· ' + shortPath(s.cwd)));
+    }
+  }
+  async load() {
+    const box = this.termEl;
+    box.textContent = 'reading…';
+    const url = new URL('/api/file', location.origin);
+    url.searchParams.set('path', this.s.path);
+    url.searchParams.set('token', TOKEN);
+    try {
+      const r = await fetch(url);
+      if (!r.ok) {
+        let msg = r.status + ' ' + r.statusText;
+        try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (e) {}
+        box.textContent = ''; box.appendChild(el('div', 'view-msg', msg));
+        return;
+      }
+      const ctype = r.headers.get('content-type') || '';
+      if (ctype.startsWith('image/')) {
+        const blob = await r.blob();
+        const img = el('img');
+        img.alt = this.s.name;
+        img.src = URL.createObjectURL(blob);
+        box.textContent = ''; box.classList.add('image'); box.appendChild(img);
+        return;
+      }
+      const text = await r.text();
+      const lines = text.split('\n');
+      if (lines.length && lines[lines.length - 1] === '') lines.pop();
+      const frag = document.createDocumentFragment();
+      const n = Math.min(lines.length, VIEW_MAX_LINES);
+      for (let i = 0; i < n; i++) {
+        const l = el('div', 'l');
+        l.append(el('span', 'n', String(i + 1)), el('span', 'c', lines[i]));
+        frag.appendChild(l);
+      }
+      if (lines.length > n) frag.appendChild(el('div', 'view-msg', '… ' + (lines.length - n) + ' more lines'));
+      box.textContent = ''; box.appendChild(frag);
+    } catch (e) {
+      box.textContent = ''; box.appendChild(el('div', 'view-msg', 'could not read it — ' + (e.message || e)));
+    }
+  }
+  close() {
+    if (this.closed) return;
+    undoMark('closing a viewer', this.s.canvas);
+    const g = layout[this.id] && layout[this.id].g;
+    if (g) leaveGroup(this.id);
+    this.dispose();
+    tiles.delete(this.id);
+    delete layout[this.id];
+    if (focused === this.id) focused = null;
+    saveLayout();
+    paintGroups(); renderMinimap(); refreshOff(); paintTidy();
+  }
+  dispose() {
+    this.closed = true;
+    for (const img of this.termEl.querySelectorAll('img')) { try { URL.revokeObjectURL(img.src); } catch (e) {} }
+    this.el.remove();
+  }
+}
+function openViewer(path, canvas) {
+  const cv = canvas || current;
+  const id = viewerId(path);
+  let v = tiles.get(id);
+  if (v) { focusTile(id, { user: true }); v.el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' }); return v; }
+  v = new Viewer(id, path, cv);
+  tiles.set(id, v);
+  v.persist();
+  paintGroups(); renderMinimap(); refreshOff();
+  focusTile(id, { user: true, keyboard: false });
+  v.el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  return v;
+}
+// After the board arrives: every viewer it names comes back, on the canvas it was on.
+function restoreViewers() {
+  for (const [id, r] of Object.entries(layout)) {
+    if (!id.startsWith('v:') || r.kind !== 'file' || !r.path || tiles.has(id)) continue;
+    const v = new Viewer(id, r.path, r.canvas || current);
+    tiles.set(id, v);
+  }
+  paintGroups();
 }
 
 function tryWebgl(term, onLoss) {
@@ -3455,7 +3611,7 @@ function reconcile(list) {
   // not: the survivor of a pair whose partner died in the meantime came back still wearing its group,
   // marked as grouped, in a group of one, with no frame to explain it.
   let dropped = false;
-  for (const id of Object.keys(layout)) if (!seen.has(id)) { delete layout[id]; dropped = true; }
+  for (const id of Object.keys(layout)) if (!seen.has(id) && !id.startsWith('v:')) { delete layout[id]; dropped = true; }   // v: is a viewer, not a session
   if (dropped) {
     for (const g of new Set(Object.values(layout).map((r) => r.g).filter(Boolean))) dissolveIfAlone(g);
     saveLayout();
@@ -3481,6 +3637,7 @@ function connectEvents() {
       if (!checkProtocol(m)) checkVersion(m);
       takeLayout(m);                       // before the sessions are placed, so they land where the daemon says
       setCanvases(m.canvases || []); reconcile(m.sessions || []);
+      restoreViewers();                    // the windows that are not sessions
       renderRestore(m.restore);
     }
     else if (m.t === 'session' && m.s) upsert(m.s);
@@ -3579,7 +3736,7 @@ function joinDir(parent, name) {
 function makeNode(parentPath, e, depth) {
   return { path: joinDir(parentPath, e.name), name: e.name, branch: e.git_branch || null,
            hasChildren: !!e.has_children, depth, expanded: false, children: null, loading: false,
-           isHome: !!e.home };
+           isHome: !!e.home, kind: e.kind || 'dir', size: e.size };
 }
 async function loadRoots() {
   try {
@@ -3610,18 +3767,27 @@ async function expandNode(n) {
   }
 }
 function collapseNode(n) { n.expanded = false; renderTree(); }
+function fmtSize(n) {
+  if (!Number.isFinite(n)) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' K';
+  return (n / 1048576).toFixed(1) + ' M';
+}
+// A found folder: open the tree down to it, one /api/dirs a step, from the root that holds it.
+async function revealDir(path) {
+  const root = tree.roots.find((r) => path === r.path || path.startsWith(r.path.replace(/\/$/, '') + '/'));
+  if (!root) return;
+  let n = root;
+  while (n) {
+    if (n.path === path) { selectDir(n); if (!n.expanded) await expandNode(n); return; }
+    if (!n.expanded) await expandNode(n);
+    n = (n.children || []).find((c) => path === c.path || path.startsWith(c.path + '/'));
+  }
+}
+// The selected folder is where "new folder" and "refresh" act. Picking one no longer arms a launcher —
+// the rail is for looking, and a folder opens on a click (2026-09-15).
 function selectDir(n) {
   selectedDir = n;
-  launchPath.textContent = '';
-  launchPath.append(el('b', null, shortPath(n.path)));
-  if (n.branch) launchPath.append(' · ' + n.branch);
-  // **You can browse anywhere but open only under home** (2026-09-11). The daemon refuses a cwd
-  // outside the roots with a 400; saying so before the click beats a toast after it. `home` is the
-  // marked home root, so "under home" is a prefix test — the same shape the daemon checks.
-  const canOpen = !home || n.path === home || n.path.startsWith(home + '/');
-  launchBtn.disabled = !canOpen;
-  launchBtn.title = canOpen ? '' : 'A terminal can only open under your home folder';
-  if (!canOpen) launchPath.append(el('span', 'd', ' · outside home — browse only'));
   renderTree();
 }
 let findResults = null;      // { q, entries } — only while searching. null means the ordinary tree.
@@ -3629,11 +3795,11 @@ let findResults = null;      // { q, entries } — only while searching. null me
 function renderTree() {
   treeEl.textContent = '';
   const hint0 = document.getElementById('tree-hint');
-  if (hint0 && !findResults) hint0.textContent = 'folders only · read when expanded';
+  if (hint0 && !findResults) hint0.textContent = 'click a file to view it · read when expanded';
   if (findResults) {
     // **Show the matches flat.** Expanding down into the tree loses track of where you are looking.
     const hint = document.getElementById('tree-hint');
-    if (hint) hint.textContent = 'matching folders · click one to open a terminal there';
+    if (hint) hint.textContent = 'matching folders · click one to look inside';
     if (!findResults.entries.length) {
       treeEl.appendChild(el('div', 'hint2', findResults.error
         ? 'search failed: ' + findResults.error
@@ -3649,10 +3815,10 @@ function renderTree() {
       r.appendChild(el('span', 'nm', shortPath(e.name)));
       if (e.git_branch) r.appendChild(el('span', 'br', e.git_branch));
       r.title = e.name;
-      // Pick a match and that is the cwd — no need to dig through the tree.
-      const pick = () => selectDir(n);   // **the same path** as picking from the tree
+      // Pick a match and the tree opens down to it — the rail is for looking inside (2026-09-15).
+      const pick = () => { findResults = null; searchEl.value = ''; showSearch(false); revealDir(n.path); };
       r.addEventListener('click', pick);
-      r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); pick(); launch(); } });
+      r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); pick(); } });
       treeEl.appendChild(r);
     }
     return;
@@ -3664,13 +3830,27 @@ function renderTree() {
     r.tabIndex = 0;
     r.style.paddingLeft = (8 + n.depth * 16) + 'px';
     if (n.depth === 0 && i > 0) r.style.marginTop = '8px';
+    if (n.kind === 'file') {
+      // A file: one click and it is on the canvas, in a window of its own.
+      r.classList.add('file');
+      r.appendChild(el('span', 'car none', '▸'));
+      r.appendChild(el('span', 'nm', n.name));
+      r.appendChild(el('span', 'fsz', fmtSize(n.size)));
+      r.title = n.path;
+      r.addEventListener('click', () => openViewer(n.path));
+      r.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); openViewer(n.path); } });
+      treeEl.appendChild(r);
+      return;
+    }
+    // has_children counts folders only; a folder of nothing but files must still open — so a click always
+    // asks (expandNode goes to the daemon), and only the caret is greyed when no folder is known below.
     const car = el('span', 'car' + (n.hasChildren ? '' : ' none'), n.expanded ? '▾' : '▸');
-    car.addEventListener('click', (ev) => { ev.stopPropagation(); if (n.expanded) collapseNode(n); else if (n.hasChildren) expandNode(n); });
+    car.addEventListener('click', (ev) => { ev.stopPropagation(); if (n.expanded) collapseNode(n); else expandNode(n); });
     r.appendChild(car);
     r.appendChild(el('span', 'nm', n.depth === 0 ? (n.path === home ? '~' : n.path) : n.name));
     if (n.branch) r.appendChild(el('span', 'br', n.branch));
-    r.addEventListener('click', () => selectDir(n));
-    r.addEventListener('dblclick', () => { if (n.expanded) collapseNode(n); else if (n.hasChildren) expandNode(n); });
+    // One click: select it and open it — a folder is for looking inside, not for arming a button (2026-09-15).
+    r.addEventListener('click', () => { selectDir(n); if (n.expanded) collapseNode(n); else expandNode(n); });
     r.addEventListener('keydown', (ev) => {
       if (ev.key === 'ArrowRight' && n.hasChildren && !n.expanded) { ev.preventDefault(); expandNode(n); }
       else if (ev.key === 'ArrowLeft' && n.expanded) { ev.preventDefault(); collapseNode(n); }
@@ -3716,10 +3896,11 @@ function nextCwd() {
   return selectedDir ? selectedDir.path : null;
 }
 
-async function newTerminal(cwd) {
+// **Always at home.** It used to open in the folder of the terminal you were on, or the folder picked in
+// the rail; the rail is a viewer now and the person asked for one rule (2026-09-15: "터미널은 항상 기본
+// 폴더에서"). Without a cwd the daemon opens at home (protocol.md).
+async function newTerminal() {
   const body = {};
-  const c = cwd || nextCwd();
-  if (c) body.cwd = c;                 // without it the daemon opens at home (protocol.md)
   if (current) body.canvas = current;
   try {
     const s = await api('POST', '/api/sessions', body);
@@ -3747,35 +3928,9 @@ async function newCanvas() {
   }
 }
 
-async function launch() {
-  if (!selectedDir || launchBtn.disabled) return;
-  launchBtn.disabled = true;
-  try {
-    // PROVISIONAL — ⑪'s open question ("this canvas or that folder's canvas") is about **what fills this one
-    // field**, not about the protocol (protocol.md). For now it is the canvas being looked at.
-    const body = { cwd: selectedDir.path };
-    if (current) body.canvas = current;
-    const s = await api('POST', '/api/sessions', body);
-    // The session frame from /events may arrive first, or this response may — upsert takes either
-    const t = upsert(s);
-    t.el.classList.add('fresh');
-    setTimeout(() => t.el.classList.remove('fresh'), 2500);
-    t.el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
-    focusTile(s.id, { user: true });
-    refreshOff();
-    toast([{ b: 'Opened shell' }, ' in ' + shortPath(s.cwd)]);
-  } catch (e) {
-    toast(['open terminal: ' + e.message]);
-  } finally {
-    launchBtn.disabled = !selectedDir;
-  }
-}
-launchBtn.addEventListener('click', launch);
 addEventListener('keydown', (e) => {
   // **A bare Enter only.** An Enter with a modifier belongs to the global shortcuts (Ctrl/⌘+Enter = new terminal).
   // Take both and, once a folder has been clicked, that one press opens two terminals.
-  if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey &&
-      e.target && e.target.closest && e.target.closest('.rail.right')) { e.preventDefault(); launch(); }
 });
 
 // A handle for poking around from the console and dev tools. No product behaviour leans on it.
@@ -3786,7 +3941,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // (#18's 409) can only be exercised from the console. The daemon blocks it anyway, so having it here adds no risk.
                   // switchCanvas because the frames are drawn into the scroller rather than into a
                   // canvas, so what happens to them on a switch is a thing a test has to be able to ask.
-                  removeCanvas, watchInput, newTerminal, newCanvas, switchCanvas,
+                  removeCanvas, watchInput, newTerminal, newCanvas, switchCanvas, openViewer, viewerId,
                   // Auto-tidy only runs on a pane disappearing, and that moment is hard to create from outside.
                   // Expose **the same function** the button calls, unchanged.
                   tidyCanvas,

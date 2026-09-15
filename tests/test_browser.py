@@ -2681,3 +2681,117 @@ class TopRow(unittest.TestCase):
         self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
         time.sleep(0.2)
         self.assertTrue(self.b.ev("document.getElementById('searchbox').hidden"), "Escape did not put the search away")
+
+
+class Viewing(unittest.TestCase):
+    """The right rail is for looking at what is in a folder (2026-09-15, (가)): files are rows, a file
+    opens in a window of its own on the canvas — the same frame as a terminal, on the same board — and
+    terminals always open at home. The launcher ("Open terminal here") is gone."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.docs = os.path.join(cls.d.home, "docs")
+        os.makedirs(cls.docs)
+        with open(os.path.join(cls.docs, "notes.md"), "w", encoding="utf-8") as fh:
+            fh.write("# 메모\nline two\nline three\n")
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+        time.sleep(1)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def row(self, name):
+        return self.b.ev("""(()=>{const r=[...document.querySelectorAll('#tree .row')].find(r=>r.querySelector('.nm')&&r.querySelector('.nm').textContent===%s);
+          return r ? {file: r.classList.contains('file'), path: r.dataset.path} : null;})()""" % json.dumps(name))
+
+    def open_home(self):
+        if self.row("docs"):
+            return                      # already open — a click on ~ would fold it again
+        for _ in range(40):             # the roots arrive after the page does
+            if self.b.ev("[...document.querySelectorAll('#tree .row')].some(r=>r.querySelector('.nm').textContent==='~')"):
+                break
+            time.sleep(0.2)
+        self.b.ev("""(()=>{const r=[...document.querySelectorAll('#tree .row')].find(r=>r.querySelector('.nm').textContent==='~'); r.click(); return 1;})()""")
+        for _ in range(40):
+            time.sleep(0.2)
+            if self.row("docs"):
+                return
+        self.fail("home did not open")
+
+    def open_docs(self):
+        """Idempotent: a click on an open folder folds it, so only click when its file is not showing."""
+        self.open_home()
+        if self.row("notes.md"):
+            return
+        self.b.ev("""(()=>{[...document.querySelectorAll('#tree .row')].find(r=>r.querySelector('.nm').textContent==='docs').click(); return 1;})()""")
+        for _ in range(40):
+            time.sleep(0.2)
+            if self.row("notes.md"):
+                return
+        self.fail("docs did not open")
+
+    def test_a_folder_opens_on_a_click_and_lists_its_files(self):
+        self.open_docs()
+        r = self.row("notes.md")
+        self.assertTrue(r and r["file"], "the file is not in the tree: %r" % r)
+        self.assertFalse(self.b.ev("!!document.getElementById('launch')"), "the launcher is still there")
+
+    def test_a_file_opens_in_a_window_on_the_canvas(self):
+        self.open_docs()
+        self.b.ev("""(()=>{[...document.querySelectorAll('#tree .row.file')].find(r=>r.querySelector('.nm').textContent==='notes.md').click(); return 1;})()""")
+        got = None
+        for _ in range(40):
+            time.sleep(0.2)
+            got = self.b.ev("""(()=>{const v=document.querySelector('.tile.viewer'); if (!v) return null;
+              const id=v.dataset.id; const P=window.palmar;
+              return {inTiles: P.tiles.has(id), onBoard: !!P.layout()[id] && P.layout()[id].kind==='file',
+                      title: v.querySelector('.tb .name').textContent, lines: v.querySelectorAll('.view .l').length,
+                      first: (v.querySelector('.view .l .c')||{}).textContent};})()""")
+            if got and got["lines"]:
+                break
+        self.assertIsNotNone(got, "no viewer window appeared")
+        self.assertTrue(got["inTiles"] and got["onBoard"], "the viewer is not a window on the board: %r" % got)
+        self.assertTrue(got["title"].startswith("notes.md"), got)
+        self.assertEqual([got["lines"], got["first"]], [3, "# 메모"], got)
+
+    def test_a_viewer_comes_back_after_a_reload(self):
+        path = os.path.join(self.docs, "notes.md")
+        self.b.ev("window.palmar.openViewer(%s); window.palmar.saveLayout(); 1" % json.dumps(path))
+        vid = self.b.ev("window.palmar.viewerId(%s)" % json.dumps(path))
+        for _ in range(40):                       # the save is debounced and then a round trip; reload only once the board has it
+            time.sleep(0.2)
+            if vid in self.d.get("/api/layout")["layout"]:
+                break
+        self.b.ev("location.reload()")
+        for _ in range(40):
+            time.sleep(0.25)
+            if self.b.ev("!!(window.palmar && document.querySelector('.tile.viewer'))"):
+                break
+        self.assertTrue(self.b.ev("!!document.querySelector('.tile.viewer')"), "the viewer did not come back")
+        # Paths on the board are the daemon's resolved ones (/private/var on a Mac); compare resolved.
+        paths = [os.path.realpath(p) for p in self.b.ev("[...document.querySelectorAll('.tile.viewer')].map(v=>v.dataset.path)")]
+        self.assertIn(os.path.realpath(path), paths, "the viewer that came back shows something else: %r" % paths)
+
+    def test_a_new_terminal_opens_at_home_whatever_is_focused(self):
+        deep = os.path.join(self.d.home, "docs")
+        s = self.d.open_pane(deep, canvas=self.b.ev("window.palmar.canvas()"))
+        for _ in range(40):
+            time.sleep(0.25)
+            if self.b.ev("[...window.palmar.tiles.values()].some(t=>t.id===%s)" % json.dumps(s["id"])):
+                break
+        self.b.ev("(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.id===%s); t.el.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true})); return 1;})()" % json.dumps(s["id"]))
+        before = {p["id"] for p in self.d.panes()}
+        self.b.ev("document.getElementById('fab-new') && window.palmar.newTerminal(); 1")
+        new = None
+        for _ in range(40):
+            time.sleep(0.25)
+            fresh = [p for p in self.d.panes() if p["id"] not in before]
+            if fresh:
+                new = fresh[0]
+                break
+        self.assertIsNotNone(new, "no terminal opened")
+        self.assertEqual(os.path.realpath(new["cwd"]), os.path.realpath(self.d.home), "it opened somewhere other than home: %r" % new["cwd"])

@@ -1812,7 +1812,7 @@ def snapshot() -> dict:
     }
 
 
-_ID_RE = re.compile(r"[A-Za-z0-9_\-]{1,64}")
+_ID_RE = re.compile(r"[A-Za-z0-9_\-:]{1,80}")   # session ids, and "v:<hash>" for a viewer window
 
 
 def clean_layout(obj):
@@ -1838,6 +1838,14 @@ def clean_layout(obj):
             if not isinstance(g, str) or len(g) > 64:
                 return None
             e["g"] = g
+        # A viewer window is not a session: the page keeps it on the board by its kind and path, and
+        # brings it back from there (2026-09-15). Strings, bounded, nothing else.
+        for k, cap in (("kind", 16), ("path", 4096), ("canvas", 64)):
+            v = r.get(k)
+            if v is not None:
+                if not isinstance(v, str) or len(v) > cap:
+                    return None
+                e[k] = v
         out[sid] = e
     return out
 
@@ -2334,22 +2342,28 @@ def has_subdir(p: str) -> bool:
 
 
 def dir_entry(name: str, path: str) -> dict:
-    return {"name": name, "git_branch": git_branch(Path(path)), "has_children": has_subdir(path)}
+    return {"name": name, "kind": "dir", "git_branch": git_branch(Path(path)), "has_children": has_subdir(path)}
 
 
 def list_dirs(path: Path) -> list[dict]:
-    """Folders only, dot-prefixed ones skipped, by name. Reads this one folder only — it does not walk a tree.
+    """Folders, then files — dot-prefixed ones skipped, each by name. Reads this one folder only — it does
+    not walk a tree. Files came in on 2026-09-15 when the rail stopped being a launcher and became the
+    way to look at a document (user); a file entry carries `kind: "file"` and its size, a folder
+    `kind: "dir"`, so the page can tell them apart without guessing from the name.
     Runs synchronously inside the event loop (120-250ms of blocking on 5000 folders, #7). It is not moved to
     run_in_executor because that starts a thread, and with a thread present a later pty.fork risks deadlock
     (that is why palmard is single-threaded — the comment at the top of this file, and AGENTS). Ordinary
     folders are fine, and it runs once when a person unfolds one, so #7 is left unfixed and written down here."""
     entries = []
+    files = []
     with os.scandir(path) as it:
         for e in it:
             if e.name.startswith("."):
                 continue
             try:
                 if not e.is_dir(follow_symlinks=True):
+                    if e.is_file(follow_symlinks=True):
+                        files.append({"name": e.name, "kind": "file", "size": e.stat(follow_symlinks=True).st_size})
                     continue
             except OSError:
                 continue
@@ -2361,7 +2375,8 @@ def list_dirs(path: Path) -> list[dict]:
             # matters (a FIFO at .git/HEAD) lives in read_meta and is untouched by this.
             entries.append(dir_entry(e.name, e.path))
     entries.sort(key=lambda x: x["name"].casefold())
-    return entries
+    files.sort(key=lambda x: x["name"].casefold())
+    return entries + files
 
 
 #: Folder labels. (when it was built, or None, [paths…]) — used only by `find_dirs`.
@@ -2457,6 +2472,29 @@ async def find_dirs(qs: str) -> list:
     for _, _, _, pth in scored[: FIND_HITS - len(hits)]:
         hits.append(dir_entry(pth, pth))
     return hits
+
+
+#: **Looking at a document.** A file is served back as it is: images as images, text as text, and
+#: nothing else — a file with a NUL in its first bytes is "not text" (415), one over FILE_MAX is "too
+#: big" (413). Read-only; there is no PUT. The boundary is the one browsing has (resolve_dir): anywhere
+#: this uid can read — the same files the shell beside it can `cat`, so nothing new is reachable.
+FILE_MAX = 2 * 1024 * 1024
+IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+               ".webp": "image/webp", ".svg": "image/svg+xml", ".bmp": "image/bmp", ".ico": "image/x-icon"}
+
+
+def resolve_file(raw) -> Path | None:
+    """Absolute path string → resolve() → an existing regular file, or None. No root check — browsing's rule."""
+    if not isinstance(raw, str) or not raw or "\x00" in raw:
+        return None
+    p = Path(raw)
+    if not p.is_absolute():
+        return None
+    try:
+        p = p.resolve()
+        return p if p.is_file() else None
+    except (OSError, RuntimeError):
+        return None
 
 
 def resolve_dir(raw) -> Path | None:
@@ -2936,6 +2974,35 @@ async def handle_request(reader, writer) -> None:
             writer.write(http_json(200, {"rev": registry.layout_rev}))
         else:
             writer.write(http(405))
+        return
+
+    if path == "/api/file":
+        if method != "GET":
+            writer.write(http(405))
+            return
+        if not token_ok:
+            writer.write(http(403))
+            return
+        f = resolve_file(qget(q, "path"))
+        if f is None:
+            writer.write(http_error(400, "path must be an absolute file"))
+            return
+        try:
+            size = f.stat().st_size
+            if size > FILE_MAX:
+                writer.write(http_error(413, f"too big to show ({size} bytes; the limit is {FILE_MAX})"))
+                return
+            data = f.read_bytes()
+        except OSError as e:
+            writer.write(http_error(400, f"cannot read: {e.strerror or e}"))
+            return
+        ctype = IMAGE_TYPES.get(f.suffix.lower())
+        if ctype is None:
+            if b"\x00" in data[:8192]:
+                writer.write(http_error(415, "not a text file"))
+                return
+            ctype = "text/plain; charset=utf-8"
+        writer.write(http(200, data, ctype))
         return
 
     if path == "/api/canvases":
