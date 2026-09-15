@@ -349,6 +349,10 @@ class ConPty:
         `blocking` above. The POSIX side returns its master fd."""
         return None
 
+    def foreground_pid(self):
+        """Unknowable on Windows — see foreground_is_shell. The title is the way in (#30)."""
+        return None
+
     def foreground_is_shell(self):
         """Unknowable on Windows. ConPTY has no foreground process group, and GetConsoleProcessList
         needs the caller attached to that console — so the status lights fall back to what the title

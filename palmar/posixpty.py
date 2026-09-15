@@ -96,6 +96,14 @@ class PosixPty:
         return self.master
 
     # ── what is running in there ───────────────────────────────────────
+    def foreground_pid(self):
+        """The foreground process group's id — the pid of what is running, or of the shell when nothing
+        is. None when the pty cannot say."""
+        try:
+            return os.tcgetpgrp(self.master)
+        except OSError:
+            return None
+
     def foreground_is_shell(self):
         """True when the shell itself holds the terminal — nothing is running. None when unknowable.
 

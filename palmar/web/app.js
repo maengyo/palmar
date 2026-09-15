@@ -970,7 +970,7 @@ class Tile {
     if (!this.nameEl.querySelector('input')) {
       this.nameEl.textContent = '';
       if (s.name) this.nameEl.textContent = s.name;
-      else this.nameEl.append((s.agent || 'shell') + ' ', el('span', null, '· ' + shortPath(s.cwd)));
+      else this.nameEl.append((s.fg || s.agent || 'shell') + ' ', el('span', null, '· ' + shortPath(s.cwd)));   // what runs in it, by name
     }
     if (PILL.has(s.status)) { this.pillEl.hidden = false; this.pillEl.className = 'st ' + cls; this.pillEl.textContent = s.status; }
     else { this.pillEl.hidden = true; }
@@ -2708,6 +2708,7 @@ function msgText(s) {
   const t = tiles.get(s.id);
   const parts = [];
   // A wait this pane left with nobody typing here is not one palmar can call your approval (#14).
+  if (s.name && s.fg) parts.push(s.fg);                       // a named pane: what runs in it, on the second line
   if (s.answered_elsewhere) parts.push('answered — not here');
   else if (s.last_event) parts.push(EVENT_PHRASE[s.last_event] || s.last_event);   // #24: event name → human words
   // Only palmar can say this — it holds the PTY. A pane that reads "working" but has printed nothing for a
@@ -2741,7 +2742,8 @@ function buildItem(s, pinned) {
   // ⑫ A name a person gave wins. Without one, the path label as before.
   const who = el('span', 'who');
   if (s.name) who.textContent = s.name;
-  else { who.textContent = (s.agent || 'shell') + ' '; who.appendChild(el('span', null, shortPath(s.cwd))); }
+  // Unnamed: what is in front — claude, aelix, whatever runs — else the agent word, else "shell".
+  else { who.textContent = (s.fg || s.agent || 'shell') + ' '; who.appendChild(el('span', null, shortPath(s.cwd))); }
   const ago = el('span', 'ago');
   // ⑪ Something on another canvas gets a canvas label — in **the same slot** as "↗ off". The two never appear
   // together: whether a window on another canvas is off-screen on this canvas is not a question anyone asks.
@@ -2763,7 +2765,7 @@ function buildItem(s, pinned) {
   const cl = el('button', 'cl');
   cl.type = 'button';
   cl.title = 'close terminal';
-  cl.setAttribute('aria-label', 'close terminal — ' + (s.name || shortPath(s.cwd)));
+  cl.setAttribute('aria-label', 'close terminal — ' + (labelOf(s)));
   cl.addEventListener('click', (ev) => { ev.stopPropagation(); openRowConfirm(it, s); });
   it.append(who, ago, it._msg, cl);
   // The list is rebuilt wholesale on every session frame — restore an open confirm strip here (otherwise one hook makes it vanish)
@@ -3033,7 +3035,15 @@ const WANTS_YOU = new Set(['waiting', 'done']);
 let notifyOn = false;
 try { notifyOn = localStorage.getItem(LS_NOTIFY) === '1'; } catch (e) {}
 
-function labelOf(s) { return s ? (s.name || shortPath(s.cwd)) : '?'; }
+//: **An unnamed pane is called by what runs in it.** `claude · palmer` while claude runs, the folder
+//: alone at a prompt; a name a person gave is never overwritten (⑫) — for a named pane the command
+//: goes on the row's second line instead. The name comes from the daemon (session.fg, comm_of), so it
+//: is whatever is in front, not a list (2026-09-15).
+function labelOf(s) {
+  if (!s) return '?';
+  if (s.name) return s.name;
+  return s.fg ? s.fg + ' · ' + shortPath(s.cwd) : shortPath(s.cwd);
+}
 
 // The status class of the most urgent "wants you" in this bunch. null if there is none.
 // **Do not look at waiting alone** — an agent read through its title (#38) cannot produce waiting and arrives as done.
@@ -3761,7 +3771,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // to the daemon — a test with two browsers needs to tell the two apart.
                   saveLayout, client: () => CLIENT, layoutOnDaemon: () => layoutOnDaemon,
                   holdStyle: () => holdStyle,
-                  palette: () => root.dataset.pal || null, choosePalette, applyTheme,
+                  palette: () => root.dataset.pal || null, choosePalette, applyTheme, labelOf,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
                   lastOutAt, renderList,

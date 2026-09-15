@@ -655,6 +655,7 @@ class Session:
         self.alt = False
         self.created = time.time()
         self.title = ""              # the window title the agent set last (#38)
+        self.fg = None               # the command in the foreground, by name — None at a prompt or when unknowable
         self.title_hits = []         # recent title-change times (monotonic). Anything outside TITLE_WINDOW_S is dropped
         self.title_timer = None
         self.osc_carry = b""         # an OSC candidate straddling a chunk boundary
@@ -759,6 +760,7 @@ class Session:
             "id": self.id, "cwd": self.cwd, "cols": self.cols, "rows": self.rows,
             "status": self.eff_status(), "agent": self.agent, "alt": self.alt,
             "title": self.title or None,
+            "fg": self.fg,               # what is running, by name (comm_of); the page labels an unnamed pane with it
             "created": self.created, "last_event": self.last_event,
             "canvas": self.canvas, "name": self.name,
             # True when this pane's last wait ended with nobody typing here (#14). The browser reads
@@ -1035,9 +1037,21 @@ class Session:
         self.fg_varied = self.pty.fg_varied
         return bool(answer)
 
+    def sample_fg(self) -> None:
+        """Read who is in front and, when that changed, tell every browser. Called on every output tick
+        and every ten seconds from the restore timer, so a command that prints nothing is still seen."""
+        pid = self.pty.foreground_pid()
+        name = None
+        if pid and pid != self.pid:
+            name = comm_of(pid)
+        if name != self.fg:
+            self.fg = name
+            registry.changed(self)
+
     def _out_tick(self) -> None:
         """At a prompt: idle. Something running and printing **on and on**: working. Printing then stopping:
         done — nothing becomes done without ever having printed (same discipline as the title side)."""
+        self.sample_fg()
         now = time.monotonic()
         if self._at_prompt():
             want = "idle"
@@ -1603,6 +1617,37 @@ def ensure_private_dir(p: Path) -> None:
 #: Measured on this machine: 7.9 µs a call, so 50 panes cost 0.4 ms.
 _LIBPROC = [False]
 _VPI_SIZE, _VPI_OFF, _VPI_PATH = 2352, 152, 1024
+
+
+#: **What is running in a pane, by name.** The foreground process group is read already (that is how
+#: "nothing is running" is known); its leader's command name is one call further — `proc_name` on
+#: macOS, `/proc/<pid>/comm` on Linux — and it is whatever is there: claude, aelix, vim, npm. Not a
+#: list of known agents (user, 2026-09-15: "하드코딩 말고"). Windows has no foreground group, so it
+#: stays None there until the shim writes the name into the title (#30).
+def comm_of(pid: int):
+    if sys.platform == "darwin":
+        if _LIBPROC[0] is False:
+            cwd_of(pid)                      # loads libproc, or records that it cannot
+        if not _LIBPROC[0]:
+            return None
+        ctypes, lib = _LIBPROC[0]
+        try:
+            if not hasattr(lib.proc_name, "_set"):
+                lib.proc_name.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+                lib.proc_name.restype = ctypes.c_int
+                lib.proc_name._set = True
+            buf = ctypes.create_string_buffer(256)
+            n = lib.proc_name(pid, buf, 256)
+            return buf.raw[:n].decode("utf-8", "replace") or None if n > 0 else None
+        except Exception:
+            return None
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/%d/comm" % pid, "rb") as fh:
+                return fh.read().strip().decode("utf-8", "replace") or None
+        except OSError:
+            return None
+    return None
 
 
 def cwd_of(pid: int):
@@ -3323,6 +3368,11 @@ async def main(port: int, open_page: bool = True) -> None:
     # that can be lost to a kill -9; a clean stop saves on the way out.
     def tick():
         save_restore()
+        for x in registry.list():
+            try:
+                x.sample_fg()            # a silent command is still seen within ten seconds
+            except Exception:
+                pass
         RESTORE_TIMER[0] = loop.call_later(RESTORE_EVERY_S, tick)
     RESTORE_TIMER[0] = loop.call_later(RESTORE_EVERY_S, tick)
     await stop

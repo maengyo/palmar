@@ -2482,6 +2482,44 @@ class TopRow(unittest.TestCase):
         self.assertFalse(r["inKeys"], "the settings are still under the shortcuts too")
         self.b.ev("document.getElementById('keys-x').click()")
 
+    def test_an_unnamed_pane_is_called_by_what_runs_in_it(self):
+        """A name a person gave is never overwritten (⑫); an unnamed pane says what is in front."""
+        r = self.b.ev("""(()=>{const L=window.palmar.labelOf;
+          return [L({name:null, cwd:'/Users/x/ddul/palmer', fg:'claude'}),
+                  L({name:null, cwd:'/Users/x/ddul/palmer', fg:null}),
+                  L({name:'build', cwd:'/Users/x/ddul/palmer', fg:'claude'})];})()""")
+        self.assertTrue(r[0].startswith("claude · "), "an unnamed pane does not lead with the command: %r" % r)
+        self.assertNotIn("claude", r[1], "a pane at a prompt is called by a command: %r" % r)
+        self.assertEqual(r[2], "build", "a given name was overwritten: %r" % r)
+
+    def test_the_window_says_what_runs_in_it(self):
+        """End to end: start something in a pane and its title and its list row say so — the daemon
+        names the foreground command and the page shows it on an unnamed pane."""
+        if sys.platform == "win32":
+            self.skipTest("Windows has no foreground process group — the title is the way in (#30)")
+        from tests.helpers import WS
+        s = self.d.open_pane(self.d.home)
+        for _ in range(40):
+            time.sleep(0.25)
+            if self.b.ev("[...window.palmar.tiles.values()].some(t=>t.id===%s)" % json.dumps(s["id"])):
+                break
+        w = WS(self.d, "/pty/%s?token=%s&cols=80&rows=24" % (s["id"], self.d.token))
+        self.addCleanup(w.close)
+        w.recv_json()
+        w.send(b"sleep 30\r", opcode=0x2)
+        seen = None
+        for _ in range(60):
+            time.sleep(0.25)
+            seen = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.id===%s);
+              const row=[...document.querySelectorAll('.ses')].find(r=>r.textContent.includes('sleep'));
+              return {title: t ? t.nameEl.textContent : null, row: !!row};})()""" % json.dumps(s["id"]))
+            if seen["title"] and seen["title"].startswith("sleep"):
+                break
+        self.assertTrue(seen and seen["title"].startswith("sleep"), "the window never said sleep was running: %r" % seen)
+        self.assertTrue(seen["row"], "the list row does not say it")
+        w.send(b"\x03", opcode=0x2)
+        self.d.delete("/api/sessions/" + s["id"])
+
     def test_the_web_box_closes_like_the_other_popups(self):
         """It used to stay up until its × was found (user, 2026-09-15, on Windows)."""
         self.b.ev("document.getElementById('toweb').click()")

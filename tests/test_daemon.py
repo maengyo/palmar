@@ -1152,3 +1152,34 @@ class TheBoardLivesOnTheDaemon(unittest.TestCase):
         st, _ = self.d.raw("PUT", "/api/layout", {"layout": {"abc": {"x": 1, "y": 2, "colour": "red"}}})
         self.assertEqual(st, 200)
         self.assertEqual(self.d.get("/api/layout")["layout"], {"abc": {"x": 1, "y": 2}})
+
+
+class WhatRunsInAPane(unittest.TestCase):
+    """The daemon names the foreground command — whatever it is, not a list (user, 2026-09-15:
+    "claude 를 실행시켰을 때는 claude, aelix 를 실행했을 때는 aelix … 하드코딩 말고"). The foreground
+    process group was already read for the status lights; its leader's name is one call further."""
+
+    def test_the_foreground_command_is_reported_and_cleared(self):
+        if sys.platform == "win32":
+            self.skipTest("Windows has no foreground process group — the title is the way in (#30)")
+        with Daemon() as d:
+            s = d.open_pane(d.home, name=None)
+            time.sleep(1.0)
+            w = WS(d, "/pty/%s?token=%s&cols=80&rows=24" % (s["id"], d.token))
+            self.addCleanup(w.close)
+            w.recv_json()
+            w.send(b"sleep 30\r", opcode=0x2)
+            fg = None
+            for _ in range(60):                       # a silent command is seen by the 10s tick at the latest
+                time.sleep(0.25)
+                fg = [x for x in d.panes() if x["id"] == s["id"]][0].get("fg")
+                if fg:
+                    break
+            self.assertEqual(fg, "sleep", "the daemon did not name what is running: %r" % fg)
+            w.send(b"\x03", opcode=0x2)              # Ctrl-C: back at the prompt
+            for _ in range(60):
+                time.sleep(0.25)
+                fg = [x for x in d.panes() if x["id"] == s["id"]][0].get("fg")
+                if fg is None:
+                    break
+            self.assertIsNone(fg, "it still names a command at a prompt: %r" % fg)
