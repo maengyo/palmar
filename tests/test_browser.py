@@ -1324,7 +1324,7 @@ class Grouping(unittest.TestCase):
           P.joinGroups(by('g1').id, by('g2').id);
           P.joinGroups(by('g3').id, by('g1').id);
           const ids = P.groupOf(by('g1').id);
-          P.arrangeGroup(ids);
+          P.settle(by('g1').id);
           const row = ids.map((id) => [L[id].x, L[id].y, L[id].w]).sort((a, b) => a[0] - b[0]);
           return {row: row, room: document.querySelector('.cv-scroll').clientWidth};
         """)
@@ -1512,7 +1512,7 @@ class Grouping(unittest.TestCase):
         self.bench("""put('g1',40,40,220,180); put('g2',272,40,220,180); put('g3',504,40,220,180);
                       P.joinGroups(by('g1').id, by('g2').id);
                       P.joinGroups(by('g3').id, by('g1').id);
-                      P.arrangeGroup(P.groupOf(by('g1').id)); return 1;""")
+                      P.compactGroup(P.groupOf(by('g1').id)); return 1;""")
         row = """const ids = P.groupOf(by('g1').id);
                  const r = ids.map((id) => [L[id].x, L[id].y, L[id].w]).sort((a, b) => a[0] - b[0]);
                  const gaps = []; for (let i=1;i<r.length;i++)
@@ -1570,7 +1570,7 @@ class Grouping(unittest.TestCase):
                       put('g2', 484, 60, 200, 160);
                       P.joinGroups(by('g1').id, by('gx').id);
                       P.joinGroups(by('g2').id, by('g1').id);
-                      P.arrangeGroup(P.groupOf(by('g1').id)); return 1;""")
+                      P.compactGroup(P.groupOf(by('g1').id)); return 1;""")
         self.close('gx')
         r = self.bench("""const ids = P.groupOf(by('g1').id);
           const row = ids.map((id) => [L[id].x, L[id].y, L[id].w]).sort((a, b) => a[0] - b[0]);
@@ -1765,13 +1765,13 @@ class Grouping(unittest.TestCase):
           put('g1', 40, 40, 240, 200); put('g2', 400, 40, 240, 200);
           P.joinGroups(by('g1').id, by('g2').id);
           const g = () => P.groupOf(by('g1').id);
-          P.arrangeGroup(g());
+          P.settle(by('g1').id);                            // push what overlaps, then close up
           const tight = at('g2')[0] - (at('g1')[0] + L[by('g1').id].w);
           put('g1', at('g1')[0], at('g1')[1], 400, 200);   // grow it
-          P.arrangeGroup(g());
+          P.settle(by('g1').id);
           const grown = at('g2')[0] - (at('g1')[0] + L[by('g1').id].w);
           put('g1', at('g1')[0], at('g1')[1], 240, 200);   // and back
-          P.arrangeGroup(g());
+          P.settle(by('g1').id);
           return {tight: tight, grown: grown,
                   back: at('g2')[0] - (at('g1')[0] + L[by('g1').id].w)};
         """)
@@ -1868,6 +1868,23 @@ class Grouping(unittest.TestCase):
         self.assertEqual([r["a"], r["b"]], [1, 1], "alt-drag did not take it out of the group")
         self.assertEqual(after["b"], before["b"], "the one left behind moved anyway")
 
+    def test_taking_one_out_of_the_middle_closes_the_hole(self):
+        """Closing the middle window closed the group up; taking it out with Alt-drag left its hole
+        behind (user, 2026-09-15). Both are "a member is gone" and both close up now."""
+        self.bench("""put('g1',40,40,200,160); put('g2',252,40,200,160); put('g3',464,40,200,160);
+                      P.joinGroups(by('g1').id, by('g2').id); P.joinGroups(by('g3').id, by('g1').id);
+                      P.compactGroup(P.groupOf(by('g1').id)); return 1;""")
+        x, y = self.press("g2")
+        mods = dict(button="left", modifiers=1)                         # 1 = Alt
+        self.b.ws.call("Input.dispatchMouseEvent", dict(mods, type="mousePressed", x=x, y=y, clickCount=1, buttons=1))
+        for i in (1, 2, 3):
+            self.b.ws.call("Input.dispatchMouseEvent", dict(mods, type="mouseMoved", x=x, y=y + 320 * i / 3, buttons=1))
+        self.b.ws.call("Input.dispatchMouseEvent", dict(mods, type="mouseReleased", x=x, y=y + 320, clickCount=1, buttons=0))
+        time.sleep(0.6)
+        r = self.bench("return {n: P.groupOf(by('g1').id).length, a: at('g1'), c: at('g3'), out: P.groupOf(by('g2').id).length};")
+        self.assertEqual([r["n"], r["out"]], [2, 1], "it did not leave the group: %r" % r)
+        self.assertEqual(r["c"], [40 + 200 + 12, 40], "the hole it left was not closed: %r" % r)
+
     def test_moving_away_before_letting_go_cancels_it(self):
         """**Armed, not done.** It used to join in the middle of the drag, so carrying on somewhere
         else left you grouped to a window you had moved away from (user, 2026-09-14). The hold arms
@@ -1898,51 +1915,47 @@ class Grouping(unittest.TestCase):
 
     def test_grouping_pulls_them_together(self):
         """A group that leaves everyone where they were is a colour, not a group. Sizes are the
-        user's, so members are lined up rather than resized (AGENTS.md) — and **rows stay rows, with
-        their own edges**: two windows far apart come up against each other row on row, and each row
-        keeps the x its first window had. The arranger does not invent an x; the hand does, by
-        putting a window down beside its target before this runs (2026-09-15)."""
+        user's, so members are lined up rather than resized (AGENTS.md). Closing up is gravity: each
+        member goes **up, then left**, until it touches another or the group's own edge — so two windows
+        far apart end up side by side, the second against the first (2026-09-15)."""
         r = self.bench("""
           put('g1', 40, 40, 200, 160);
           put('g2', 700, 380, 200, 160);   // far apart and out of line
           P.joinGroups(by('g1').id, by('g2').id);
-          P.arrangeGroup(P.groupOf(by('g1').id));
+          P.compactGroup(P.groupOf(by('g1').id));
           return {a: at('g1'), b: at('g2')};
         """)
-        a, b = r["a"], r["b"]
-        self.assertEqual(a, [40, 40], "the first row moved: %r" % (a,))
-        self.assertEqual(b, [700, 40 + 160 + 12], "the second row is not up against the first: %r %r" % (a, b))
+        self.assertEqual(r["a"], [40, 40], "the first one moved: %r" % (r["a"],))
+        self.assertEqual(r["b"], [40 + 200 + 12, 40], "the second is not against the first: %r" % (r["b"],))
 
-    def test_the_rows_are_the_rows_the_hand_made(self):
-        """**No re-flow.** The arranger used to lay the group out wide-first and wrap, which threw the
-        drop side away one step after it had been honoured: a window put *below* another went beside
-        it if the two fit (user, 2026-09-15). Rows come from where the members stand; only running out
-        of room wraps. Here one window sits on its own above two that share a row, and that is the
-        shape it keeps — packed tight, an ㄱ."""
+    def test_closing_up_goes_up_before_left(self):
+        """**Gravity, not a grid.** Three arrangers came before: by age, wide-first rows, rows as the
+        hand left them — and each re-laid the group out after a drop or a resize and put a window
+        somewhere nobody had shown. Closing up now only pulls: up as far as it goes, then left, against
+        whatever it touches. Here the lone window above stays; the one that has nothing above it rises
+        to sit beside it; the one under the first stays under it."""
         r = self.bench("""
           put('g1', 30, 30, 240, 190); put('g2', 600, 320, 240, 190); put('g3', 30, 320, 240, 190);
           P.joinGroups(by('g1').id, by('g2').id);
           P.joinGroups(by('g3').id, by('g1').id);
-          P.arrangeGroup(P.groupOf(by('g1').id));
+          P.compactGroup(P.groupOf(by('g1').id));
           return {a: at('g1'), b: at('g2'), c: at('g3')};
         """)
-        self.assertEqual(r["a"], [30, 30], "the top row moved: %r" % r)
-        self.assertEqual(r["c"], [30, 30 + 190 + 12], "the second row is not against the first: %r" % r)
-        self.assertEqual(r["b"], [30 + 240 + 12, 30 + 190 + 12], "the second row is not packed: %r" % r)
+        self.assertEqual(r["a"], [30, 30], "the top-left one moved: %r" % r)
+        self.assertEqual(r["b"], [30 + 240 + 12, 30], "the free one did not rise to sit beside it: %r" % r)
+        self.assertEqual(r["c"], [30, 30 + 190 + 12], "the one underneath is not against the first: %r" % r)
 
     def test_it_lands_on_the_side_it_was_carried_to(self):
-        """Every side, exactly where the preview said. joinPreview draws the box; arrangeGroup with the
-        dropped window as `lead` has to put it there and leave the target where it was — the two used
-        to disagree on 'below' and 'above' (user, 2026-09-15)."""
+        """Every side, exactly where the preview said. dropInto is what the release calls: it puts the
+        window at the previewed spot, joins, and pushes only what that displaces — nothing re-lays the
+        group out afterwards, which is what used to move it (user, 2026-09-15)."""
         r = self.bench("""
           const a = by('g1').id, b = by('g2').id, out = {};
           for (const side of ['right', 'left', 'below', 'above']) {
             put('g2', 400, 300, 240, 200);
             put('g1', 60, 60, 240, 200);
             const spot = P.joinPreview(b, side, a);
-            put('g1', spot.x, spot.y, 240, 200);       // what the release does before arranging
-            P.joinGroups(a, b);
-            P.arrangeGroup(P.groupOf(a), a);
+            P.dropInto(a, b, side);
             out[side] = {spot: [spot.x, spot.y], me: at('g1'), target: at('g2')};
             P.leaveGroup(a);
           }
@@ -1952,87 +1965,57 @@ class Grouping(unittest.TestCase):
             self.assertEqual(v["me"], v["spot"], "%s: shown at %r, landed at %r" % (side, v["spot"], v["me"]))
             self.assertEqual(v["target"], [400, 300], "%s: the target moved to %r" % (side, v["target"]))
 
-    def test_it_wraps_rather_than_running_off_the_side(self):
-        """Wide is preferred, not forced. Windows too wide to sit side by side have to wrap."""
-        r = self.bench("""
-          put('g1', 20, 20, 700, 160); put('g2', 20, 220, 700, 160);
-          P.joinGroups(by('g1').id, by('g2').id);
-          P.arrangeGroup(P.groupOf(by('g1').id));
-          return {a: at('g1'), b: at('g2'), room: document.querySelector('.cv-scroll').clientWidth};
-        """)
-        self.assertNotEqual(r["a"][1], r["b"][1],
-                            "two 700px windows were put side by side in %dpx: %r" % (r["room"], r))
-
-    def test_the_frame_follows_the_shape_not_a_box_around_it(self):
-        """**One cell per member, unioned — an ㄱ comes out an ㄱ** (user, 2026-09-14: "굳이 사각형
-        안에 들어가게 하는 게 아니라 ㄱ 자 모양으로 묶어도 되잖아"). A bounding rectangle claimed a
-        square the group did not use, which is what "it takes up space of its own accord" was about."""
-        r = self.bench("""
-          // Wide enough that only two fit across, so the third wraps and the shape is an ㄱ.
-          put('g1', 30, 30, 400, 200); put('g2', 700, 300, 400, 200); put('g3', 30, 300, 400, 200);
-          P.joinGroups(by('g1').id, by('g2').id);
-          P.joinGroups(by('g3').id, by('g1').id);
-          P.arrangeGroup(P.groupOf(by('g1').id));
-          const boxes = [...document.querySelectorAll('.gbox')];
-          const cells = [...boxes[0].children].map((c) => ({
-            x: parseInt(c.style.left), y: parseInt(c.style.top),
-            w: parseInt(c.style.width), h: parseInt(c.style.height)}));
-          const ids = P.groupOf(by('g1').id);
-          return {boxes: boxes.length, cells: cells, rect: P.groupRect(ids),
-                  pointer: getComputedStyle(boxes[0]).pointerEvents,
-                  at: ids.map((id) => [P.layout()[id].x, P.layout()[id].y])};
-        """)
-        self.assertEqual(r["boxes"], 1, "a group drew %d frames" % r["boxes"])
-        self.assertEqual(len(r["cells"]), 3, "the frame is not one cell per member")
-        self.assertEqual(r["pointer"], "none", "the frame would swallow drags")
-        # Every member is covered by its own cell.
-        for (mx, my), c in zip(r["at"], r["cells"]):
-            self.assertLessEqual(c["x"], mx)
-            self.assertLessEqual(c["y"], my)
-        # **And the corner the group does not use is not covered.** That is the whole point: the
-        # bounding box would reach all four corners, the union leaves one open. Which one depends on
-        # how the rows fell — since 2026-09-15 the lone window is the top row, so it is the top right —
-        # and the test asks for *a* free corner rather than naming it.
-        rect = r["rect"]
-        corners = [(rect["x"] + 10, rect["y"] + 10), (rect["x"] + rect["w"] - 10, rect["y"] + 10),
-                   (rect["x"] + 10, rect["y"] + rect["h"] - 10), (rect["x"] + rect["w"] - 10, rect["y"] + rect["h"] - 10)]
-        covered = [any(c["x"] <= cx <= c["x"] + c["w"] and c["y"] <= cy <= c["y"] + c["h"] for c in r["cells"])
-                   for cx, cy in corners]
-        self.assertIn(False, covered,
-                      "the frame covers every corner — it is still a bounding box: %r" % r["cells"])
-
-    def test_a_row_starts_where_its_first_window_stands(self):
-        """Two grouped side by side; a third carried under the **right** one. The preview showed it
-        under the right one and it landed under the left, because every row was packed from the
-        group's left edge (user, 2026-09-15: "오른쪽이 아닌 왼쪽에 정렬돼서 붙어"). A row begins where
-        its first window stands — the rows are the rows the hand made, and so are their edges."""
+    def test_under_the_right_one_means_under_the_right_one(self):
+        """Two grouped side by side; a third carried under the **right** one lands under the right one
+        (user, 2026-09-15: it used to land under the left, then a row's height too low)."""
         r = self.bench("""
           put('g1', 40, 40, 240, 200); put('g2', 292, 40, 240, 200);
           P.joinGroups(by('g1').id, by('g2').id);
+          put('g3', 60, 500, 240, 200);
           const spot = P.joinPreview(by('g2').id, 'below', by('g3').id);
-          put('g3', spot.x, spot.y, 240, 200);
-          P.joinGroups(by('g3').id, by('g1').id);
-          P.arrangeGroup(P.groupOf(by('g1').id), by('g3').id);
+          P.dropInto(by('g3').id, by('g2').id, 'below');
           return {spot: [spot.x, spot.y], c: at('g3'), a: at('g1'), b: at('g2')};
         """)
         self.assertEqual(r["c"], r["spot"], "shown at %r, landed at %r" % (r["spot"], r["c"]))
         self.assertEqual([r["a"], r["b"]], [[40, 40], [292, 40]], "the pair moved: %r" % r)
 
+    def test_under_a_shorter_neighbour_touches_that_neighbour(self):
+        """The case that broke the rows: a tall window on the left, a shorter one on its right, and a
+        third carried under the short one. A grid of rows put it a whole row down — under the tall
+        one's bottom, floating clear of the short one it was aimed at (user, 2026-09-15: "왼쪽 터미널의
+        대각선에 그룹핑이 돼서 붕 떠 있게 돼"). It lands touching the short one, and closing up
+        afterwards leaves it there: up is blocked by the short one, left by the tall one."""
+        r = self.bench("""
+          put('g1', 40, 40, 240, 320);     // tall
+          put('g2', 292, 40, 240, 160);    // short, to its right
+          P.joinGroups(by('g1').id, by('g2').id);
+          put('g3', 60, 600, 240, 160);
+          const spot = P.joinPreview(by('g2').id, 'below', by('g3').id);
+          P.dropInto(by('g3').id, by('g2').id, 'below');
+          const landed = at('g3');
+          P.compactGroup(P.groupOf(by('g1').id));    // what a later resize or close would run
+          return {spot: [spot.x, spot.y], landed: landed, after: at('g3'), a: at('g1'), b: at('g2')};
+        """)
+        self.assertEqual(r["landed"], r["spot"], "shown at %r, landed at %r" % (r["spot"], r["landed"]))
+        self.assertEqual(r["landed"], [292, 40 + 160 + 12], "it is not touching the short one: %r" % r)
+        self.assertEqual(r["after"], r["landed"], "closing up moved it away from where it was put: %r" % r)
+        self.assertEqual([r["a"], r["b"]], [[40, 40], [292, 40]], "the pair moved: %r" % r)
+
     def test_an_L_is_a_top_row_with_more_in_it(self):
-        """Three 400px windows, one alone on top and two below: the rows they stood in are the rows
-        they keep, and the bottom row is packed — the ㄱ the frame draws is the shape the members have."""
+        """Three 400px windows, one alone on top and two below, closed up: the free one on the bottom
+        row rises to sit beside the top one, the one underneath stays put — an ㄱ, two on top."""
         r = self.bench("""
           put('g1', 30, 30, 400, 200); put('g2', 700, 300, 400, 200); put('g3', 30, 300, 400, 200);
           P.joinGroups(by('g1').id, by('g2').id);
           P.joinGroups(by('g3').id, by('g1').id);
-          P.arrangeGroup(P.groupOf(by('g1').id));
+          P.compactGroup(P.groupOf(by('g1').id));
           return {at: P.groupOf(by('g1').id).map((id)=>[P.layout()[id].x, P.layout()[id].y])};
         """)
         rows = sorted({p[1] for p in r["at"]})
-        self.assertEqual(len(rows), 2, "the two rows did not stay two rows: %r" % r["at"])
-        bottom = sorted(p for p in r["at"] if p[1] == rows[1])
-        self.assertEqual(len(bottom), 2, "the bottom row is not the pair: %r" % r["at"])
-        self.assertEqual(bottom[1][0] - bottom[0][0], 400 + 12, "the bottom row is not packed: %r" % bottom)
+        self.assertEqual(len(rows), 2, "not two rows: %r" % r["at"])
+        top = sorted(p for p in r["at"] if p[1] == rows[0])
+        self.assertEqual(len(top), 2, "the top row is not the pair: %r" % r["at"])
+        self.assertEqual(top[1][0] - top[0][0], 400 + 12, "the top row is not packed: %r" % top)
 
     def test_growing_a_member_does_not_land_it_on_its_group_mates(self):
         """**A group is one block to the outside world**, so the ordinary push cannot see an overlap
@@ -2042,7 +2025,7 @@ class Grouping(unittest.TestCase):
         self.bench("""put('g1',40,40,240,180); put('g2',300,40,240,180); put('g3',40,260,240,180);
                       P.joinGroups(by('g1').id, by('g2').id);
                       P.joinGroups(by('g3').id, by('g1').id);
-                      P.arrangeGroup(P.groupOf(by('g1').id)); return 1;""")
+                      P.compactGroup(P.groupOf(by('g1').id)); return 1;""")
         grip = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name==='g1');
           const r=t.el.querySelector('.grip').getBoundingClientRect();
           return {x:r.left+r.width/2, y:r.top+r.height/2};})()""")
@@ -2068,7 +2051,7 @@ class Grouping(unittest.TestCase):
         """Sorting a group out among itself must not scatter it — the members move, the group stays."""
         self.bench("""put('g1',40,40,200,160); put('g2',260,40,200,160);
                       P.joinGroups(by('g1').id, by('g2').id);
-                      P.arrangeGroup(P.groupOf(by('g1').id)); return 1;""")
+                      P.compactGroup(P.groupOf(by('g1').id)); return 1;""")
         r = self.b.ev("""(()=>{const P=window.palmar, L=P.layout();
           const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
           const id = by('g1').id;

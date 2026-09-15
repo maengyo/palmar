@@ -1057,32 +1057,26 @@ class Tile {
         undoMark('leaving a group', this.s.canvas);
         const left = leaveGroup(this.id);
         solo = false;
+        // What is left closes up, as it does when a member is closed — taking one out of the middle
+        // used to leave its hole behind (user, 2026-09-15).
+        if (left) compactGroup(groupMembers(left));
         if (left) toast([{ b: this.nameEl.textContent || 'window' }, 'left its group — ' + KMOD + 'Z puts it back']);
       }
       for (const id of party) { const t = tiles.get(id); if (t && t !== this) t.persist(); }
       paintTidy();          // moving a window creates or removes slack to close up
       if (was === 'size') this.refit();   // tell the PTY only when the resize is let go (spike D)
       this.persist();
-      // **Everything below arranges, and arranging writes the store directly.** persist() reads the
+      // **Everything below places windows, and placing writes the store directly.** persist() reads the
       // position back off the element, and .tile slides for 350ms, so a persist that follows an
       // arrangement reads a number from the middle of that slide and saves the *old* position —
       // the same trap applyPush documents ("write the intended value; never read it back"). That is
       // why a window did not land where its preview said and why a resized group stayed spread out:
       // the layout was correct for one frame and then overwritten (measured 2026-09-14).
+      let joined = false;
       if (armed) {
         undoMark('grouping', this.s.canvas);
-        // **Put it on the side it was carried to before arranging.** arrangeGroup reads the order out
-        // of where the windows are, so this is how "I brought it to the right of that one" survives.
-        const spot = joinPreview(armed, overSideAtDrop || 'right', this.id);
-        if (spot) {
-          layout[this.id] = Object.assign({}, layout[this.id], { x: spot.x, y: spot.y });
-          this.el.style.left = spot.x + 'px';
-          this.el.style.top = spot.y + 'px';
-        }
-        joinGroups(this.id, armed);
-        const ids = groupOf(this.id);
-        arrangeGroup(ids, this.id); // writes layout and saves; nothing may read the DOM back after it
-        paintGroups();
+        const ids = dropInto(this.id, armed, overSideAtDrop || 'right');   // exactly where the preview was
+        joined = true;
         const n = ids.length;
         toast([{ b: 'grouped ' + n + (n > 1 ? ' windows' : ' window') },
                'they move together — ' + (IS_MAC ? '⌥' : 'Alt') + '-drag takes one out, ' + KMOD + 'Z undoes this']);
@@ -1093,8 +1087,13 @@ class Tile {
       // never pulls anything back — which is right for the canvas ("밀어내기를 타일링으로 바꾸지
       // 마라") and wrong inside a group, where the whole point is a block that stays a block
       // (user, 2026-09-14). Sizes are still the user's; only the positions are set.
-      if (was === 'size' && groupOf(this.id).length > 1) arrangeGroup(groupOf(this.id));
-      settle(this.id);                    // whatever it landed on gets out of the way (decisions.md "새 창이 옆을 민다")
+      // A resize says which way it grew, so what it displaces is pushed that way and a row stays a row.
+      let grew = null;
+      if (was === 'size') {
+        const r = layout[this.id] || {}, dw = (r.w || ow) - ow, dh = (r.h || oh) - oh;
+        if (dw > 0 || dh > 0) grew = dw >= dh ? 'r' : 'b';
+      }
+      settle(this.id, { compact: !joined, dir: grew });   // whatever it landed on gets out of the way; the group closes up
       renderMinimap();                    // the world may have grown — take the scale again
       refreshOff();
     };
@@ -1515,55 +1514,78 @@ function undoJoin(changed) {
 //: whatever sizes you gave them (palmar never resizes a window — AGENTS.md), so they are lined up by
 //: their tops on rows as wide as the widest member, which is the arrangement that looks deliberate
 //: without pretending to be a tiler ("딱딱 나름 정렬되게", 2026-09-14).
-function arrangeGroup(ids, lead) {
-  const mine = ids.filter((id) => layout[id] && tiles.get(id));
-  if (mine.length < 2) return;
-  // **Reading order of where they are now**, so the side you dropped on is the order you get: carry a
-  // window to the right of another and it is to the right of it afterwards. Sorting by age instead
-  // meant the drop position was thrown away and the group came out in an order nobody chose.
-  // A row's worth of slack on the vertical compare, or two windows a few pixels apart in height
-  // swap places and the group appears to shuffle itself. `lead` wins a tie on x: it is the window
-  // that was just put down, exactly where the next one already sits, and it has to come first or it
-  // lands one slot to the right of where its preview was.
-  const ROWISH = Math.max(...mine.map((id) => layout[id].h)) / 2;
-  mine.sort((a, b) => {
-    const p = layout[a], q = layout[b];
-    if (Math.abs(p.y - q.y) > ROWISH) return p.y - q.y;
-    if (Math.abs(p.x - q.x) > 1) return p.x - q.x;
-    return a === lead ? -1 : (b === lead ? 1 : 0);
-  });
-  const r = groupRect(mine);
-  // **The rows are the rows the hand made.** This used to re-flow the whole group by width — wide
-  // first, wrap when full — which threw the side away again one step later: put a window *below*
-  // another, and if the two fit side by side that is where it went, while the preview had shown it
-  // below (user, 2026-09-15: "아직도 그룹핑 할 때 예정된 점선 지역으로 안붙어"). A member a row's
-  // worth below the first member of its row starts the next row, and only running out of room
-  // wraps. Within a row each window sits against the last, and a row is as tall as the tallest thing
-  // in it — the packing that closes a hole when a member shrinks or goes (2026-09-14) is unchanged.
-  // An ㄱ is then simply a top row with more in it than the bottom one.
-  // **And so are their edges.** A row begins where its first window stands, not at the group's left
-  // edge: a window carried under the right one of a pair was previewed under it and packed under the
-  // left one (user, 2026-09-15). A row that wraps for want of room starts at the group's edge, since
-  // nobody placed it. Left of the group's edge is not a place — clamped at zero, as everything is.
-  const room = Math.max(1, (cvScroll.clientWidth || 1) - GAP * 2);
-  let x0 = layout[mine[0]].x, x = x0, y = r.y, rowH = 0, rowStart = 0, rowY = layout[mine[0]].y;
-  mine.forEach((id, i) => {
-    const q = layout[id];
-    if (i > rowStart && Math.abs(q.y - rowY) > ROWISH) {
-      x0 = q.x; x = x0; y += rowH + GAP; rowH = 0; rowStart = i; rowY = q.y;
-    } else if (i > rowStart && (x - r.x) + q.w > room) {
-      x0 = r.x; x = x0; y += rowH + GAP; rowH = 0; rowStart = i; rowY = q.y;
-    }
-    const px = Math.max(0, x), py = Math.max(0, y);
-    layout[id] = Object.assign({}, layout[id], { x: px, y: py });
-    const t = tiles.get(id);
-    t.el.style.left = px + 'px';
-    t.el.style.top = py + 'px';
-    x += q.w + GAP;
-    rowH = Math.max(rowH, q.h);
-  });
+// Every member of a group, live or not — what is left of a group is what has to close up.
+function groupMembers(g) {
+  return [...tiles.values()].filter((t) => layout[t.id] && layout[t.id].g === g).map((t) => t.id);
+}
+
+function place(id, x, y) {
+  const t = tiles.get(id);
+  layout[id] = Object.assign({}, layout[id], { x, y });
+  if (t) { t.el.style.left = x + 'px'; t.el.style.top = y + 'px'; }
+}
+
+//: **Joining puts the window exactly where its preview was, and nothing else moves it.** Three
+//: arrangers came before this one — by age, then wide-first rows, then rows as the hand left them —
+//: and each re-laid the whole group out after the drop, so the window landed somewhere the preview
+//: had not shown: beside instead of below, under the left one instead of the right, a row's height
+//: under a shorter neighbour (user, 2026-09-15: "붕 떠 있게 돼"). The preview is a promise. What the
+//: drop displaces is pushed out of the way inside the group by exactly the overlap — the same push
+//: as the canvas — and that is all.
+function dropInto(meId, targetId, side) {
+  const spot = joinPreview(targetId, side || 'right', meId);
+  if (spot) place(meId, spot.x, spot.y);
+  joinGroups(meId, targetId);
+  const ids = groupOf(meId);
+  const me = tiles.get(meId);
+  if (me && pushOn) {
+    const inner = pushAside(me.s.canvas, meId, { only: ids, solo: true });
+    if (inner.length) applyPush(inner);
+  }
   saveLayout();
-  paintGroups();     // the frame is the union of the members — it moved, so it has to be redrawn
+  paintGroups();
+  return ids;
+}
+
+//: **Closing up is gravity, not a grid.** When a member shrinks, is closed, or is taken out, what is
+//: left has to stay touching ("항상 맞닿아 있게") — and a grid of rows could not say "under the shorter
+//: one", it only knew "a row down". So each member is pulled **up, then left**, as far as it goes
+//: before it touches another member or the group's own edge; passes repeat until nothing moves. Up
+//: first because the canvas grows downwards without limit and its width is finite. Nothing ever
+//: moves down or right, and the group's top-left corner stays where it is, so a group does not
+//: drift across the canvas while closing a hole. It never runs on a join — the preview is the promise
+//: there — and it runs after the push has resolved overlaps, on a group that has none.
+function compactGroup(ids) {
+  const mine = ids.filter((id) => layout[id] && tiles.get(id));
+  if (mine.length < 2) return false;
+  const x0 = Math.min(...mine.map((id) => layout[id].x));
+  const y0 = Math.min(...mine.map((id) => layout[id].y));
+  let moved = false;
+  for (let pass = 0; pass < 8; pass++) {
+    let any = false;
+    mine.sort((a, b) => (layout[a].y - layout[b].y) || (layout[a].x - layout[b].x));
+    for (const id of mine) {
+      const m = layout[id];
+      let ny = y0;
+      for (const o of mine) {
+        if (o === id) continue;
+        const r = layout[o];
+        if (r.y < m.y && r.x < m.x + m.w && r.x + r.w > m.x) ny = Math.max(ny, r.y + r.h + GAP);
+      }
+      const my = Math.max(0, Math.min(m.y, ny));
+      let nx = x0;
+      for (const o of mine) {
+        if (o === id) continue;
+        const r = layout[o];
+        if (r.x < m.x && r.y < my + m.h && r.y + r.h > my) nx = Math.max(nx, r.x + r.w + GAP);
+      }
+      const mx = Math.max(0, Math.min(m.x, nx));
+      if (mx !== m.x || my !== m.y) { place(id, mx, my); any = moved = true; }
+    }
+    if (!any) break;
+  }
+  if (moved) { saveLayout(); paintGroups(); }
+  return moved;
 }
 
 function newGroupId() {
@@ -1778,7 +1800,12 @@ function pushAside(canvasId, anchorId, opts) {
   for (const [k, ids] of members) box.set(k, blockOf(ids));
   const start = new Map([...box].map(([k, r]) => [k, { x: r.x, y: r.y }]));
   const anchorKey = key(anchorId);
-  let wave = [{ id: anchorKey, dir: null }];
+  // **A resize pushes the way it grew.** The first wave used to pick the shortest way out, and a
+  // neighbour a few pixels closer to the bottom than to the right went *under* the window that had
+  // grown sideways — the row was broken by exactly the gesture meant to keep it, and closing up
+  // only ever pulls up and left, so nothing put it back (2026-09-15). `opts.dir` is the direction
+  // the anchor grew in; a drop passes none and the shortest way still decides.
+  let wave = [{ id: anchorKey, dir: opts.dir || null }];
   for (let round = 0; wave.length; round++) {
     if (round >= PUSH_ROUNDS) return [];
     const next = new Map();
@@ -1828,19 +1855,22 @@ function applyPush(moves) {
 
 // Called when a window is let go. The name in the toast is read off the title bar rather than rebuilt from
 // the session, so it always says the words that are on the window itself.
-function settle(anchorId) {
-  if (!pushOn) return;                  // the switch in the shortcuts panel
+function settle(anchorId, opts) {
+  opts = opts || {};
   const t = tiles.get(anchorId);
   if (!t) return;
   // **Inside the group first, then the canvas.** A group is one block to the outside world, so the
   // ordinary run cannot see an overlap *between its own members* — which is exactly what growing one
   // of them makes. Sorting the group out first also settles its outer shape, so the run after it
-  // works from the rectangle the group really ends up with.
+  // works from the rectangle the group really ends up with. Between the two the group closes up
+  // (compactGroup) — not on a join, where the preview has already said where everything is.
   const mates = groupOf(anchorId);
-  const inner = mates.length > 1
-    ? pushAside(t.s.canvas, anchorId, { only: mates, solo: true })
+  const inner = (pushOn && mates.length > 1)
+    ? pushAside(t.s.canvas, anchorId, { only: mates, solo: true, dir: opts.dir })
     : [];
   if (inner.length) applyPush(inner);
+  if (opts.compact !== false && mates.length > 1) compactGroup(mates);
+  if (!pushOn) return;                  // the switch in the shortcuts panel — closing up is not pushing
   const outer = pushAside(t.s.canvas, anchorId);
   if (outer.length) applyPush(outer);
   const moves = inner.concat(outer);
@@ -3231,7 +3261,7 @@ function remove(id) {
   delete layout[id];   // an id is never reused — leave it and it piles up
   if (wasG) {
     const rest = dissolveIfAlone(wasG);
-    if (rest.length > 1) arrangeGroup(rest);
+    if (rest.length > 1) compactGroup(rest);
   }
   saveLayout();
   paintGroups();
@@ -3597,7 +3627,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // hand can comfortably drag into place one at a time.
                   pushAside, applyPush, hits, firstFree,
                   // Groups: the model is testable without a hand, the gesture needs one.
-                  groupOf, groupRect, joinGroups, leaveGroup, paneOver, joinPreview, setGauge, arrangeGroup, paintGroups,
+                  groupOf, groupRect, joinGroups, leaveGroup, paneOver, joinPreview, setGauge, compactGroup, dropInto, settle, paintGroups,
                   // Undo: one way back for everything that moves a window.
                   undoMark, undoLast, undoDepth: () => undoStack.length,
                   // Path joining is platform-shaped and the platform it gets wrong has no Chrome
