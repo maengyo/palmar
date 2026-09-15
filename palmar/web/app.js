@@ -3001,6 +3001,8 @@ function onSearch() {
 searchEl.addEventListener('input', onSearch);
 // Esc in the field: a search input clears itself on Esc; with nothing left to clear, the box goes away.
 searchEl.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !searchEl.value) { e.preventDefault(); showSearch(false); } });
+const searchX = $('#search-x');
+if (searchX) searchX.addEventListener('click', () => showSearch(false));   // the plain way out (user, 2026-09-15)
 addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); showSearch(true); searchEl.select(); }
@@ -3945,7 +3947,7 @@ function boot() {
       if (!b) return;
       showOptions(false);
       if (b.dataset.do === 'keys') showKeys(true);
-      if (b.dataset.do === 'search') showSearch(true);
+      if (b.dataset.do === 'search') showSearch(searchBox.hidden);   // the item is a switch: again puts it away
     });
     addEventListener('click', () => { if (!optMenu.hidden) showOptions(false); });
     addEventListener('keydown', (e) => { if (e.key === 'Escape' && !optMenu.hidden) showOptions(false); });

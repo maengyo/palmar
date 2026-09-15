@@ -71,7 +71,7 @@
     <div class="r">
       <span class="bell" id="bell" role="button" tabindex="0" data-on="0"
             title="notify me when a terminal wants me (off)">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
       </span>
       <!-- Three states, and the third one used to be a guess (#16). The mark alone cannot say which
            is which, so the button says it in a word. UI text is English (decisions.md "디자인"). -->
@@ -133,6 +133,7 @@
       <input id="search" type="search" placeholder="Search sessions and folders" autocomplete="off" spellcheck="false">
       <span class="k" id="kmod"><kbd>Ctrl</kbd><kbd>K</kbd></span>
     </label>
+    <button class="sx" id="search-x" type="button" title="close search" aria-label="close search">×</button>
   </div>
 
   <!-- The address of this daemon, for moving to a browser. Asked for when opened and not kept:

@@ -2453,6 +2453,8 @@ class TopRow(unittest.TestCase):
           const cv=document.getElementById('cv').getBoundingClientRect();
           return {tabsInTop: tabs.top >= top.top && tabs.bottom <= top.bottom + 1,
                   gap: Math.round(cv.top - top.bottom), topH: Math.round(top.height),
+                  rects: {top: [top.top, top.bottom], tabs: [tabs.top, tabs.bottom], scrollY: window.scrollY,
+                          c: (()=>{const r=document.querySelector('.top .c').getBoundingClientRect(); return [r.top, r.bottom];})()},
                   search: !!document.querySelector('.top .search')};})()""")
         self.assertTrue(r["tabsInTop"], "the tab strip is not in the top row: %r" % r)
         self.assertLessEqual(r["gap"], 1, "something still sits between the top row and the canvas: %r" % r)
@@ -2519,6 +2521,39 @@ class TopRow(unittest.TestCase):
         self.assertTrue(seen["row"], "the list row does not say it")
         w.send(b"\x03", opcode=0x2)
         self.d.delete("/api/sessions/" + s["id"])
+
+    def test_every_button_up_there_is_the_same_height(self):
+        r = self.b.ev("""(()=>{const out={};
+          for (const id of ['bell','theme','toweb','undo','tidy','options','mkdir','refresh'])
+            out[id]=Math.round(document.getElementById(id).getBoundingClientRect().height);
+          return out;})()""")
+        self.assertEqual(set(r.values()), {26}, "the buttons do not share one height: %r" % r)
+
+    def test_the_right_hand_buttons_never_sit_on_undo_and_tidy(self):
+        """Dragging the rails narrow used to spill the right-hand buttons over undo and tidy: the
+        top bar's right column was the rail's width and its content is wider than that."""
+        r = self.b.ev("""(()=>{const root=document.documentElement;
+          root.style.setProperty('--rail-l','120px'); root.style.setProperty('--rail-r','120px');
+          const t=document.getElementById('tidy').getBoundingClientRect(), b=document.getElementById('bell').getBoundingClientRect();
+          root.style.removeProperty('--rail-l'); root.style.removeProperty('--rail-r');
+          return {tidyRight: Math.round(t.right), bellLeft: Math.round(b.left)};})()""")
+        self.assertLessEqual(r["tidyRight"], r["bellLeft"], "the buttons overlap: %r" % r)
+
+    def test_the_search_has_a_way_out_and_the_item_is_a_switch(self):
+        self.b.ev("document.getElementById('options').click(); document.querySelector('#options-menu [data-do=\"search\"]').click()")
+        self.assertFalse(self.b.ev("document.getElementById('searchbox').hidden"), "the item did not open it")
+        self.b.ev("document.getElementById('search-x').click()")
+        self.assertTrue(self.b.ev("document.getElementById('searchbox').hidden"), "the × did not close it")
+        self.b.ev("document.getElementById('options').click(); document.querySelector('#options-menu [data-do=\"search\"]').click()")
+        self.b.ev("document.getElementById('options').click(); document.querySelector('#options-menu [data-do=\"search\"]').click()")
+        self.assertTrue(self.b.ev("document.getElementById('searchbox').hidden"), "the item pressed again did not close it")
+
+    def test_the_web_box_header_is_not_clipped(self):
+        self.b.ev("document.getElementById('toweb').click()")
+        time.sleep(0.3)
+        r = self.b.ev("(()=>{const h=document.querySelector('#webbox .keys-h'); return {sw:h.scrollWidth, cw:h.clientWidth, txt:h.textContent.trim()};})()")
+        self.assertLessEqual(r["sw"], r["cw"] + 1, "the header is clipped: %r" % r)
+        self.b.ev("document.body.click()")
 
     def test_the_web_box_closes_like_the_other_popups(self):
         """It used to stay up until its × was found (user, 2026-09-15, on Windows)."""
