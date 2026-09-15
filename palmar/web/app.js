@@ -3963,7 +3963,16 @@ function boot() {
       if (!on && webUrl) webUrl.value = '';      // do not leave it lying about
     };
     const towebEl = document.getElementById('toweb');
-    if (towebEl) towebEl.addEventListener('click', async () => {
+    // A press outside the box or Esc closes it, like every other popup here — it used to stay up
+    // until its × was found (user, 2026-09-15, on Windows). The button's own click must not count
+    // as "outside", and clicks inside the box are swallowed.
+    if (webBox) {
+      webBox.addEventListener('click', (e) => e.stopPropagation());
+      addEventListener('click', () => { if (!webBox.hidden) showWeb(false); });
+      addEventListener('keydown', (e) => { if (e.key === 'Escape' && !webBox.hidden) showWeb(false); });
+    }
+    if (towebEl) towebEl.addEventListener('click', async (e) => {
+      e.stopPropagation();
       showKeys(false);
       showWeb(true);
       if (webUrl) webUrl.value = 'asking the daemon…';
@@ -4046,6 +4055,11 @@ function boot() {
   }
   const tidyBtn = document.getElementById('tidy');
   if (tidyBtn) tidyBtn.addEventListener('click', () => { undoMark('tidying up'); tidyCanvas(current); });
+  // The floating new-terminal button. Folding the right rail took "Open terminal here" with it and
+  // left no way to open one by hand (user, 2026-09-15); this one shows only while that rail is folded
+  // and does what Ctrl/⌘⏎ does — a terminal in the folder of the one you are on.
+  const fab = document.getElementById('fab-new');
+  if (fab) fab.addEventListener('click', () => newTerminal());
   paintTidy();
   const undoBtn = document.getElementById('undo');
   if (undoBtn) undoBtn.addEventListener('click', () => undoLast());

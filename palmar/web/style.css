@@ -285,10 +285,8 @@ body {
 /* Wordmark. Height only; the viewBox decides the width. Strokes are currentColor, so it follows the theme. */
 /* The top bar is 44px. The logo is as big as the leftover space above and below allows — 15px → 21px → 26px. */
 .brand { height: 20px; width: auto; display: block; color: var(--ink); flex: none; }
-/* Folded, the rail's column is gone and the wordmark would push the tabs over — it shrinks to a mark's
-   height and keeps its corner (2026-09-15). The open handle sits under it. */
-body.fold-l .brand { height: 15px; }
-body.fold-l .top .l { padding: 0 8px 0 10px; }
+/* Folded, the wordmark keeps its size and its corner (the person's call, 2026-09-15 — a shrinking
+   logo was tried and read as the app changing). The tabs start after it. */
 .brand .qd { fill: currentColor; opacity: .34; }
 /* The dot inside the last one. It lights only when something is calling for you — the same rule and the
    same color as the canvas tabs (⑥). However many are waiting, only one lights: it is not a gauge
@@ -323,7 +321,11 @@ kbd {
    crushed — true before the bell too (measured: the gear squeezed from 16px to 2px), it just did not show. */
 .top .r .bell, .top .r .theme, .top .r .gear { flex: none; }
 /* Shortcuts button. The same box as the theme button — no new shape on the top bar. */
-.options { -webkit-app-region: no-drag; -webkit-appearance: none; appearance: none; padding: 0; }
+.options {
+  -webkit-app-region: no-drag; -webkit-appearance: none; appearance: none; padding: 0;
+  box-sizing: border-box; width: 26px; height: 26px; min-width: 26px; line-height: 0; color: var(--ink-2);
+}
+.options svg { display: block; }
 .options[aria-expanded="true"] { border-color: var(--accent); color: var(--ink); }
 /* Settings rows inside the options list: a control and its name, the explanation in the title. */
 .options-menu { min-width: 232px; }
@@ -967,18 +969,30 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
 .toweb[aria-expanded="true"] { border-color: var(--accent); color: var(--ink); }
 /* The panel it opens. Sized to the address rather than to the screen. */
 .webbox {
-  position: absolute; right: 12px; top: 44px; z-index: 1200; width: min(440px, calc(100vw - 24px));
-  background: var(--rail); border: 1px solid var(--line-2); border-radius: 10px;
-  box-shadow: var(--shadow-2); padding: 0 0 10px;
+  position: absolute; right: 12px; top: 40px; z-index: 1200; width: min(500px, calc(100vw - 24px));
+  background: var(--float); border: 1px solid var(--line-2); border-radius: 10px;
+  box-shadow: var(--shadow-2); padding: 2px 0 12px; backdrop-filter: blur(8px);
 }
+/* The text was squeezed ("글자가 많이 욱여져서", 2026-09-15): a wider box, a looser line, a size up. */
+.webbox .diag-hint { padding: 4px 16px 10px; font-size: 12px; line-height: 1.65; color: var(--ink-2); }
 .web-url {
-  display: block; width: calc(100% - 28px); margin: 2px 14px 10px; padding: 7px 9px;
+  display: block; width: calc(100% - 32px); margin: 2px 16px 12px; padding: 8px 10px;
   border: 1px solid var(--line-2); border-radius: 6px; background: var(--tile);
-  color: var(--ink); font: 11.5px var(--mono);
+  color: var(--ink); font: 12px var(--mono);
 }
 /* Two buttons of the same weight. .keys-act elsewhere is a button beside a run of explaining text,
    so its grid is `auto 1fr` and the second child takes the slack — here both are buttons. */
-.webbox .keys-act { padding: 0 14px; grid-template-columns: 1fr 1fr; gap: 8px; }
+.webbox .keys-act { padding: 0 16px; grid-template-columns: 1fr 1fr; gap: 10px; }
+/* The floating new-terminal button: a circle above the minimap, only while the right rail is folded. */
+.fab {
+  display: none; position: absolute; right: 16px; bottom: 136px; z-index: 15;
+  width: 44px; height: 44px; border-radius: 50%; border: 0; padding: 0;
+  background: var(--accent); color: var(--on-accent); font: 500 26px/1 var(--mono);
+  box-shadow: var(--shadow-2); cursor: pointer; -webkit-appearance: none; appearance: none;
+  place-items: center; padding-bottom: 3px;
+}
+.fab:hover { filter: brightness(1.08); }
+body.fold-r .fab { display: grid; }
 
 .toast {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);

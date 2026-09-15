@@ -2482,6 +2482,44 @@ class TopRow(unittest.TestCase):
         self.assertFalse(r["inKeys"], "the settings are still under the shortcuts too")
         self.b.ev("document.getElementById('keys-x').click()")
 
+    def test_the_web_box_closes_like_the_other_popups(self):
+        """It used to stay up until its × was found (user, 2026-09-15, on Windows)."""
+        self.b.ev("document.getElementById('toweb').click()")
+        time.sleep(0.3)
+        self.assertFalse(self.b.ev("document.getElementById('webbox').hidden"), "the box did not open")
+        self.b.ev("document.getElementById('webbox').click()")
+        self.assertFalse(self.b.ev("document.getElementById('webbox').hidden"), "a click inside closed it")
+        self.b.ev("document.body.click()")
+        self.assertTrue(self.b.ev("document.getElementById('webbox').hidden"), "a click outside did not close it")
+        self.b.ev("document.getElementById('toweb').click()")
+        time.sleep(0.2)
+        self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
+        self.assertTrue(self.b.ev("document.getElementById('webbox').hidden"), "Escape did not close it")
+
+    def test_the_options_button_is_a_square(self):
+        r = self.b.ev("(()=>{const b=document.getElementById('options').getBoundingClientRect(); return [Math.round(b.width), Math.round(b.height)];})()")
+        self.assertEqual(r, [26, 26], "the options button is %r, not a 26px square" % (r,))
+
+    def test_a_round_button_stands_in_for_the_folded_rail(self):
+        """Folding the right rail took "Open terminal here" with it and left no way to open one by
+        hand (user, 2026-09-15). While it is folded a round button floats over the canvas and does
+        what Ctrl/⌘⏎ does."""
+        shown = lambda: self.b.ev("getComputedStyle(document.getElementById('fab-new')).display !== 'none'")
+        self.assertFalse(shown(), "the button shows while the rail is open")
+        self.b.ev("document.getElementById('fold-r').click()")
+        time.sleep(0.3)
+        self.assertTrue(shown(), "the button did not appear when the rail folded")
+        before = len(self.d.panes())
+        self.b.ev("document.getElementById('fab-new').click()")
+        for _ in range(30):
+            time.sleep(0.3)
+            if len(self.d.panes()) > before:
+                break
+        self.assertEqual(len(self.d.panes()), before + 1, "pressing it opened no terminal")
+        self.b.ev("document.getElementById('open-r').click()")
+        time.sleep(0.3)
+        self.assertFalse(shown(), "the button stayed after the rail came back")
+
     def test_search_is_behind_the_shortcut(self):
         self.assertTrue(self.b.ev("document.getElementById('searchbox').hidden"))
         mod = 4 if self.b.ev("navigator.platform.startsWith('Mac')") else 2      # ⌘ or Ctrl

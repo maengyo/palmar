@@ -105,8 +105,8 @@
            beside the three settings that used to sit under them with a paragraph each (2026-09-15). -->
       <button class="options ib" id="options" type="button" title="options" aria-label="options"
               aria-haspopup="menu" aria-expanded="false">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="15" cy="7" r="2.5"/><circle cx="9" cy="17" r="2.5"/>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">
+          <path d="M3 7h9M19 7h2M3 17h3M13 17h8"/><circle cx="15" cy="7" r="3"/><circle cx="9" cy="17" r="3"/>
         </svg>
       </button>
       <div class="theme-menu options-menu" id="options-menu" role="menu" hidden>
@@ -214,6 +214,10 @@
         <div class="cv-scroll" id="cv-scroll"></div>
         <!-- One minimap only, for the canvas you are looking at (⑪).
              The daemon does not even know it is there (protocol.md "없는 것"). -->
+        <!-- Shown only while the right rail is folded (style.css body.fold-r .fab): the rail's
+             "Open terminal here" goes with the rail, and this is what is left to press. -->
+        <button class="fab" id="fab-new" type="button" title="new terminal, in the folder of the one you are on (Ctrl/⌘ ⏎)"
+                aria-label="new terminal">+</button>
         <div class="mm" id="mm" hidden title="drag to move the viewport">
           <div class="mm-w" id="mm-w"></div>
           <div class="mm-vp" id="mm-vp"></div>
