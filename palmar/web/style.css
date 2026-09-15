@@ -302,18 +302,15 @@ body.wants .brand .wd { fill: var(--st-wait); opacity: 1; }
 /* Floating over windows now, so it cannot be the translucent field it was on the bar: the title bar
    under it showed through (measured 2026-09-15). */
 .searchbox .search { background: var(--float); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+/* An SVG cross in a border-box circle, centred the way the other icon buttons are. A typed × sat
+   low, a gradient-drawn one sat high (a pseudo-element in a button is not a grid item); the SVG child
+   is (user, 2026-09-15, twice). */
 .sx {
-  width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line-2); background: var(--float);
-  color: var(--ink-2); font-size: 0; cursor: pointer; display: grid; place-items: center; padding: 0;
-  box-shadow: var(--shadow-2); -webkit-appearance: none; appearance: none;
+  box-sizing: border-box; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line-2);
+  background: var(--float); color: var(--ink-2); cursor: pointer; display: grid; place-items: center;
+  padding: 0; line-height: 0; box-shadow: var(--shadow-2); -webkit-appearance: none; appearance: none;
 }
-/* Drawn, not typed: a × glyph sits low in its box and read as off-centre (user, 2026-09-15). The same
-   two strokes as every other close mark here (.cl, .tab .cx). */
-.sx::before {
-  content: ''; width: 9px; height: 9px;
-  background: linear-gradient(45deg, transparent 0 43%, currentColor 43% 57%, transparent 57%),
-              linear-gradient(-45deg, transparent 0 43%, currentColor 43% 57%, transparent 57%);
-}
+.sx svg { display: block; }
 .sx:hover { border-color: var(--accent); color: var(--ink); }
 .search {
   display: flex; align-items: center; gap: 8px; width: 380px; height: 30px; box-shadow: var(--shadow-2);
