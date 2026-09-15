@@ -2660,12 +2660,11 @@ class TopRow(unittest.TestCase):
         self.assertEqual(r, [26, 26], "the options button is %r, not a 26px square" % (r,))
 
     def test_a_round_button_stands_in_for_the_folded_rail(self):
-        """Folding the right rail took "Open terminal here" with it and left no way to open one by
-        hand (user, 2026-09-15). While it is folded a round button floats over the canvas and does
-        what Ctrl/⌘⏎ does."""
+        """＋ lives in the terminal list's header now; fold that rail and a round button floats over the
+        canvas in its place and does what Ctrl/⌘⏎ does (2026-09-15)."""
         shown = lambda: self.b.ev("getComputedStyle(document.getElementById('fab-new')).display !== 'none'")
         self.assertFalse(shown(), "the button shows while the rail is open")
-        self.b.ev("document.getElementById('fold-r').click()")
+        self.b.ev("document.getElementById('fold-l').click()")
         time.sleep(0.3)
         self.assertTrue(shown(), "the button did not appear when the rail folded")
         before = len(self.d.panes())
@@ -2675,9 +2674,31 @@ class TopRow(unittest.TestCase):
             if len(self.d.panes()) > before:
                 break
         self.assertEqual(len(self.d.panes()), before + 1, "pressing it opened no terminal")
-        self.b.ev("document.getElementById('open-r').click()")
+        self.b.ev("document.getElementById('open-l').click()")
         time.sleep(0.3)
         self.assertFalse(shown(), "the button stayed after the rail came back")
+
+    def test_the_terminal_list_has_its_own_plus(self):
+        before = len(self.d.panes())
+        self.b.ev("document.getElementById('newterm').click()")
+        for _ in range(30):
+            time.sleep(0.3)
+            if len(self.d.panes()) > before:
+                break
+        self.assertEqual(len(self.d.panes()), before + 1, "＋ in the terminal list opened nothing")
+
+    def test_the_minimap_can_be_put_away(self):
+        self.d.open_pane(self.d.home, canvas=self.b.ev("window.palmar.canvas()"))
+        for _ in range(30):
+            time.sleep(0.25)
+            if not self.b.ev("document.getElementById('mm').hidden"):
+                break
+        self.assertFalse(self.b.ev("document.getElementById('mm').hidden"), "the minimap never showed with a window on the canvas")
+        r = self.b.ev("""(()=>{const s=document.getElementById('minimap'); s.checked=false; s.dispatchEvent(new Event('change'));
+          return {hidden: document.getElementById('mm').hidden, kept: localStorage.getItem('palmar.minimap'), on: window.palmar.minimapOn()};})()""")
+        self.assertEqual([r["hidden"], r["kept"], r["on"]], [True, "0", False], r)
+        self.b.ev("""(()=>{const s=document.getElementById('minimap'); s.checked=true; s.dispatchEvent(new Event('change')); return 1;})()""")
+        self.assertFalse(self.b.ev("document.getElementById('mm').hidden"), "it did not come back")
 
     def test_search_is_behind_the_shortcut(self):
         self.assertTrue(self.b.ev("document.getElementById('searchbox').hidden"))

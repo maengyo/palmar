@@ -115,6 +115,7 @@
         <div class="tm-h">Windows</div>
         <label class="tm-row" title="drop a window on another and the one that was there moves out of the way, by exactly the overlap"><input type="checkbox" id="pushaside" checked> Push windows aside</label>
         <label class="tm-row" title="when a terminal closes, pull the rest back to the corner on their own"><input type="checkbox" id="autotidy"> Tidy automatically</label>
+        <label class="tm-row" title="the small map of the canvas, bottom right"><input type="checkbox" id="minimap" checked> Minimap</label>
         <label class="tm-row" title="the text size a terminal opens at — Ctrl/⌘ + wheel changes one window">Text size
           <select id="fontsize">
             <option value="11">11</option>
@@ -211,7 +212,9 @@
          aria-label="resize the directory rail — arrow keys, or double-click to reset"></div>
     <!-- ── left: sessions ─────────────────────── -->
     <aside class="rail left">
-      <div class="rh"><span class="t">Terminals <span class="n" id="count">0</span></span><span class="sp"></span><button class="rail-fold" id="fold-l" type="button" title="collapse (⌘\)" aria-label="collapse the terminal list">‹</button></div>
+      <!-- ＋ here: the list of terminals is where a new one belongs, the same way the folder tree has
+           its own ＋ — the launcher that used to live in the right rail is gone (2026-09-15). -->
+      <div class="rh"><span class="t">Terminals <span class="n" id="count">0</span></span><span class="sp"></span><span class="ib plus" id="newterm" role="button" tabindex="0" title="new terminal, in your home folder (Ctrl/⌘ ⏎)">+</span><button class="rail-fold" id="fold-l" type="button" title="collapse (⌘\)" aria-label="collapse the terminal list">‹</button></div>
       <div class="scroll" id="list"></div>
       <!-- The line that says where status comes from. Not a value asked of the daemon — a stated fact.
            **No listing of agent names** — reading by title (protocol.md "제목으로 읽기") works with

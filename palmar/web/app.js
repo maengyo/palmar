@@ -3130,7 +3130,17 @@ function mmSet(id, x, y, w, h) {    // place a rectangle using only values we al
   e.style.width = Math.max(2, w * mmK) + 'px';
   e.style.height = Math.max(2, h * mmK) + 'px';
 }
+// The minimap can be put away (user, 2026-09-15). Off is the only state written, like push-aside.
+const LS_MM = 'palmar.minimap';
+let minimapOn = true;
+try { minimapOn = localStorage.getItem(LS_MM) !== '0'; } catch (e) {}
+function setMinimap(on) {
+  minimapOn = !!on;
+  try { if (minimapOn) localStorage.removeItem(LS_MM); else localStorage.setItem(LS_MM, '0'); } catch (e) {}
+  renderMinimap();
+}
 function renderMinimap() {
+  if (!minimapOn) { mmEl.hidden = true; return; }
   const list = [];
   for (const t of tiles.values()) if (t.visible() && layout[t.id]) list.push(t);
   mmRects.clear();
@@ -4309,7 +4319,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   saveLayout, client: () => CLIENT, layoutOnDaemon: () => layoutOnDaemon,
                   holdStyle: () => holdStyle,
                   palette: () => root.dataset.pal || null, choosePalette, applyTheme, labelOf,
-                  baseFont: () => FONT_PX, setBaseFont, termTheme,
+                  baseFont: () => FONT_PX, setBaseFont, termTheme, minimapOn: () => minimapOn,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
                   lastOutAt, renderList,
@@ -4590,6 +4600,16 @@ function boot() {
         autoTidy = sw.checked;
         try { if (autoTidy) localStorage.setItem(LS_AUTOTIDY, '1'); else localStorage.removeItem(LS_AUTOTIDY); } catch (e) {}
       });
+    }
+    const mmsw = document.getElementById('minimap');
+    if (mmsw) {
+      mmsw.checked = minimapOn;
+      mmsw.addEventListener('change', () => setMinimap(mmsw.checked));
+    }
+    const nt = document.getElementById('newterm');
+    if (nt) {
+      nt.addEventListener('click', () => newTerminal());
+      nt.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); newTerminal(); } });
     }
     const fsel = document.getElementById('fontsize');
     if (fsel) {
