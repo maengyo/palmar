@@ -1133,6 +1133,7 @@ body.fold-r .fab { display: grid; }
 .row.file:hover .nm { color: var(--ink); }
 .row .fsz { margin-left: auto; font-size: 10.5px; color: var(--ink-3); flex: none; }
 .tile.viewer .grip { opacity: .6; }
+.tile.viewer .rn { display: none; }     /* a file is called by its name; there is nothing to rename */
 .view {
   flex: 1; min-height: 0; overflow: auto; background: var(--tile); color: var(--term-ink);
   font: 12px/1.55 var(--mono); padding: 8px 10px 12px 0; tab-size: 4; -moz-tab-size: 4;

@@ -3125,7 +3125,7 @@ function renderList() {
     rowConfirm = null;
   }
   if (!sessions.size) {
-    listEl.appendChild(el('div', 'empty', 'No terminals yet. Pick a folder on the right and press "Open terminal here".'));
+    listEl.appendChild(el('div', 'empty', 'No terminals yet. Press \uff0b or ' + KMOD + '\u23ce to open one at home.'));
   }
   $('#count').textContent = String(sessions.size);
   $('#sb-n').textContent = String(sessions.size);
