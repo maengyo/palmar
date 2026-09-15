@@ -115,7 +115,7 @@ async function clipWrite(text) {
     await navigator.clipboard.writeText(text);
     return true;
   } catch (e) {
-    toast(['could not copy — the browser refused clipboard access', String(e.message || e)]);
+    toast(['could not copy — the browser refused clipboard access:', { d: String(e.message || e) }]);
     return false;
   }
 }
@@ -124,7 +124,7 @@ async function clipRead() {
     return await navigator.clipboard.readText();
   } catch (e) {
     // Chrome asks separately for read permission. If it is refused, the browser's own paste is still there.
-    toast(['could not paste — the browser refused to read the clipboard',
+    toast(['could not paste — the browser refused to read the clipboard;',
            'allow clipboard for ' + location.origin + ', or use the browser\'s own paste']);
     return '';
   }
@@ -380,10 +380,16 @@ function paintClosing(id) {
 
 let toastTimer = null;
 function toast(parts) {
-  // parts: [{b:'bold'}, 'plain', {d:'dim'}, {a:'undo', on:fn}], or a string
+  // parts: [{b:'bold'}, 'plain', {d:'dim'}, {a:'undo', on:fn}], or a string.
+  // **The toast is one line of prose.** Parts are laid end to end with a space between, and the
+  // punctuation is the caller's — a dash before a second clause, a colon before an error. It used to
+  // be a flex row with a gap, and two plain strings in a row merged into one item with no gap at all
+  // ("…:57891the browser is refusing", user, 2026-09-15).
   toastEl.textContent = '';
   let act = false;
   for (const p of [].concat(parts)) {
+    if (p === '' || p == null) continue;
+    if (toastEl.childNodes.length) toastEl.appendChild(document.createTextNode(' '));
     if (typeof p === 'string') toastEl.appendChild(document.createTextNode(p));
     else if (p.b != null) toastEl.appendChild(el('b', null, p.b));
     else if (p.d != null) toastEl.appendChild(el('span', 'd', p.d));
@@ -710,7 +716,7 @@ class Tile {
       if (clipHintShown || !this.term.hasSelection()) return;
       clipHintShown = true;
       try { localStorage.setItem(LS_CLIPHINT, '1'); } catch (e) {}
-      toast([CLIP_HINT + ' to copy and paste', 'Ctrl+C stays as interrupt, the way a terminal expects']);
+      toast([CLIP_HINT + ' to copy and paste — Ctrl+C stays as interrupt, the way a terminal expects']);
     });
     // Look at the key **before** xterm handles it. true hands it through, false takes it for us.
     this.term.attachCustomKeyEventHandler((ev) => {
@@ -1240,7 +1246,7 @@ class Tile {
         joined = true;
         const n = ids.length;
         toast([{ b: 'grouped ' + n + (n > 1 ? ' windows' : ' window') },
-               'they move together — ' + (IS_MAC ? '⌥' : 'Alt') + '-drag takes one out, ' + KMOD + 'Z undoes this']);
+               '— they move together; ' + (IS_MAC ? '⌥' : 'Alt') + '-drag takes one out, ' + KMOD + 'Z undoes this']);
         armed = null;
       }
       // **Resizing inside a group re-lays the group out.** Growing a member pushed the others away
@@ -2462,7 +2468,7 @@ function settle(anchorId, opts) {
   // **No undo of its own any more.** The drag that caused it already took a snapshot, so one Ctrl Z
   // puts back the move and the push together — which is what a person means by "undo that".
   toast([{ b: t.nameEl.textContent || 'window' },
-         'moved ' + moves.length + (moves.length > 1 ? ' windows' : ' window') + ' aside',
+         'moved ' + moves.length + (moves.length > 1 ? ' windows' : ' window') + ' aside —',
          { d: KMOD + 'Z undoes it' }]);
 }
 
@@ -2845,7 +2851,7 @@ async function removeCanvas(id) {
     await api('DELETE', '/api/canvases/' + encodeURIComponent(id));
   } catch (e) {
     // Another browser may have opened a terminal meanwhile — then the daemon is right and we are late.
-    if (e.status === 409) { toast([e.message, 'close its terminals first, then try again']); return; }
+    if (e.status === 409) { toast([e.message + ' — close its terminals first, then try again']); return; }
     if (e.status === 404) return;                 // another browser removed it first — what was asked for happened
     toast(['remove canvas: ' + e.message]);
   }
@@ -3661,7 +3667,7 @@ function notifyTest() {
       tag: 'palmar-test' });
     n.onclick = () => { window.focus(); n.close(); };
   } catch (e) {
-    toast(['notifications were allowed, but the browser refused to show one', String(e.message || e)]);
+    toast(['notifications were allowed, but the browser refused to show one:', { d: String(e.message || e) }]);
   }
 }
 
@@ -3684,8 +3690,8 @@ async function toggleNotify() {
   // changing --port asks again.
   if (perm === 'default') { try { perm = await Notification.requestPermission(); } catch (e) { perm = 'denied'; } }
   if (perm !== 'granted') {
-    toast(['notifications are blocked for ' + location.origin,
-           perm === 'denied' ? 'the browser is refusing — allow them for this site in its settings'
+    toast(['notifications are blocked for ' + location.origin + ' —',
+           perm === 'denied' ? 'the browser is refusing; allow them for this site in its settings'
                              : 'allow them in the browser, then try again']);
     return;
   }
@@ -3716,9 +3722,9 @@ function checkProtocol(m) {
   protocolWarned = true;
   const older = v < PROTOCOL;
   toast([
-    'this page speaks protocol ' + PROTOCOL + ', the daemon speaks ' + (v === null ? '?' : v),
-    older ? 'the daemon is older — restart it after pulling' : 'this page is older',
-    m.daemon ? 'daemon ' + m.daemon : '',
+    'this page speaks protocol ' + PROTOCOL + ', the daemon speaks ' + (v === null ? '?' : v) + ' —',
+    older ? 'the daemon is older; restart it after pulling' : 'this page is older',
+    m.daemon ? { d: '(daemon ' + m.daemon + ')' } : '',
     // Every reply carries `Cache-Control: no-store`, so an ordinary reload really does fetch the new files —
     // this used to say "with a hard refresh", which asked for a gesture that was never needed.
     older ? '' : { a: 'reload', on: () => location.reload() },
@@ -3744,7 +3750,7 @@ function checkVersion(m) {
   if (daemonSeen === null) { daemonSeen = v; return false; }   // the attach itself is not news
   if (v === daemonSeen) return false;
   daemonSeen = v;
-  toast([{ b: 'palmar ' + v }, 'the daemon restarted on a new version — this screen is still the old one',
+  toast([{ b: 'palmar ' + v }, '— the daemon restarted on a new version; this screen is still the old one',
          { a: 'reload', on: () => location.reload() }]);
   return true;
 }
@@ -4302,7 +4308,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // (#18's 409) can only be exercised from the console. The daemon blocks it anyway, so having it here adds no risk.
                   // switchCanvas because the frames are drawn into the scroller rather than into a
                   // canvas, so what happens to them on a switch is a thing a test has to be able to ask.
-                  removeCanvas, watchInput, newTerminal, newCanvas, switchCanvas, openViewer, viewerId,
+                  removeCanvas, watchInput, newTerminal, newCanvas, switchCanvas, openViewer, viewerId, toast,
                   // Auto-tidy only runs on a pane disappearing, and that moment is hard to create from outside.
                   // Expose **the same function** the button calls, unchanged.
                   tidyCanvas,

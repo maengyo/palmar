@@ -3027,3 +3027,34 @@ class ViewerModes(unittest.TestCase):
                     break
         with open(path, encoding="utf-8") as fh:
             self.assertEqual(fh.read(), "mine\n", "Overwrite did not force it through")
+
+
+class Toasts(unittest.TestCase):
+    """A toast is one line of prose. It used to be a flex row with a gap between its parts, and two
+    plain strings in a row merged into one flex item with no gap at all — the notification toast read
+    "…:57891the browser is refusing" (user, 2026-09-15). Now the parts are laid end to end with a space
+    and the punctuation is the caller's."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def test_every_part_is_a_word_apart_from_the_next(self):
+        r = self.b.ev("""(()=>{window.palmar.toast(['blocked for http://x:1 —', 'the browser is refusing',
+                          {d:'why'}, {b:'bold'}, {a:'undo', on:()=>{}}]);
+          const t=document.querySelector('.toast');
+          return {text:t.textContent, shown:t.classList.contains('show'), display:getComputedStyle(t).display};})()""")
+        self.assertEqual(r["text"], "blocked for http://x:1 — the browser is refusing why bold undo")
+        self.assertTrue(r["shown"])
+        self.assertNotEqual(r["display"], "flex", "a flex toast merges adjacent text parts and loses the space")
+
+    def test_an_empty_part_leaves_no_gap_behind(self):
+        text = self.b.ev("window.palmar.toast(['a', '', null, 'b']); document.querySelector('.toast').textContent")
+        self.assertEqual(text, "a b")
