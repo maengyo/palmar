@@ -115,6 +115,7 @@ jobs:
       - name: the release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}      # no checkout in this job, so gh is told the repo
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -eux
