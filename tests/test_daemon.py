@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import urllib.error
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -1351,3 +1355,100 @@ class EditingAFile(unittest.TestCase):
         self.assertEqual(self.d.raw("POST", "/api/open", {"path": "/etc/hosts"})[0], 400)
         self.assertEqual(self.d.raw("POST", "/api/open", {"path": self.dir})[0], 400, "a folder was accepted")
         self.assertEqual(self.d.raw("POST", "/api/open", {"path": self.write("z.txt")}, token=False)[0], 403)
+
+
+def stderr_so_far(d, want, seconds=5.0):
+    """What a foreground daemon has said on stderr so far — polled, since the pipe never closes
+    while it runs. Stops as soon as `want` is in it."""
+    got = b""
+    end = time.time() + seconds
+    fd = d.proc.stderr.fileno()
+    while time.time() < end and want.encode() not in got:
+        r, _, _ = select.select([fd], [], [], 0.2)
+        if r:
+            got += os.read(fd, 65536)
+    return got.decode("utf-8", "replace")
+
+
+class WhenThePortIsTaken(unittest.TestCase):
+    """8801 belongs to something else — a palmar on Windows beside this one in WSL, another user's,
+    anything. It used to be the end (`could not bind`); now the next free port is taken and the
+    printout says so, because the person asked for palmar, not for a number (user, 2026-09-15)."""
+
+    def test_it_takes_the_next_free_port_and_says_so(self):
+        d = Daemon()
+        asked = d.port
+        blocker = socket.socket()
+        blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        blocker.bind(("127.0.0.1", asked))
+        blocker.listen(1)
+        self.addCleanup(blocker.close)
+        d.start()
+        self.addCleanup(d.stop)
+        self.assertNotEqual(d.port, asked)
+        self.assertTrue(asked < d.port <= asked + 20, "it went further than the twenty it is allowed")
+        with open(d.url_file, encoding="utf-8") as fh:
+            self.assertIn(":%d/" % d.port, fh.read(), "run/url does not name the port it is really on")
+        with open(os.path.join(os.path.dirname(d.url_file), "lock"), encoding="utf-8") as fh:
+            self.assertIn(":%d" % d.port, fh.read(), "the lock line still names the port it asked for — --doctor reads that")
+        said = stderr_so_far(d, "--stop")
+        self.assertIn("port %d was taken" % asked, said)
+        self.assertIn("on %d" % d.port, said)
+        # --stop finds it there: it goes by run/url, not by the number that was asked for.
+        from tests.helpers import PYTHON, REPO
+        r = subprocess.run([PYTHON, "-m", "palmar", "--stop"], cwd=REPO, capture_output=True, text=True,
+                           timeout=30, env=dict(os.environ, HOME=d.home, PYTHONPATH=REPO))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        d.proc.wait(timeout=10)
+
+    def test_the_printout_says_how_to_stop_and_where_the_address_is(self):
+        """The address alone was the whole printout, and the first question after it was how to stop
+        the thing (user, 2026-09-15)."""
+        d = Daemon().start()
+        self.addCleanup(d.stop)
+        said = stderr_so_far(d, "run/url")
+        self.assertIn("`palmar --stop` ends it", said)
+        self.assertIn("`palmar` again shows this address", said)
+        self.assertNotIn("port %d was taken" % d.port, said, "nothing to say about a port that was free")
+        out = d.proc.stdout   # stdout holds the address and only the address (docs/protocol.md)
+        r, _, _ = select.select([out.fileno()], [], [], 2.0)
+        self.assertTrue(r, "no address on stdout")
+        line = os.read(out.fileno(), 4096).decode("utf-8", "replace")
+        self.assertTrue(line.startswith("http://127.0.0.1:%d/?k=" % d.port), line)
+        self.assertEqual(len(line.strip().splitlines()), 1, "more than the address went to stdout")
+
+
+class TheKeyPage(unittest.TestCase):
+    """Two answers for a wrong address, because they are two situations. No key: the owner lost the
+    address. The wrong key: **another palmar's** address on this port — a palmar in WSL beside one on
+    Windows landed on the Windows one's port and was told to `cat run/url`, which named the wrong
+    daemon's file (user, 2026-09-15)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.d.stop()
+
+    def page(self, path):
+        base = self.d.url.split("/?", 1)[0]
+        try:
+            with urllib.request.urlopen(base + path, timeout=5) as f:
+                return f.status, f.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8", "replace")
+
+    def test_no_key_is_told_where_the_address_is(self):
+        code, body = self.page("/")
+        self.assertEqual(code, 403)
+        self.assertIn("needs the key", body)
+        self.assertNotIn("different palmar", body)
+
+    def test_a_wrong_key_is_told_it_is_another_daemon(self):
+        code, body = self.page("/?k=notthisone")
+        self.assertEqual(code, 403)
+        self.assertIn("different palmar", body)
+        self.assertIn("WSL beside one on Windows", body)
+        self.assertNotIn(self.d.url.split("k=", 1)[1], body, "the real key went out on the wrong-key page")

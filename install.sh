@@ -41,10 +41,56 @@ find_python() {
   return 1
 }
 
+# ── 1b. no Python: get one ────────────────────────────────────────────────────────────────
+# A machine with no python3 used to end here with "install one" (asked for 2026-09-15). The package
+# manager is found and the exact command shown; it runs only on a yes — from the terminal when there
+# is one (stdin is the pipe under `curl | sh`, so the question goes to /dev/tty and the answer comes
+# back from it), or from PALMAR_YES=1 when there is not. sudo asks for its password on the tty too.
+install_python() {
+  pm=""
+  for c in apt-get dnf yum zypper pacman apk; do
+    if command -v "$c" >/dev/null 2>&1; then pm="$c"; break; fi
+  done
+  case "$pm" in
+    apt-get) cmd="apt-get update && apt-get install -y python3" ;;
+    dnf)     cmd="dnf install -y python3" ;;
+    yum)     cmd="yum install -y python3" ;;
+    zypper)  cmd="zypper --non-interactive install python3" ;;
+    pacman)  cmd="pacman -S --noconfirm python" ;;
+    apk)     cmd="apk add python3" ;;
+    "")
+      if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+        die "no Python 3.9 or newer found. macOS has one at /usr/bin/python3 once the command line
+  tools are in: run \`xcode-select --install\`, then this again."
+      fi
+      die "no Python 3.9 or newer found, and no package manager I know (apt-get, dnf, yum, zypper,
+  pacman, apk). Install python3 your way, then run this again." ;;
+  esac
+  if [ "$(id -u)" != 0 ]; then
+    case "$pm" in
+      apt-get) cmd="sudo apt-get update && sudo apt-get install -y python3" ;;
+      *)       cmd="sudo $cmd" ;;
+    esac
+  fi
+  if [ -z "${PALMAR_YES:-}" ]; then
+    if [ -t 2 ] && [ -r /dev/tty ]; then
+      printf 'no Python 3.9 or newer here. Install one now with\n    %s\n? [Y/n] ' "$cmd" >&2
+      read -r ans </dev/tty || ans=n
+      case "$ans" in n*|N*) die "not installed. Run that yourself, then this again." ;; esac
+    else
+      die "no Python 3.9 or newer found. This would install one with
+    $cmd
+  Run that yourself and then this again — or run this with PALMAR_YES=1 to let it."
+    fi
+  fi
+  say "installing python3: $cmd"
+  sh -c "$cmd" || die "that did not go through. Install python3 your way, then run this again."
+  PY="$(find_python || true)"
+  [ -n "$PY" ] || die "python3 was installed, but no Python 3.9 or newer answers yet. Open a new shell and run this again."
+}
+
 PY="$(find_python || true)"
-[ -n "$PY" ] || die "no Python 3.9 or newer found.
-  palmar is pure Python and needs one to run. macOS has /usr/bin/python3 already;
-  on Linux install python3 from your package manager, then run this again."
+[ -n "$PY" ] || install_python
 say "using $("$PY" --version 2>&1) at $PY"
 
 # ── 2. get palmar onto disk ────────────────────────────────────────────────────────────────

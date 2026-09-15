@@ -60,7 +60,6 @@ const EVENT_PHRASE = {
 const GRID = 22, GAP = 12;                              // scan for free slots on the same 22px pitch as the dot grid
 const DEFAULT_W = 520, DEFAULT_H = 360;                 // ⑩ provisional default size
 const MIN_W = 220, MIN_H = 110;
-const LS_TILES = 'palmar-tiles';                        // ③ provisional
 const LS_THEME = 'palmar-theme';
 // Palettes — one choice per side, the browser's taste like the theme. The defaults (paper, earth)
 // are the tokens on :root and in the dark blocks and write nothing to the store.
@@ -156,7 +155,7 @@ let focused = null;           // id of the tile in front
 let maxed = null;             // the tile shown expanded
 let zTop = 10;
 let eventsWs = null, eventsRetry = 0;
-let layout = loadLayout();    // ③ provisional: { id: {x,y,w,h,z} }
+let layout = {};              // ③ { id: {x,y,w,h,z,…} } — what hello brings, nothing before it
 let saveTimer = null;
 // ⑪ canvases. The list, the order and the names are the daemon's; what is here is a copy. **Only current is the
 // browser's** — two windows have to be able to look at different canvases, so the daemon has no "current canvas" (protocol.md).
@@ -180,25 +179,21 @@ function el(tag, cls, text) {
   return e;
 }
 function cssVar(name) { return getComputedStyle(root).getPropertyValue(name).trim(); }
-function loadLayout() {
-  try { const v = JSON.parse(localStorage.getItem(LS_TILES) || '{}'); return v && typeof v === 'object' ? v : {}; }
-  catch (e) { return {}; }
-}
 //: ③ **decided (2026-09-14): the layout lives on the daemon.** Positions, sizes, z, text size and group
-//: membership are one object, kept in `~/.palmar/layout.json` and carried in the hello frame. The
-//: browser store is kept only as the hand-over — a daemon whose file is empty is given what this
-//: browser had — and as the fallback for a daemon too old to have the endpoint. Two browsers on one
-//: daemon then see one arrangement: grouping in Safari and switching to Chrome used to land on a
-//: board with no groups and every window somewhere else (user, 2026-09-14).
+//: membership are one object, kept in `~/.palmar/layout.json` and carried in the hello frame. Two
+//: browsers on one daemon then see one arrangement: grouping in Safari and switching to Chrome used to
+//: land on a board with no groups and every window somewhere else (user, 2026-09-14).
+//: **The browser keeps no copy (2026-09-15).** It kept one as a hand-over for a daemon whose file was
+//: empty — and localStorage is per origin, so two daemons on one address share it: the board of the
+//: palmar on Windows, PDF window and all, was handed to the fresh one started in WSL (user, 2026-09-15).
+//: A different key is a different daemon, and a different daemon starts with nothing.
+try { localStorage.removeItem('palmar-tiles'); } catch (e) {}   // the copy older pages left behind
 const CLIENT = Math.random().toString(36).slice(2, 10);   // who saved — a page ignores its own broadcast
 let layoutRev = 0;
 let layoutOnDaemon = null;        // null until hello says; false when the daemon predates the endpoint
 function saveLayout() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try { localStorage.setItem(LS_TILES, JSON.stringify(layout)); } catch (e) {}
-    pushLayout();
-  }, 150);
+  saveTimer = setTimeout(pushLayout, 150);
 }
 async function pushLayout() {
   if (layoutOnDaemon === false) return;
@@ -209,14 +204,12 @@ async function pushLayout() {
     if (e.status === 404) layoutOnDaemon = false;   // an older daemon: the browser store carries on alone
   }
 }
-// What hello brought. Theirs wins when they have one; when they have none and this browser does, it
-// is handed over — that is the migration, and it happens once.
+// What hello brought is the board — an empty one included.
 function takeLayout(m) {
   if (!m || typeof m.layout !== 'object' || m.layout === null) { layoutOnDaemon = false; return; }
   layoutOnDaemon = true;
   layoutRev = Math.max(layoutRev, m.layout_rev || 0);
-  if (Object.keys(m.layout).length) { layout = m.layout; placeAll(); }
-  else if (Object.keys(layout).length) pushLayout();
+  layout = m.layout; placeAll();
 }
 // Another browser saved. **Not while a hand is down here** — our own save follows the release and has
 // the last word anyway, and moving the window under a hand is the one thing that must not happen.

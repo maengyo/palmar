@@ -255,7 +255,21 @@ if ($found -and $src) {
 }
 
 if ($Check) { Say 'Nothing was written (-Check).'; exit 0 }
-if (-not $found) { Die "no Python 3.9 or newer. Install one from python.org, or use WSL." }
+if (-not $found) {
+  # -- 2b. no Python: get one ----------------------------------------------------
+  # winget ships with Windows 10/11, and python.org's package installs per user, no admin (asked for
+  # 2026-09-15). A locked-down machine may refuse it; then the sentence says what to do by hand.
+  $wg = Get-Command winget.exe -ErrorAction SilentlyContinue
+  if (-not $wg) { Die "no Python 3.9 or newer, and no winget to fetch one. Install it from python.org (tick 'Add python.exe to PATH'), or use WSL." }
+  if (-not $Yes) {
+    $a = Read-Host 'No Python 3.9 or newer here. Install Python 3.13 from python.org with winget (per user, no admin)? [y/N]'
+    if ($a -notmatch '^[yY]') { Die "no Python 3.9 or newer. Install one from python.org (tick 'Add python.exe to PATH'), or use WSL." }
+  }
+  Say 'installing Python 3.13 with winget ...'
+  & $wg.Source install -e --id Python.Python.3.13 --scope user --accept-package-agreements --accept-source-agreements --disable-interactivity
+  if ($LASTEXITCODE -eq 0) { $script:found = Find-Python; $found = $script:found }
+  if (-not $found) { Die "winget ran, but no Python 3.9 or newer answers yet. Open a new PowerShell and run this again." }
+}
 if (-not $src) {
   # Not in a checkout: fetch the tree and keep it. The old tree, if any, is replaced whole.
   $srcRoot = Join-Path $Prefix 'src'

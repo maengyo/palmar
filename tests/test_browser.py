@@ -919,12 +919,13 @@ class PushAside(unittest.TestCase):
         time.sleep(0.4)
         after = self.b.ev("""(()=>{const P=window.palmar,L=P.layout();
           const by=(n)=>[...P.tiles.values()].find(t=>t.s.name===n);
-          return {a:[L[by('a').id].x,L[by('a').id].y], b:[L[by('b').id].x,L[by('b').id].y],
-                  saved: JSON.parse(localStorage.getItem('palmar-tiles')||'{}')[by('b').id]};})()""")
+          return {a:[L[by('a').id].x,L[by('a').id].y], b:[L[by('b').id].x,L[by('b').id].y], bid: by('b').id};})()""")
         self.assertEqual(after["b"], before["b"], "the pushed window did not go back")
         self.assertEqual(after["a"], before["a"], "the window I dragged did not go back")
-        self.assertEqual([after["saved"]["x"], after["saved"]["y"]], before["b"],
-                         "it moved on screen but left the old position saved")
+        time.sleep(0.5)                       # the save is debounced; the daemon is the only store now
+        saved = self.d.get("/api/layout")
+        saved = saved.get("layout", saved)[after["bid"]]
+        self.assertEqual([saved["x"], saved["y"]], before["b"], "it moved on screen but left the old position saved")
 
     def test_growing_a_window_pushes_its_neighbour(self):
         """Resize goes through the same moment a drag does — the hand lets go, then the overlap is
@@ -3058,3 +3059,47 @@ class Toasts(unittest.TestCase):
     def test_an_empty_part_leaves_no_gap_behind(self):
         text = self.b.ev("window.palmar.toast(['a', '', null, 'b']); document.querySelector('.toast').textContent")
         self.assertEqual(text, "a b")
+
+
+class ADifferentKeyIsADifferentDaemon(unittest.TestCase):
+    """localStorage is per origin, and two daemons on one port are one origin. The browser used to
+    keep a copy of the board as a hand-over for a daemon whose file was empty — and handed the board
+    of the palmar on Windows, PDF window and all, to the fresh one started in WSL on the same port
+    (user, 2026-09-15). A different key is a different daemon, and it starts with nothing."""
+
+    def test_a_fresh_daemon_on_the_same_port_starts_with_nothing(self):
+        first = Daemon().start()
+        b = Browser().start()
+        self.addCleanup(b.stop)
+        b.open(first.url)
+        time.sleep(1.0)
+        path = os.path.join(first.home, "notes.md")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("# hello\n")
+        b.ev("window.palmar.openViewer(%s); 1" % json.dumps(path))
+        for _ in range(30):
+            time.sleep(0.2)
+            if any(k.startswith("v:") for k in first.get("/api/layout")["layout"]):
+                break
+        else:
+            first.stop()
+            self.fail("the viewer never reached the first daemon's board")
+        port = first.port
+        first.stop()
+        fresh = Daemon()
+        fresh.port = port                      # the same origin, as far as the browser can tell
+        fresh.start()
+        self.addCleanup(fresh.stop)
+        self.assertEqual(fresh.port, port, "the port was not free again; the test cannot say anything")
+        b.open(fresh.url)
+        time.sleep(1.5)
+        r = b.ev("""(()=>{const P=window.palmar; return {
+          viewers: [...P.tiles.values()].filter(t => t.s && t.s.kind === 'file').length,
+          keys: Object.keys(P.layout()).filter(k => k.startsWith('v:')),
+          copy: localStorage.getItem('palmar-tiles')};})()""")
+        self.assertEqual(r["viewers"], 0, "a window from the previous daemon came back")
+        self.assertEqual(r["keys"], [], "the previous daemon's board leaked through the browser")
+        self.assertIsNone(r["copy"], "the browser still keeps a copy of the board")
+        time.sleep(0.5)
+        self.assertEqual([k for k in fresh.get("/api/layout")["layout"] if k.startswith("v:")], [],
+                         "and it was pushed to the fresh daemon")

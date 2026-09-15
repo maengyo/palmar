@@ -36,8 +36,8 @@ step, no packages, no network at runtime.
 
 ## Install
 
-One line. Python is the only thing it needs already — macOS ships `/usr/bin/python3`, most Linux
-has one, Windows has python.org's.
+One line. Python is the only thing it needs, and if there is none the installer gets one — with your
+package manager on Linux (it asks first), with winget on Windows; macOS has `/usr/bin/python3`.
 
 macOS · Linux:
 
@@ -73,6 +73,7 @@ palmar
 It prints its address, opens your browser and comes straight back — the daemon detaches, so closing
 the terminal does not take your shells with it. Run `palmar` again and you get the same address
 rather than a second daemon; `palmar --stop` ends it. Lost the address: `cat ~/.palmar/run/url`.
+If 8801 is busy — a palmar on Windows beside one in WSL, say — it takes the next free port and says so.
 
 There is also a **741 KB** program that shows the same thing in its own window
 ([`app/`](app/README.md)) — the OS's own webview, not Electron. Both at once is fine: one daemon per

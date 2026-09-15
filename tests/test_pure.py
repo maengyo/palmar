@@ -630,5 +630,53 @@ class ReadingTheLockLine(unittest.TestCase):
         self.assertIsInstance(why, OSError)
 
 
+class WindowsNextDoor(unittest.TestCase):
+    """A palmar in WSL beside one on Windows. WSL2's loopback is its own, so both bind 8801 and the
+    Windows browser reaches the Windows one — which told the WSL one's key it was wrong, and a
+    distro without the Windows PATH opened no browser at all (user, 2026-09-15). None of it can be
+    run on the Mac this is written on, so every piece is pure and measured here."""
+
+    NETSTAT = ("\nActive Connections\n\n  Proto  Local Address          Foreign Address        State\n"
+               "  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING\n"
+               "  TCP    127.0.0.1:8801         0.0.0.0:0              LISTENING\n"
+               "  TCP    127.0.0.1:8801         127.0.0.1:52011        ESTABLISHED\n"
+               "  TCP    [::1]:8803             [::]:0                 \uc218\uc2e0 \ub300\uae30\n"
+               "  UDP    0.0.0.0:8802           *:*\n")
+
+    def test_netstat_names_the_ports_windows_holds(self):
+        self.assertTrue(D.netstat_names_port(self.NETSTAT, 8801))
+        self.assertTrue(D.netstat_names_port(self.NETSTAT, 135))
+        self.assertTrue(D.netstat_names_port(self.NETSTAT, 8803), "the state word is localised; the address is not")
+        self.assertFalse(D.netstat_names_port(self.NETSTAT, 8802), "UDP is not a listener a browser can reach")
+        self.assertFalse(D.netstat_names_port(self.NETSTAT, 880), "a prefix of a port is not the port")
+        self.assertFalse(D.netstat_names_port("", 8801))
+
+    def test_off_wsl_windows_holds_nothing(self):
+        with mock.patch.object(D, "wsl_kind", return_value=""):
+            self.assertFalse(D.windows_holds_port(8801))
+
+    S32 = "/mnt/c/Windows/System32"
+
+    def test_wsl_finds_windows_programs_by_their_full_path(self):
+        by_path = lambda n: n if n == self.S32 + "/cmd.exe" else None   # noqa: E731 - a which that knows one file
+        argv = D.browser_argv(URL, platform="linux", kind="wsl", env={}, which=by_path, sys32=self.S32)
+        self.assertEqual(argv, [self.S32 + "/cmd.exe", "/c", "start", "", URL])
+        both = lambda n: n if n.startswith(self.S32) else None   # noqa: E731
+        argv = D.browser_argv(URL, platform="linux", kind="wsl", env={}, which=both, sys32=self.S32)
+        self.assertEqual(argv[0], self.S32 + "/WindowsPowerShell/v1.0/powershell.exe", "powershell before cmd, as by name")
+        self.assertIsNone(D.browser_argv(URL, platform="linux", kind="wsl", env={}, which=lambda n: None, sys32=""))
+
+    def test_the_lines_after_the_address(self):
+        notes = D.start_notes("opening a browser with wslview", "port 8801 was taken (8801 is held on the Windows side) — this one is on 8802")
+        self.assertEqual(len(notes), 4)
+        self.assertTrue(notes[0].startswith("port 8801 was taken"), "the moved port comes first — it is the surprise")
+        self.assertIn("wslview", notes[1])
+        self.assertIn("palmar --stop", notes[2])
+        self.assertIn("run/url", notes[3])
+        plain = D.start_notes()
+        self.assertEqual(len(plain), 2, "nothing to say about the port or the browser: two lines")
+        self.assertTrue(D.start_notes(running=True)[0].startswith("already running"))
+
+
 if __name__ == "__main__":
     unittest.main()

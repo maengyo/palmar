@@ -25,6 +25,7 @@ loop over a self-pipe, so the single thread stays single. A PTY hitting EOF arri
 from __future__ import annotations
 
 import argparse
+import errno
 import os
 import sys
 
@@ -1596,13 +1597,13 @@ def ensure_private_dir(p: Path) -> None:
         os.mkdir(p, 0o700)
         st = os.lstat(p)
     if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
-        raise SystemExit(f"palmard: {p} 는 디렉터리여야 한다 (심볼릭 링크 불가, #29)")
+        raise SystemExit(f"palmard: {p} must be a directory, not a symlink (#29)")
     if not POSIX_PERMS:
         return
     if st.st_uid != os.getuid():
-        raise SystemExit(f"palmard: {p} 의 소유자가 내가 아니다 (#29)")
+        raise SystemExit(f"palmard: {p} is not owned by me (#29)")
     if st.st_mode & 0o022:
-        raise SystemExit(f"palmard: {p} 에 group/other 쓰기 비트가 있다 — chmod 700 뒤 다시 (#29)")
+        raise SystemExit(f"palmard: {p} is writable by group or others — chmod 700 it and try again (#29)")
     if st.st_mode & 0o077:
         os.chmod(p, 0o700)        # something merely readable like 0755 is not refused, it is tightened
 
@@ -2135,9 +2136,9 @@ def acquire_single_instance_lock() -> None:
         # **The key is never written into the lock file** — `--doctor` prints this line as-is, and that
         # output exists to be pasted (#14). So we do not hand out the whole address here either, only where
         # to get it back. Otherwise we would point at a keyless address, and opening that gives 403 (measured).
-        raise SystemExit(f"palmard: 이미 다른 palmard 가 {PALMAR_DIR} 를 쓰고 있는데 닿지 않는다"
-                         f"{' — ' + prev if prev else ''} (데몬은 HOME 당 하나)\n"
-                         f"        그 데몬의 주소: cat {URL_FILE}")
+        raise SystemExit(f"palmard: another palmard holds {PALMAR_DIR} but does not answer"
+                         f"{' — ' + prev if prev else ''} (one daemon per HOME)\n"
+                         f"        its address: cat {URL_FILE}")
     os.ftruncate(fd, 0)
     os.write(fd, f"pid {os.getpid()} http://127.0.0.1:{PORT[0]}\n".encode())
     LOCK_FH[0] = fd     # kept open while the daemon lives — the lock drops when it closes
@@ -2629,13 +2630,28 @@ code{background:#efe9e0;padding:.15em .4em;border-radius:3px}
 so a bookmark keeps working.</p>
 """
 
+#: Shown when the address carries a key, and it is not this daemon's. That is not a lost address — it
+#: is **another palmar's** address on this port: one started in WSL beside one on Windows, one per
+#: user, or a stale bookmark from a HOME that was wiped. Say that, and where the right one is.
+WRONG_KEY_PAGE = b"""<!doctype html><meta charset="utf-8"><title>palmar</title>
+<style>body{font:15px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;max-width:34rem;
+margin:12vh auto;padding:0 1.5rem;color:#2b2723;background:#faf7f2}
+code{background:#efe9e0;padding:.15em .4em;border-radius:3px}
+@media(prefers-color-scheme:dark){body{color:#e8e2d6;background:#191714}code{background:#2a2621}}</style>
+<h1>palmar</h1><p>The key in this address belongs to a <b>different palmar</b> than the one answering here.</p>
+<p>Two of them can meet on one address &mdash; one started in WSL beside one on Windows, or one per user.
+The one you meant printed its own address when it started; <code>palmar</code> prints it again, and so does:</p>
+<p><code>cat ~/.palmar/run/url</code></p>
+<p>If this is the one you meant, its key changed &mdash; open the address it printed, not the bookmark.</p>
+"""
+
 
 def key_ok(q: dict) -> bool:
     """Is `?k=` right? Compared as bytes — `hmac.compare_digest` raises TypeError on a non-ASCII str."""
     return hmac.compare_digest(qget(q, "k", "").encode("utf-8", "surrogatepass"), KEY[0].encode())
 
 
-def serve_static(path: str, head_only: bool = False, has_key: bool = False) -> bytes:
+def serve_static(path: str, head_only: bool = False, has_key: bool = False, key_given: bool = False) -> bytes:
     name = unquote(path).lstrip("/") or "index.html"
     try:
         f = (WEB / name).resolve()
@@ -2661,7 +2677,8 @@ def serve_static(path: str, head_only: bool = False, has_key: bool = False) -> b
         # `curl http://127.0.0.1:8801/` and opened a real shell (measured 2026-09-09, #14). A 0600 token file
         # does not help — the same secret went out over a socket. The other static files carry no secret.
         if not has_key:
-            return http(403, NO_KEY_PAGE, "text/html; charset=utf-8", head_only=head_only)
+            return http(403, WRONG_KEY_PAGE if key_given else NO_KEY_PAGE,
+                        "text/html; charset=utf-8", head_only=head_only)
         tag = f'<script>window.PALMAR_TOKEN="{TOKEN[0]}"</script>'.encode()
         body = body.replace(b"</head>", tag + b"</head>", 1) if b"</head>" in body else tag + body
     ctype = CONTENT_TYPES.get(suffix, "application/octet-stream")
@@ -3343,7 +3360,8 @@ async def handle_request(reader, writer) -> None:
     if method not in ("GET", "HEAD"):
         writer.write(http(405))
         return
-    writer.write(serve_static(path, head_only=(method == "HEAD"), has_key=key_ok(q)))   # HEAD carries no body (#8)
+    writer.write(serve_static(path, head_only=(method == "HEAD"), has_key=key_ok(q),
+                              key_given=bool(qget(q, "k", ""))))   # HEAD carries no body (#8)
 
 
 async def handle(reader, writer) -> None:
@@ -3431,7 +3449,7 @@ def wsl_kind(env=None, osrelease=None, wslg=None) -> str:
     return "wsl"
 
 
-def browser_argv(url: str, *, platform=None, kind=None, env=None, which=None):
+def browser_argv(url: str, *, platform=None, kind=None, env=None, which=None, sys32=None):
     """The command that hands `url` to whatever opens links, or None if this machine offers no way.
 
     Pure: the platform, the WSL kind, the environment and "is this program here" all arrive as
@@ -3461,13 +3479,19 @@ def browser_argv(url: str, *, platform=None, kind=None, env=None, which=None):
         # No wslu. Both of these reach the Windows default browser. **The URL holds the key**, so it
         # lands on a Windows command line where that user's own processes can read it — the same
         # person, so the same boundary argv already is on this side (docs/decisions.md).
-        if which("powershell.exe"):
-            return ["powershell.exe", "-NoProfile", "-NonInteractive",
-                    "-Command", "Start-Process", url]
-        if which("cmd.exe"):
+        # By name first, then by their full path under System32: the name only resolves when the
+        # Windows PATH is appended to the Linux one, and a distro with that off opened nothing
+        # (user, 2026-09-15).
+        s32 = windows_system32() if sys32 is None else sys32
+        ps = ("powershell.exe" if which("powershell.exe")
+              else s32 and which(s32 + "/WindowsPowerShell/v1.0/powershell.exe"))
+        if ps:
+            return [ps, "-NoProfile", "-NonInteractive", "-Command", "Start-Process", url]
+        cmd = "cmd.exe" if which("cmd.exe") else s32 and which(s32 + "/cmd.exe")
+        if cmd:
             # The empty string is `start`'s title argument. Without it the quoted URL becomes the
             # title and nothing opens — the classic `start "http://…"` bug.
-            return ["cmd.exe", "/c", "start", "", url]
+            return [cmd, "/c", "start", "", url]
         return None
     if platform.startswith("linux"):
         for b in LINUX_BROWSERS:
@@ -3478,16 +3502,18 @@ def browser_argv(url: str, *, platform=None, kind=None, env=None, which=None):
     return None
 
 
-def open_browser(url: str) -> bool:
-    """Hand the address to a browser and do not wait.
+def open_browser(url: str) -> str:
+    """Hand the address to a browser and do not wait. Returns one line saying how that went, for
+    the printout next to the address.
 
     **Never raises.** Failing to open one is not a reason for the daemon not to run: the address is
     on stdout and in run/url either way. Everything it says goes to stderr, because stdout's last
     line is the address and that is a contract (docs/protocol.md)."""
     argv = browser_argv(url)
     if not argv:
+        where = " — on Windows, for a palmar in WSL" if wsl_kind() else ""
         log("found no way to open a browser — open the address above yourself")
-        return False
+        return "no browser found here — open the address yourself" + where
     try:
         # start_new_session so the browser does not die with the daemon and never reaches for the
         # terminal; the pipes are closed so it cannot write over the address that was just printed.
@@ -3495,10 +3521,154 @@ def open_browser(url: str) -> bool:
                          stderr=subprocess.DEVNULL, start_new_session=True)
     except OSError as e:
         log(f"could not open a browser with {Path(argv[0]).name} ({e}) — open the address above yourself")
-        return False
+        return f"could not start {Path(argv[0]).name} ({e}) — open the address yourself"
     # **Name the program, never the address** — the address carries the key.
     log(f"opening a browser with {Path(argv[0]).name} (--no-browser turns this off)")
+    return f"opening a browser with {Path(argv[0]).name} (--no-browser turns this off)"
     return True
+
+
+#: How far past the asked-for port to look before giving up. Twenty is more neighbours than any
+#: machine has palmars, and small enough that "it is on 8803" is still a number a person can hold.
+PORT_TRIES = 20
+
+
+def windows_system32() -> str:
+    """Where Windows's own programs are, seen from inside WSL — `''` when that cannot be found.
+
+    Interop lets WSL run cmd.exe and friends, but only finds them by name when the Windows PATH is
+    appended to the Linux one, and a locked-down or hand-tuned distro turns that off
+    (`appendWindowsPath=false`) — which is why a `palmar` in Ubuntu printed an address and opened
+    nothing (user, 2026-09-15). The C: drive's mount is read from /proc/mounts, with /mnt/c as the
+    usual answer when it says nothing."""
+    roots = []
+    try:
+        for line in Path("/proc/mounts").read_text("utf-8", "replace").splitlines():
+            f = line.split()
+            # /proc/mounts escapes the backslash of `C:\` as \134.
+            if len(f) >= 3 and f[0].replace("\\134", "\\").rstrip("\\").upper() == "C:":
+                roots.append(f[1])
+    except OSError:
+        pass
+    for r in roots + ["/mnt/c"]:
+        p = Path(r) / "Windows" / "System32"
+        if (p / "cmd.exe").is_file():
+            return str(p)
+    return ""
+
+
+def netstat_names_port(text: str, port: int) -> bool:
+    """Does this `netstat -an -p tcp` output show a local socket on `port`? Pure — the text is
+    handed in, so it is measured without a Windows (tests/test_pure.py).
+
+    The state word is not looked at: only the local-address column, which is the same in every
+    language Windows speaks. An established client socket on this port would count too, but clients
+    take ephemeral ports from 49152 up and this range is far below that."""
+    tail = ":%d" % port
+    for line in text.splitlines():
+        f = line.split()
+        if len(f) >= 2 and f[0].upper() == "TCP" and f[1].endswith(tail):
+            return True
+    return False
+
+
+def windows_holds_port(port: int) -> bool:
+    """Under WSL: is something on the **Windows** side already on 127.0.0.1:`port`?
+
+    WSL2's loopback is its own, so a bind here succeeds while a Windows program holds the same port —
+    and the Windows browser, sent to 127.0.0.1:8801, reaches the Windows one. That is how a palmar
+    started in Ubuntu opened the page of the palmar on Windows and was told its key was wrong
+    (user, 2026-09-15). Windows's own netstat, run through interop, sees Windows's sockets."""
+    if not wsl_kind():
+        return False
+    text = WINDOWS_NETSTAT[0]
+    if text is None:
+        text = ""
+        exe = shutil.which("netstat.exe") or shutil.which("NETSTAT.EXE")
+        if not exe:
+            s32 = windows_system32()
+            exe = str(Path(s32) / "NETSTAT.EXE") if s32 else ""
+        if exe and Path(exe).is_file():
+            try:
+                text = subprocess.run([exe, "-an", "-p", "tcp"], capture_output=True, timeout=6,
+                                      stdin=subprocess.DEVNULL).stdout.decode("utf-8", "replace")
+            except (OSError, subprocess.SubprocessError):
+                text = ""
+        WINDOWS_NETSTAT[0] = text
+    return netstat_names_port(text, port)
+
+
+WINDOWS_NETSTAT = [None]     # one netstat per start, not one per candidate port
+
+
+async def bind_somewhere(handle, port: int):
+    """127.0.0.1:`port`, or the next free port after it — and a sentence for the printout when it moved.
+
+    A taken port used to be the end: `palmard: could not bind`. But the person asked for palmar, not
+    for 8801, and two palmars on one machine — one on Windows and one in WSL, or one per user — is an
+    ordinary thing. The address they get is in the printout and in run/url either way, and `palmar`
+    typed again shows it; only a bookmark on the old number goes stale, and the note says so
+    (user, 2026-09-15). Never opened beyond 127.0.0.1 — there is no option for the host (#29)."""
+    why = ""
+    for p in range(port, port + PORT_TRIES):
+        if windows_holds_port(p):
+            why = "%d is held on the Windows side" % p
+            continue
+        try:
+            server = await asyncio.start_server(handle, "127.0.0.1", p)
+        except OSError as e:
+            if e.errno not in (errno.EADDRINUSE, errno.EACCES):
+                raise SystemExit(f"palmard: could not bind 127.0.0.1:{p} — {e.strerror or e}")
+            why = "%d is in use" % p
+            continue
+        PORT[0] = p
+        if p == port:
+            return server, ""
+        note_lock_line()
+        log(f"port {port} was taken ({why}) — bound {p} instead")
+        return server, (f"port {port} was taken ({why}) — this one is on {p}; "
+                        f"a bookmark on {port} will not reach it")
+    raise SystemExit(f"palmard: no free port from {port} to {port + PORT_TRIES - 1} on 127.0.0.1 ({why})")
+
+
+def note_lock_line():
+    """Rewrite run/lock's one line once the port is known — it is written before the bind, and
+    `--doctor` reads the port out of it."""
+    fd = LOCK_FH[0]
+    if fd is None:
+        return
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        os.write(fd, f"pid {os.getpid()} http://127.0.0.1:{PORT[0]}\n".encode())
+    except OSError:
+        pass
+
+
+def url_file_for_people() -> str:
+    """`~/.palmar/run/url`, or the whole path when HOME is not above it."""
+    try:
+        return "~/" + URL_FILE.relative_to(Path.home()).as_posix()
+    except ValueError:
+        return str(URL_FILE)
+
+
+def start_notes(browser_note: str = "", port_note: str = "", running: bool = False) -> list:
+    """The few lines after the address — what a person needs at the moment they have it.
+
+    The printout was the address alone, and the first thing asked after it was how to stop the
+    thing (user, 2026-09-15). Three lines, stderr, after the address: stdout's last line is the
+    address and that is a contract (docs/protocol.md)."""
+    out = []
+    if running:
+        out.append("already running — this is that daemon's address (one daemon per HOME)")
+    if port_note:
+        out.append(port_note)
+    if browser_note:
+        out.append(browser_note)
+    out.append("it keeps running after this terminal closes — `palmar --stop` ends it, shells and all")
+    out.append("`palmar` again shows this address; so does `cat %s`" % url_file_for_people())
+    return out
 
 
 async def main(port: int, open_page: bool = True) -> None:
@@ -3517,9 +3687,8 @@ async def main(port: int, open_page: bool = True) -> None:
         # **announce, not print.** Detached, stdout is a log file and the only thing the person who
         # typed the command can still see is the pipe. This path is the ordinary one for a second
         # `palmar`, so sending its address down the log was the first thing detaching broke.
-        announce(e.url)
-        if open_page:
-            open_browser(e.url)
+        how = open_browser(e.url) if open_page else ""
+        announce(e.url, start_notes(how, "", running=True))
         return
     # **Canvases come back on their own; terminals are offered.** A canvas is data — restoring it
     # surprises nobody. A terminal is a process, and starting eight of them is a thing a person
@@ -3549,11 +3718,8 @@ async def main(port: int, open_page: bool = True) -> None:
         log(f"the board came back from {LAYOUT_FILE.name} — {len(registry.layout)} window(s)")
     loop = asyncio.get_running_loop()
     reaper.install(loop)
-    try:
-        # Never opened beyond 127.0.0.1 — the rule is that there is no option to change the host (#29).
-        server = await asyncio.start_server(handle, "127.0.0.1", port)
-    except OSError as e:
-        raise SystemExit(f"palmard: 127.0.0.1:{port} 에 묶지 못했다 — {e.strerror or e}")
+    server, port_note = await bind_somewhere(handle, port)
+    port = PORT[0]
     stop = loop.create_future()
     # Handed to the one HTTP route that can ask for a shutdown, so it goes out the same door as Ctrl-C.
     STOP_NOW[0] = lambda: None if stop.done() else stop.set_result(None)
@@ -3575,7 +3741,7 @@ async def main(port: int, open_page: bool = True) -> None:
         except (NotImplementedError, AttributeError, ValueError):
             signal.signal(sig, lambda *_: loop.call_soon_threadsafe(_stop_now))
     log(f"palmard pid {os.getpid()}  shell={os.environ.get('SHELL') or '/bin/sh'}  web={WEB}"
-        f"{'' if (WEB / 'index.html').is_file() else ' (index.html 없음 — 자리표를 낸다)'}")
+        f"{'' if (WEB / 'index.html').is_file() else ' (no index.html — serving a placeholder)'}")
     # The last line — this is all the user reads to get started. **The key is attached** (#14): only this
     # address gives you the page. The key persists, so this address is the same on the next start — bookmark it.
     url = f"http://127.0.0.1:{port}/?k={KEY[0]}"
@@ -3584,11 +3750,11 @@ async def main(port: int, open_page: bool = True) -> None:
         write_private(URL_FILE, url.encode() + b"\n", 0o600)
     except OSError as e:
         log(f"could not write run/url — {e}")
-    announce(url)
-    # After the address, never before: if it cannot be shown the person still has it, and everything
-    # this says goes to stderr so stdout's last line stays the address (docs/protocol.md).
-    if open_page:
-        open_browser(url)
+    # The browser is asked first so the printout can say how that went — open_browser never raises and
+    # never waits, so the address is not held up by it. Everything but the address goes to stderr, so
+    # stdout's last line stays the address (docs/protocol.md).
+    how = open_browser(url) if open_page else ""
+    announce(url, start_notes(how, port_note))
 
     # Polled rather than hooked into every broadcast: what it watches is the *directory* a pane sits
     # in, which changes with a `cd` that may print nothing and fire no event. Ten seconds is the most
@@ -3886,13 +4052,19 @@ def _daemon_hello_version(port: int, token: str):
 ANNOUNCE = [None]
 
 
-def announce(line: str) -> None:
+def announce(line: str, notes=()) -> None:
+    """The address, and the few lines that go with it. Detached, all of it goes down the pipe to the
+    process the person ran, which prints the address on stdout and the notes on stderr; in the
+    foreground the same split happens right here."""
+    notes = [n for n in notes if n]
     fd = ANNOUNCE[0]
     if fd is None:
         print(line, flush=True)
+        for n in notes:
+            print("  " + n, file=sys.stderr, flush=True)
         return
     try:
-        os.write(fd, line.encode() + b"\n")
+        os.write(fd, "\n".join([line] + notes).encode() + b"\n")
         os.close(fd)
     except OSError:
         pass
@@ -3942,6 +4114,13 @@ def detached_no_fork(port: int, open_page: bool) -> int:
             url = ""
         if url.startswith("http://") and daemon_answers(url):
             print(url, flush=True)
+            # No pipe on this side, so the notes are composed here. The port is read back out of
+            # the address: a moved one is the one thing worth saying about it.
+            m = re.search(r":(\d+)/", url)
+            got = int(m.group(1)) if m else port
+            for n in start_notes("", "" if got == port else
+                                 f"port {port} was taken — this one is on {got}; a bookmark on {port} will not reach it"):
+                print("  " + n, file=sys.stderr, flush=True)
             return 0
         if child.poll() is not None:
             # It is gone. Whatever it had to say went to the log, so point at that rather than
@@ -3983,7 +4162,10 @@ def detached(port: int, open_page: bool) -> int:
         if not said.startswith("http://"):
             print(said, file=sys.stderr)        # it failed, and this is why
             return 1
-        print(said, flush=True)
+        first, *notes = said.splitlines()
+        print(first, flush=True)                # stdout: the address and nothing else
+        for n in notes:
+            print("  " + n, file=sys.stderr, flush=True)
         return 0
 
     # ── the daemon, from here on ───────────────────────────────────────────
@@ -4012,7 +4194,7 @@ def detached(port: int, open_page: bool) -> int:
     except SystemExit as e:   # noqa: PERF203 - three separate reports, not one
         # The refusals — a lock somebody holds, a port in use — are SystemExit with a sentence. The
         # person who typed the command is on the other end of that pipe and has nothing else to read.
-        announce(str(e.code) if e.code and not isinstance(e.code, int) else "palmar: 뜨지 못했다")
+        announce(str(e.code) if e.code and not isinstance(e.code, int) else "palmar: it did not come up")
         os._exit(1)
     except BaseException as e:
         announce("palmar: %s: %s" % (type(e).__name__, e))
@@ -4022,24 +4204,24 @@ def detached(port: int, open_page: bool) -> int:
 
 def cli() -> None:
     """The `palmar` command and `python3 -m palmar` both land here."""
-    ap = argparse.ArgumentParser(prog="palmar", description="palmar 데몬. 127.0.0.1 에만 묶인다.")
-    ap.add_argument("--port", type=int, default=8801)
+    ap = argparse.ArgumentParser(prog="palmar", description="the palmar daemon — bound to 127.0.0.1 only")
+    ap.add_argument("--port", type=int, default=8801, help="the port to ask for; the next free one is taken when it is busy")
     ap.add_argument("--version", action="version", version="palmar " + __version__)
     ap.add_argument("--doctor", action="store_true",
-                    help="이 코드·도는 데몬·판마다의 상태를 찍고 나간다")
+                    help="print what this code, the running daemon and each pane look like, then exit")
     # The address is printed either way. palmar's own window is a separate program (app/) that
     # passes --no-browser and loads the address itself.
     ap.add_argument("--no-browser", action="store_true",
-                    help="주소만 찍고 브라우저는 열지 않는다 (앱이 쓰는 길)")
+                    help="print the address only, open no browser (what the app uses)")
     # Closing a window does not stop the daemon — it holds live shells, and that is the point. So
     # there has to be a way to say stop, and it is this one (asked for 2026-09-11).
     ap.add_argument("--stop", action="store_true",
-                    help="이 HOME 의 데몬을 멈춘다 (안의 셸도 같이 죽는다)")
+                    help="stop this HOME's daemon (the shells in it die with it)")
     # **Detached is the default**, because the daemon outliving the terminal is the point of it
     # (principle 2). --foreground is for developing on it and for the tests, which have to be able to
     # terminate what they started. Windows gets there a different way — see detached_no_fork.
     ap.add_argument("--foreground", action="store_true",
-                    help="터미널에 붙은 채로 돈다 (Ctrl-C 로 멈춘다). 기본은 떨어져 나오는 것")
+                    help="stay attached to this terminal (Ctrl-C stops it); detaching is the default")
     args = ap.parse_args()
     if args.stop:
         raise SystemExit(stop_daemon())

@@ -75,6 +75,12 @@ class Daemon:
                 raise RuntimeError("daemon exited at start-up: " + out.decode("utf-8", "replace")[-400:])
             if os.path.exists(self.url_file):
                 try:
+                    # The daemon may have moved to the next port when this one was taken — the
+                    # address in run/url is the truth, the number picked above only the request.
+                    with open(self.url_file, encoding="utf-8") as fh:
+                        got = fh.read().strip().split("//", 1)[1].split("/", 1)[0].rpartition(":")[2]
+                    if got.isdigit():
+                        self.port = int(got)
                     self.get("/api/sessions")
                     return self
                 except Exception:

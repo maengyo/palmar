@@ -168,6 +168,49 @@ class Install(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.prefix, "bin", "palmar")),
                          "a launcher was written despite no usable Python")
 
+    def shims_without_python(self, install_works=True):
+        """A PATH head on which no python answers, `sudo` just runs its argument, and `apt-get
+        install` puts a real python3 in place — the shape of a fresh Ubuntu, in a directory."""
+        fake = tempfile.mkdtemp(prefix="palmar-nopy-")
+        self.addCleanup(shutil.rmtree, fake, ignore_errors=True)
+        for n in ("python3", "python3.13", "python3.12", "python3.11", "python3.10", "python3.9", "python"):
+            with open(os.path.join(fake, n), "w") as fh:
+                fh.write("#!/bin/sh\nexit 127\n")
+            os.chmod(os.path.join(fake, n), 0o755)
+        with open(os.path.join(fake, "sudo"), "w") as fh:
+            fh.write('#!/bin/sh\nexec "$@"\n')
+        with open(os.path.join(fake, "apt-get"), "w") as fh:
+            fh.write('#!/bin/sh\necho "apt-get $*"\ncase "$1" in install) %s;; esac\nexit 0\n'
+                     % ('ln -sf "%s" "%s/python3"' % (sys.executable, fake) if install_works else "exit 100"))
+        for n in ("sudo", "apt-get"):
+            os.chmod(os.path.join(fake, n), 0o755)
+        return fake
+
+    def test_without_a_python_it_installs_one_when_told_yes(self):
+        """A machine with no python3 used to end at "install one from your package manager"; the
+        person asked for it to just happen (2026-09-15). PALMAR_YES stands in for the terminal's yes."""
+        fake = self.shims_without_python()
+        r = self.run_install(extra_env={"PATH": fake + ":/usr/bin:/bin", "PALMAR_YES": "1"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("apt-get install -y python3", r.stdout + r.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.prefix, "bin", "palmar")), "no launcher after the install")
+
+    def test_without_a_python_and_without_a_yes_it_names_the_command(self):
+        """No terminal to ask on and no PALMAR_YES: nothing is installed, and the exact command is in
+        the sentence, so the person can run it or hand over the yes."""
+        fake = self.shims_without_python()
+        r = self.run_install(extra_env={"PATH": fake + ":/usr/bin:/bin"})
+        self.assertNotEqual(r.returncode, 0, "it installed a package without a yes")
+        self.assertIn("sudo apt-get update && sudo apt-get install -y python3", r.stdout + r.stderr)
+        self.assertIn("PALMAR_YES=1", r.stdout + r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.prefix, "bin", "palmar")))
+
+    def test_when_the_package_manager_fails_it_says_so(self):
+        fake = self.shims_without_python(install_works=False)
+        r = self.run_install(extra_env={"PATH": fake + ":/usr/bin:/bin", "PALMAR_YES": "1"})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("did not go through", r.stdout + r.stderr)
+
 
 def pwsh_path():
     """PowerShell, or None. Windows has it built in; elsewhere it is `pwsh` if someone installed it."""
