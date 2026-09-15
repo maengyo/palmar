@@ -263,6 +263,9 @@ WSL 과 배포판 · **파이썬 3.9 이상** · 체크아웃인지.
 너머로 연다. 탭이 필요하면 창 안의 web 버튼이나 `palmar --web`. 러너로는 못 잰다 — 경로 선택은
 `tests/test_pure.py` 의 순수 함수로, 실제 열림은 그 기계에서 확인해야 한다.
 
+WSL 의 데몬도 같은 순서다: 윈도우 쪽에 설치한 앱(`cmd.exe /c echo %APPDATA%` 로 찾는 시작 메뉴의
+`palmar.lnk`) → 윈도우 쪽 크로미엄 앱 모드 → WSLg 의 palmar 창 → 윈도우 탭.
+
 한 단계 더: Edge 에서 palmar 를 열고 **메뉴 → 앱 → "palmar 설치"** 를 한 번 누르면 PWA 가 된다 —
 자기 아이콘, 시작 메뉴 항목, 브라우저 UI 없는 창. 데몬이 매니페스트와 아이콘을 내므로 다른 것은
 필요 없고, 그 뒤 `palmar` 는 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\palmar.lnk` 를 찾아

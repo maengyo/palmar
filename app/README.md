@@ -9,7 +9,13 @@ daemon — and your shells — running, exactly as closing a browser tab always 
 To stop the daemon too — closing the window never does — `palmar --stop`, or `python3 -m palmar
 --stop` from the checkout.
 
-**`palmar` opens this window by itself when it can find it** (2026-09-15) — in this order:
+**Notifications.** WKWebView has no Notification API, so in this window the page asks the daemon
+(`POST /api/notify`) and the daemon asks the OS — `osascript` on a Mac, `notify-send` on Linux. The
+bell in the top row turns that on; the OS notification cannot be clicked through to the terminal.
+
+**`palmar` opens this window by itself when it can find it** (2026-09-15) — first on a Mac; on Linux
+after the installed app and a Chromium in app mode, since WebKitGTK is the least-tried engine here.
+Looked for in this order:
 `$PALMAR_APP` (a path; `0` means "there is no window"), `palmar-app` on PATH (install.sh links a
 build from the checkout, or copies one from `PALMAR_APP_URL` or the latest release asset, beside the
 launcher), then `app/target/{universal,release}/palmar-app` inside the checkout. `palmar --web` opens

@@ -815,5 +815,55 @@ class TheInstalledApp(unittest.TestCase):
         self.assertEqual(D.installed_pwa(env={}, exists=lambda p: True, platform="linux"), "", "not looked for on Linux yet")
 
 
+class TheOrderPerPlatform(unittest.TestCase):
+    """Decided 2026-09-15 (user): the Mac opens palmar's own window first; everywhere else the
+    installed app, then a Chromium in app mode, and palmar's own window only for a machine without
+    one. A tab is always last."""
+
+    def test_the_order(self):
+        self.assertEqual(D.window_order("darwin"), ("app", "pwa", "mode", "tab"))
+        self.assertEqual(D.window_order("linux"), ("pwa", "mode", "app", "tab"))
+        self.assertEqual(D.window_order("win32"), ("pwa", "mode", "app", "tab"))
+
+    def test_from_wsl_the_windows_shortcut_counts(self):
+        appdata = r"C:\Users\me\AppData\Roaming"
+        lnk = appdata + r"\Microsoft\Windows\Start Menu\Programs\palmar.lnk"
+        self.assertEqual(D.windows_path_on_wsl(lnk, "/mnt/c"),
+                         "/mnt/c/Users/me/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/palmar.lnk")
+        self.assertEqual(D.windows_path_on_wsl(r"D:\x\y", "/mnt/c"), "/mnt/d/x/y")
+        self.assertEqual(D.windows_path_on_wsl("not a windows path", "/mnt/c"), "")
+        seen = lambda p: p == "/mnt/c/Users/me/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/palmar.lnk"   # noqa: E731
+        self.assertEqual(D.installed_pwa(env={}, exists=seen, platform="linux", kind="wsl", appdata=appdata, cdrive="/mnt/c"),
+                         lnk, "the Windows path comes back — that is what cmd.exe's start needs")
+        self.assertEqual(D.installed_pwa(env={}, exists=seen, platform="linux", kind="", appdata=appdata, cdrive="/mnt/c"), "",
+                         "off WSL a Linux has no Windows shortcut")
+        self.assertEqual(D.installed_pwa(env={}, exists=lambda p: True, platform="linux", kind="wsl", appdata="", cdrive="/mnt/c"), "",
+                         "no %APPDATA% (no interop) means no shortcut to look for")
+        self.assertEqual(D.pwa_argv(lnk, platform="linux", kind="wsl", cmd_exe="/mnt/c/Windows/System32/cmd.exe"),
+                         ["/mnt/c/Windows/System32/cmd.exe", "/c", "start", "", lnk])
+
+
+class TheOsSaysIt(unittest.TestCase):
+    """palmar's own window on a Mac (WKWebView) has no Notification API, so the daemon asks the OS.
+    What it runs, per platform, and that the words survive AppleScript's quoting."""
+
+    def test_a_mac_uses_osascript_and_quotes_the_words(self):
+        argv = D.notifier_argv('agent "one" wants you', "/home/me", platform="darwin", env={}, which=having("osascript"))
+        self.assertEqual(argv[:2], ["osascript", "-e"])
+        self.assertEqual(argv[2], 'display notification "/home/me" with title "agent \\"one\\" wants you"')
+
+    def test_a_linux_uses_notify_send(self):
+        self.assertEqual(D.notifier_argv("t", "b", platform="linux", env={}, which=having("notify-send")),
+                         ["notify-send", "--app-name=palmar", "t", "b"])
+        self.assertIsNone(D.notifier_argv("t", "b", platform="linux", env={}, which=having()))
+        self.assertIsNone(D.notifier_argv("t", "b", platform="win32", env={}, which=lambda n: "/x"),
+                          "Windows shows the page in a browser that has the API — nothing needed yet")
+
+    def test_palmar_notifier_names_it_or_turns_it_off(self):
+        self.assertEqual(D.notifier_argv("t", "b", platform="darwin", env={"PALMAR_NOTIFIER": "/opt/say"}, which=having("osascript")),
+                         ["/opt/say", "t", "b"])
+        self.assertIsNone(D.notifier_argv("t", "b", platform="darwin", env={"PALMAR_NOTIFIER": "0"}, which=having("osascript")))
+
+
 if __name__ == "__main__":
     unittest.main()

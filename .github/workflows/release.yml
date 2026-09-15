@@ -1,0 +1,117 @@
+# A release: the window, built for a Mac (one universal binary) and for Linux x86_64, attached to a
+# GitHub Release — which is what install.sh fetches from `releases/latest/download/…` when the machine
+# has no build of its own. Actions artifacts expire after 90 days; a release asset does not.
+#
+#   git tag v0.1.0 && git push origin v0.1.0        # or: gh workflow run release.yml -f tag=v0.1.0
+#
+# The build steps are the ones app-mac.yml and app-linux.yml already run (their comments say why
+# each is shaped as it is); this file only adds the release at the end.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "the tag to release (an existing one, e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: rust, and the other architecture
+        run: |
+          set -eux
+          rustc --version
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: build both slices
+        working-directory: app
+        run: |
+          set -eux
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+      - name: make one binary of the two
+        working-directory: app
+        run: |
+          set -eux
+          mkdir -p target/universal
+          lipo -create -output target/universal/palmar-app \
+            target/aarch64-apple-darwin/release/palmar-app \
+            target/x86_64-apple-darwin/release/palmar-app
+          lipo -info target/universal/palmar-app
+          ls -l target/universal/palmar-app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: palmar-app-macos-universal
+          path: app/target/universal/palmar-app
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04          # the glibc floor (2.35) — see app-linux.yml
+    timeout-minutes: 30
+    steps:
+      - name: what the build needs
+        run: |
+          set -eux
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git curl ca-certificates build-essential pkg-config libwebkit2gtk-4.1-dev
+      - uses: actions/checkout@v4
+      - name: rust
+        run: |
+          set -eux
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --no-modify-path
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: build
+        working-directory: app
+        run: |
+          set -eux
+          cargo build --release
+          ls -l target/release/palmar-app
+          ldd target/release/palmar-app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: palmar-app-linux-x86_64
+          path: app/target/release/palmar-app
+          if-no-files-found: error
+
+  release:
+    needs: [mac, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+      - name: name the assets the way install.sh asks for them
+        run: |
+          set -eux
+          mv out/palmar-app-macos-universal/palmar-app palmar-app-macos-universal
+          mv out/palmar-app-linux-x86_64/palmar-app palmar-app-linux-x86_64
+          chmod +x palmar-app-macos-universal palmar-app-linux-x86_64
+          ls -l palmar-app-*
+      - name: the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -eux
+          NOTES="palmar's own window, built for macOS (universal: Apple Silicon and Intel, 11.0+) and Linux x86_64 (glibc 2.35+, needs libwebkit2gtk-4.1-0). \`curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | sh\` fetches the one for your machine; the daemon itself is the Python tree on main."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" palmar-app-macos-universal palmar-app-linux-x86_64 --clobber
+          else
+            gh release create "$TAG" palmar-app-macos-universal palmar-app-linux-x86_64 \
+              --title "palmar $TAG" --notes "$NOTES"
+          fi

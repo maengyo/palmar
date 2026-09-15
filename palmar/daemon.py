@@ -2720,6 +2720,9 @@ async def ws_events(reader, writer, headers: dict) -> None:
     # `v` is the **protocol** version, not the package version. Once this ships, a cached new page will meet
     # an old daemon — instead of the two not knowing and behaving oddly, let the page say so outright.
     writer.write(Frame.text({"t": "hello", "v": PROTOCOL, "daemon": __version__,
+                             # Whether POST /api/notify can reach the OS here — for a window with no
+                             # Notification API of its own (palmar's own window on a Mac).
+                             "notify": notifier_argv("", "") is not None,
                              "canvases": [c.to_json() for c in registry.canvas_list()],
                              "sessions": [s.to_json() for s in registry.list()],
                              # ③ the board, so the sessions below land where they were left
@@ -2969,6 +2972,23 @@ async def handle_request(reader, writer) -> None:
             writer.write(http_json(200, {"url": f"http://127.0.0.1:{PORT[0]}/?k={KEY[0]}"}))
             return
         writer.write(http(405))
+        return
+    if path == "/api/notify":
+        # **The OS says it when the page cannot.** palmar's own window on a Mac (WKWebView) has no
+        # Notification API; the page sends the title and body here and the daemon hands them to the
+        # OS. 501 when there is no way to on this machine, so the page can say so instead of going quiet.
+        if not token_ok:
+            writer.write(http(403))
+            return
+        if method != "POST":
+            writer.write(http(405))
+            return
+        obj = parse_json_body(body) if body else {}
+        if not isinstance(obj, dict):
+            obj = {}
+        title = str(obj.get("title") or "palmar")[:120]
+        text = str(obj.get("body") or "")[:400]
+        writer.write(http(204) if os_notify(title, text) else http_error(501, "no way to notify on this machine"))
         return
     if path == "/api/address/open":
         if not token_ok:
@@ -3708,20 +3728,67 @@ def default_browser(platform=None, kind=None) -> str:
     return ""
 
 
-def installed_pwa(env=None, exists=None, platform=None) -> str:
+WINDOWS_APPDATA = [None]     # asked of cmd.exe once per start
+
+
+def windows_appdata() -> str:
+    """Windows's %APPDATA% as a Windows path, asked of cmd.exe through interop — '' off WSL or when
+    interop is not there. Where Edge and Chrome leave the Start Menu shortcut of an installed app."""
+    if WINDOWS_APPDATA[0] is None:
+        WINDOWS_APPDATA[0] = ""
+        if wsl_kind():
+            s32 = windows_system32()
+            exe = shutil.which("cmd.exe") or (s32 and str(Path(s32) / "cmd.exe"))
+            if exe and Path(exe).is_file():
+                try:
+                    r = subprocess.run([exe, "/c", "echo %APPDATA%"], capture_output=True, timeout=6,
+                                       stdin=subprocess.DEVNULL)
+                    got = r.stdout.decode("utf-8", "replace").strip()
+                    if re.match(r"^[A-Za-z]:\\", got):
+                        WINDOWS_APPDATA[0] = got
+                except (OSError, subprocess.SubprocessError):
+                    pass
+    return WINDOWS_APPDATA[0]
+
+
+def windows_path_on_wsl(winpath: str, cdrive: str = "/mnt/c") -> str:
+    """`C:\\Users\\me\\x` as WSL sees it: the drive's mount, then the rest with slashes."""
+    m = re.match(r"^([A-Za-z]):\\(.*)$", winpath or "")
+    if not m:
+        return ""
+    root = cdrive.rstrip("/") if m.group(1).upper() == "C" else "/mnt/" + m.group(1).lower()
+    return root + "/" + m.group(2).replace("\\", "/")
+
+
+def installed_pwa(env=None, exists=None, platform=None, kind=None, appdata=None, cdrive=None) -> str:
     """Where a browser put palmar when it was installed as an app — a Start Menu shortcut on Windows
     (Edge puts it in Programs, Chrome under Chrome Apps), an .app under ~/Applications on a Mac — or
     '' when it has not been installed. Launching that is launching the app the person installed, with
-    its own icon and window, rather than a generic app-mode window."""
+    its own icon and window, rather than a generic app-mode window.
+
+    From WSL it is the **Windows** shortcut that counts (the window a person at that machine sees):
+    %APPDATA% is asked of cmd.exe, looked for through the C: mount, and returned as the Windows path,
+    which is what cmd.exe's `start` needs to open it."""
     env = os.environ if env is None else env
     exists = os.path.exists if exists is None else exists
     platform = sys.platform if platform is None else platform
+    rels = (r"Microsoft\Windows\Start Menu\Programs\palmar.lnk",
+            r"Microsoft\Windows\Start Menu\Programs\Chrome Apps\palmar.lnk")
     if platform == "win32":
         base = (env.get("APPDATA") or "").rstrip("\\")
         if base:
-            for rel in (r"Microsoft\Windows\Start Menu\Programs\palmar.lnk",
-                        r"Microsoft\Windows\Start Menu\Programs\Chrome Apps\palmar.lnk"):
+            for rel in rels:
                 if exists(base + "\\" + rel):
+                    return base + "\\" + rel
+    elif platform.startswith("linux"):
+        kind = wsl_kind(env=env) if kind is None else kind
+        if kind:
+            base = (windows_appdata() if appdata is None else appdata).rstrip("\\")
+            if cdrive is None:
+                s32 = windows_system32()
+                cdrive = str(Path(s32).parent.parent) if s32 else "/mnt/c"
+            for rel in rels:
+                if base and exists(windows_path_on_wsl(base + "\\" + rel, cdrive)):
                     return base + "\\" + rel
     elif platform == "darwin":
         home = (env.get("HOME") or "").rstrip("/")
@@ -3734,11 +3801,20 @@ def installed_pwa(env=None, exists=None, platform=None) -> str:
     return ""
 
 
-def pwa_argv(path: str, platform=None):
-    """The command that launches an installed app by its shortcut or bundle."""
+def pwa_argv(path: str, platform=None, kind=None, cmd_exe=None):
+    """The command that launches an installed app by its shortcut or bundle. From WSL the shortcut is
+    a Windows path and cmd.exe's `start` opens it — cmd.exe found by name or under System32."""
     platform = sys.platform if platform is None else platform
     if platform == "win32":
         return ["cmd", "/c", "start", "", path]
+    if platform.startswith("linux"):
+        kind = wsl_kind() if kind is None else kind
+        if kind:
+            if cmd_exe is None:
+                s32 = windows_system32()
+                cmd_exe = shutil.which("cmd.exe") or (s32 and str(Path(s32) / "cmd.exe")) or "cmd.exe"
+            return [cmd_exe, "/c", "start", "", path]
+        return ["xdg-open", path]
     return ["open", path]
 
 
@@ -3778,62 +3854,136 @@ def app_mode_argv(url: str, *, platform=None, kind=None, env=None, which=None, e
     return None
 
 
+def notifier_argv(title: str, body: str, platform=None, env=None, which=None):
+    """The command that shows an OS notification, or None. `$PALMAR_NOTIFIER` names a program that
+    takes the title and the body as its two arguments, or says `0` for none.
+
+    WKWebView has no Notification API, so palmar's own window on a Mac could not say "a terminal
+    wants you" — the one promise the README makes about being away (found 2026-09-15). The page asks
+    the daemon instead, and the daemon asks the OS: osascript on a Mac, notify-send on Linux. Windows
+    shows the page in Edge or Chrome, which have the API, so nothing is needed there yet."""
+    platform = sys.platform if platform is None else platform
+    env = os.environ if env is None else env
+    which = shutil.which if which is None else which
+    chosen = env.get("PALMAR_NOTIFIER")
+    if chosen is not None:
+        chosen = chosen.strip()
+        return None if chosen in ("", "0", "no", "off") else [chosen, title, body]
+    if platform == "darwin" and which("osascript"):
+        q = lambda t: t.replace("\\", "\\\\").replace('"', '\\"')   # noqa: E731 - AppleScript string quoting
+        return ["osascript", "-e", f'display notification "{q(body)}" with title "{q(title)}"']
+    if platform.startswith("linux") and which("notify-send"):
+        return ["notify-send", "--app-name=palmar", title, body]
+    return None
+
+
+def os_notify(title: str, body: str) -> bool:
+    """Show an OS notification. False when there is no way to here."""
+    argv = notifier_argv(title, body)
+    if not argv:
+        return False
+    try:
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
+        log(f"could not notify with {Path(argv[0]).name} ({e})")
+        return False
+    return True
+
+
+def window_order(platform=None):
+    """How the page is shown, in order, per platform (decisions ④, 2026-09-15, user):
+
+    - macOS: palmar's own window → the installed app (PWA) → a Chromium in app mode → a tab.
+    - everywhere else: the installed app → app mode → palmar's own window → a tab.
+
+    The Mac's window is WKWebView, which is the OS's own and light; on Linux the window is WebKitGTK,
+    the least-tried engine here (its bugs — ibus preedit, compositing lag — each cost a commit), so a
+    Chromium the person already runs comes first and the window is for a machine without one. Under
+    WSL the Windows-side window wins over a WSLg one for the same reason, with fonts, IME and HiDPI
+    on the Windows side. Windows has no window build yet, so its "app" tier is empty today."""
+    platform = sys.platform if platform is None else platform
+    return ("app", "pwa", "mode", "tab") if platform == "darwin" else ("pwa", "mode", "app", "tab")
+
+
+def _start_app(url: str):
+    """Tier "app": palmar's own window. `(note, lead)` — the note when it opened, else '' and a lead
+    for the next tier's note saying why not."""
+    app = find_app()
+    if not app:
+        return "", ""
+    try:
+        proc = subprocess.Popen([app], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE, start_new_session=True)
+    except OSError as e:
+        log(f"could not start the window {app} ({e}) — trying the next way")
+        return "", f"the window did not start ({e}) — "
+    try:
+        code = proc.wait(timeout=APP_GRACE_S)
+    except subprocess.TimeoutExpired:
+        code = None
+    if code in (None, 0):
+        log(f"opening the window ({app})")
+        return "opening the window (palmar-app; --web opens a browser tab instead)", ""
+    said = (proc.stderr.read() or b"").decode("utf-8", "replace").strip().splitlines()
+    why = said[-1] if said else f"exit {code}"
+    log(f"the window did not start ({why}) — trying the next way")
+    return "", f"the window did not start ({why}) — "
+
+
+def _start_pwa(url: str):
+    """Tier "pwa": the app the person installed from Edge or Chrome — its own icon, window and Start
+    Menu entry, and no binary of ours."""
+    pwa = installed_pwa()
+    if not pwa:
+        return "", ""
+    try:
+        subprocess.Popen(pwa_argv(pwa), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
+        log(f"could not open the installed app {pwa} ({e}) — trying the next way")
+        return "", "the installed app did not open — "
+    log(f"opening the installed app ({pwa})")
+    return "opening palmar as the installed app (--web opens a tab instead)", ""
+
+
+def _start_mode(url: str):
+    """Tier "mode": a Chromium-family browser in app mode — the page in its own window, no tabs, no
+    address bar. Windows always has an Edge, so a window there needs no exe at all (user,
+    2026-09-15); from WSL it is the Windows one, reached through interop."""
+    argv = app_mode_argv(url)
+    if not argv:
+        return "", ""
+    try:
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
+        log(f"could not open a window with {Path(argv[0]).name} ({e}) — trying the next way")
+        return "", f"could not open a window with {Path(argv[0]).name} — "
+    log(f"opening a window with {Path(argv[0]).name} (app mode)")
+    return f"opening a window with {Path(argv[0]).name} (app mode; --web opens a tab instead)", ""
+
+
+TIERS = {"app": _start_app, "pwa": _start_pwa, "mode": _start_mode}
+
+
 def show_page(url: str, web: bool = False) -> str:
-    """Show the address: **the window when there is one, else a browser.** One line back, for the
-    printout next to the address.
+    """Show the address the way this platform's order says (window_order), a tab last. One line
+    back, for the printout next to the address.
 
     The window first (2026-09-15, user): the web button inside it is what opens a browser, and a
     `palmar` that opened a tab while the window sat right there had the two backwards. `--web` asks
-    for a browser outright; PALMAR_APP=0 says there is no window to open. The window finds the daemon
-    by run/url on its own, so it is started with no arguments and never handed the address."""
+    for a tab outright; PALMAR_APP=0 and PALMAR_CHROMIUM=0 empty their tiers. The window finds the
+    daemon by run/url on its own, so it is started with no arguments and never handed the address."""
     lead = ""
-    app = "" if web else find_app()
-    if app:
-        try:
-            proc = subprocess.Popen([app], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.PIPE, start_new_session=True)
-        except OSError as e:
-            log(f"could not start the window {app} ({e}) — trying the next way")
-            lead = f"the window did not start ({e}) — "
-        else:
-            try:
-                code = proc.wait(timeout=APP_GRACE_S)
-            except subprocess.TimeoutExpired:
-                code = None
-            if code in (None, 0):
-                log(f"opening the window ({app})")
-                return "opening the window (palmar-app; --web opens a browser tab instead)"
-            said = (proc.stderr.read() or b"").decode("utf-8", "replace").strip().splitlines()
-            why = said[-1] if said else f"exit {code}"
-            log(f"the window did not start ({why}) — trying the next way")
-            lead = f"the window did not start ({why}) — "
-    # **The app the person installed** — the page installed from Edge or Chrome as an app (PWA): its
-    # own icon, its own window, a Start Menu entry, and no binary of ours.
-    pwa = "" if web else installed_pwa()
-    if pwa:
-        try:
-            subprocess.Popen(pwa_argv(pwa), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
-        except OSError as e:
-            log(f"could not open the installed app {pwa} ({e}) — trying the next way")
-            lead += "the installed app did not open — "
-        else:
-            log(f"opening the installed app ({pwa})")
-            return lead + "opening palmar as the installed app (--web opens a tab instead)"
-    # **No binary of ours: a Chromium-family browser in app mode.** Same page, its own window, no
-    # tabs and no address bar. Windows always has an Edge, so a window there needs no exe at all
-    # (user, 2026-09-15); from WSL it is the Windows Edge, reached through interop.
-    argv = None if web else app_mode_argv(url)
-    if argv:
-        try:
-            subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
-        except OSError as e:
-            log(f"could not open a window with {Path(argv[0]).name} ({e}) — opening a browser tab instead")
-            lead += f"could not open a window with {Path(argv[0]).name} — "
-        else:
-            log(f"opening a window with {Path(argv[0]).name} (app mode)")
-            return lead + f"opening a window with {Path(argv[0]).name} (app mode; --web opens a tab instead)"
+    if not web:
+        for tier in window_order():
+            if tier == "tab":
+                break
+            note, why = TIERS[tier](url)
+            if note:
+                return lead + note
+            lead += why
     ok, note = open_browser(url)
     return lead + note
 

@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import shutil
+import tempfile
 import time
 import unittest
 
@@ -3123,3 +3125,32 @@ class InstallableAsAnApp(unittest.TestCase):
         self.assertEqual(r["href"], d.url.split("/?", 1)[0] + "/manifest.webmanifest?k=" + key)
         self.assertEqual(r["start"], "/?k=" + key)
         self.assertEqual(r["display"], "standalone")
+
+
+class AWindowWithoutTheNotificationAPI(unittest.TestCase):
+    """palmar's own window on a Mac is WKWebView, which has no Notification API — the bell used to
+    say so and stop. Now the daemon notifies for it (POST /api/notify), when hello says it can."""
+
+    def test_the_bell_turns_on_and_the_daemon_says_it(self):
+        box = tempfile.mkdtemp(prefix="palmar-notify-")
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        note = os.path.join(box, "said")
+        say = os.path.join(box, "say.sh")
+        with open(say, "w") as fh:
+            fh.write('#!/bin/sh\nprintf "%s\\n" "$@" > ' + note + '\n')
+        os.chmod(say, 0o755)
+        d = Daemon(env={"PALMAR_NOTIFIER": say}).start()
+        self.addCleanup(d.stop)
+        b = Browser().start()
+        self.addCleanup(b.stop)
+        b.open(d.url, script="delete window.Notification")     # what WKWebView looks like to the page
+        time.sleep(1.0)
+        self.assertFalse(b.ev("'Notification' in window"))
+        b.ev("document.getElementById('bell').click(); 1")
+        end = time.time() + 6
+        while time.time() < end and not os.path.exists(note):
+            time.sleep(0.1)
+        self.assertTrue(os.path.exists(note), "the daemon was never asked to notify")
+        with open(note) as fh:
+            self.assertEqual(fh.read().split("\n")[0], "palmar notifications are on")
+        self.assertEqual(b.ev("document.getElementById('bell').dataset.on"), "1", "the bell did not turn on")

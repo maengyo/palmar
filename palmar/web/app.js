@@ -3625,11 +3625,20 @@ function renderBadge(force) {
 const notifyQueue = new Set();
 let notifyTimer = null;
 let notifyAt = 0;              // when it actually rang last
+// **When this window has no Notification API** (palmar's own window on a Mac is WKWebView, which has
+// none), the daemon says it for us: POST /api/notify hands the title and body to the OS. hello says
+// whether the daemon can, on this machine.
+let daemonNotify = false;
+const hasNotificationAPI = () => 'Notification' in window;
+const canRing = () => hasNotificationAPI() ? Notification.permission === 'granted' : daemonNotify;
+function notifyViaDaemon(title, body) {
+  return api('POST', '/api/notify', { title, body });
+}
 
 // Called **only at the moment the status changes into one**. Ring again while a status persists and people
 // turn notifications off entirely.
 function onWantsYou(id) {
-  if (!notifyOn || !('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!notifyOn || !canRing()) return;
   // If palmar is being looked at, the status lights are enough. hasFocus catches both "another window is on top"
   // and "another tab is up" — visibilityState stays 'visible' with the window covered, so it is no use here.
   if (document.hasFocus()) return;
@@ -3652,12 +3661,16 @@ function flushNotify() {
   notifyQueue.clear();
   if (!ids.length || document.hasFocus()) return;
   const one = ids.length === 1 ? sessions.get(ids[0]) : null;
+  const title = one ? labelOf(one) + ' wants you' : ids.length + ' terminals want you';
+  const body = one ? one.cwd : ids.map((i) => labelOf(sessions.get(i))).join(', ');
+  if (!hasNotificationAPI()) {              // the daemon says it; nothing to click, so nothing to wire
+    notifyViaDaemon(title, body).catch(() => {});
+    notifyAt = Date.now();
+    return;
+  }
   let n;
   try {
-    n = new Notification(
-      one ? labelOf(one) + ' wants you' : ids.length + ' terminals want you',
-      { body: one ? one.cwd : ids.map((i) => labelOf(sessions.get(i))).join(', '),
-        tag: 'palmar-wants-you' });          // same tag, so they replace rather than pile up
+    n = new Notification(title, { body, tag: 'palmar-wants-you' });   // same tag, so they replace rather than pile up
   } catch (e) { return; }
   notifyAt = Date.now();
   // A click that does not land on that terminal amounts to saying "go find it", which leaves the original problem standing.
@@ -3667,11 +3680,15 @@ function flushNotify() {
 // **Ring once when it is turned on.** A notification has to pass browser permission, the OS's do-not-disturb and
 // focus assistance before it arrives, and blocked at any of those it is equally silent on screen. One send checks
 // the whole chain at once — better to know now than to discover "I turned it on and nothing comes" later.
+const NOTIFY_TEST_BODY = 'This is the only one you did not ask for. From now on it speaks when a terminal wants you.';
 function notifyTest() {
+  if (!hasNotificationAPI()) {
+    notifyViaDaemon('palmar notifications are on', NOTIFY_TEST_BODY)
+      .catch((e) => toast(['the daemon could not notify:', { d: String(e.message || e) }]));
+    return;
+  }
   try {
-    const n = new Notification('palmar notifications are on', {
-      body: 'This is the only one you did not ask for. From now on it speaks when a terminal wants you.',
-      tag: 'palmar-test' });
+    const n = new Notification('palmar notifications are on', { body: NOTIFY_TEST_BODY, tag: 'palmar-test' });
     n.onclick = () => { window.focus(); n.close(); };
   } catch (e) {
     toast(['notifications were allowed, but the browser refused to show one:', { d: String(e.message || e) }]);
@@ -3690,7 +3707,12 @@ function setNotify(on) {
 }
 async function toggleNotify() {
   if (notifyOn) { setNotify(false); return; }
-  if (!('Notification' in window)) { toast(['this browser has no Notification API']); return; }
+  if (!hasNotificationAPI()) {
+    // palmar's own window: the daemon notifies, when it can on this machine.
+    if (daemonNotify) { setNotify(true); notifyTest(); }
+    else toast(['this window has no Notification API, and the daemon has no way to notify on this machine']);
+    return;
+  }
   let perm = Notification.permission;
   // Ask only when there is a gesture turning it on — asking for permission the moment a page loads is the thing
   // everybody hates, and the browser demands a gesture anyway. Permission is per **origin, port included**, so
@@ -3966,6 +3988,8 @@ function connectEvents() {
       // One toast, not two: a protocol mismatch is the louder half of the same news, and the second call
       // would overwrite the first in the same strip.
       if (!checkProtocol(m)) checkVersion(m);
+      daemonNotify = !!m.notify;
+      if (!hasNotificationAPI() && !daemonNotify && notifyOn) setNotify(false);   // nothing here can ring
       takeLayout(m);                       // before the sessions are placed, so they land where the daemon says
       setCanvases(m.canvases || []); reconcile(m.sessions || []);
       restoreViewers();                    // the windows that are not sessions
@@ -4734,7 +4758,7 @@ function boot() {
                mk('cls', 'close', 'close'));
     }
   }
-  setNotify(notifyOn && 'Notification' in window && Notification.permission === 'granted');
+  setNotify(notifyOn && (hasNotificationAPI() ? Notification.permission === 'granted' : true));   // hello settles the window case
   applyTheme(storedTheme());
   renderBadge(true);
   renderTabs();        // before any canvas arrives the tab strip is down — it comes up when hello arrives

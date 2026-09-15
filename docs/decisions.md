@@ -543,11 +543,34 @@ Firefox 에는 앱 모드가 없어 여기 없다. 회사 PC 에서 exe 를 못 
 **"그게 browser 아니야?" (사용자, 같은 날).** 맞다 — 그리고 윈도우용 `palmar-app.exe` 도 속은 WebView2,
 곧 Edge 엔진이다. 웹 UI 의 "프로그램" 은 어느 쪽이든 브라우저 엔진이 든 창이고, 다른 것은 창의
 **정체성**(아이콘·이름·시작 메뉴·작업표시줄 항목)뿐이다. exe 없이 그 정체성을 주는 것이 **앱으로 설치**
-(PWA)다: 데몬이 `/manifest.webmanifest`(키가 있어야 나온다 — `start_url` 에 키가 있으니, index.html
+(PWA)다 — 아래 표의 "설치한 앱": 데몬이 `/manifest.webmanifest`(키가 있어야 나온다 — `start_url` 에 키가 있으니, index.html
 과 같은 규칙 #14; 그 링크는 index.html 에 박지 않고 페이지가 자기 주소에서 만든다)와 아이콘 두 장을 내고, Edge/Chrome 의 "앱 설치" 한 번이면 palmar 는 자기 아이콘과
 창을 가진 프로그램이 된다. 그 뒤 `palmar` 는 설치된 그 앱을 연다(윈도우: 시작 메뉴의 `palmar.lnk`,
 맥: `~/Applications/Chrome Apps.localized/palmar.app`). 순서는 이제 넷: palmar 의 창 → 설치된 앱 →
 크로미엄 앱 모드 → 탭.
+
+**플랫폼별 순서 (2026-09-15, 사용자가 표로 확정).** 맥의 창은 OS 의 WKWebView 라 가볍고 제 것이지만,
+리눅스의 창은 WebKitGTK — 여기서 가장 덜 겪어 본 엔진이라(ibus 조합 글자, 컴포지팅 지연이 각각
+커밋 하나씩) 이미 쓰는 크로미엄이 먼저고 창은 크로미엄이 없는 기계의 몫이다. WSL 은 같은 이유로
+WSLg 창보다 **윈도우 쪽 창**이 이긴다(글꼴·IME·HiDPI 가 윈도우 것). 윈도우는 창 빌드가 아직 없다.
+
+| | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|
+| 맥 | palmar 의 창 | 설치한 앱 | 크로미엄 앱 모드 | 탭 |
+| 윈도우 | 설치한 앱 | 크로미엄 앱 모드 | (창 빌드 없음) | 탭 |
+| WSL | 윈도우 쪽 설치한 앱 (`%APPDATA%` 를 `cmd.exe` 로 묻는다) | 윈도우 쪽 크로미엄 앱 모드 | palmar 의 창 (WSLg) | 윈도우 탭 |
+| 리눅스 데스크탑 | 설치한 앱 | 크로미엄 앱 모드 | palmar 의 창 | 탭 |
+
+**맥 창의 알림.** WKWebView 에는 Notification API 가 없어 창에서 종이 죽어 있었다 — "기다리는 터미널이
+있으면 말해 준다" 는 README 의 약속이다. 페이지가 API 없음을 보면 `POST /api/notify` 로 데몬에 제목과
+본문을 넘기고, 데몬이 OS 에 말한다(맥 `osascript display notification`, 리눅스 `notify-send`;
+`$PALMAR_NOTIFIER` 로 바꾸거나 `0` 으로 끈다). `hello` 의 `notify` 가 이 기계에서 되는지 알려 준다.
+클릭해서 그 터미널로 가는 것은 브라우저 알림만 된다 — OS 알림은 그냥 알림이다.
+
+**첫 릴리스.** `.github/workflows/release.yml` 이 `v*` 태그에 맥 universal 과 리눅스 x86_64 창을 지어
+GitHub Release 에 붙인다. install.sh 는 체크아웃 빌드가 없으면 `releases/latest/download/…` 에서
+그것을 받는다. 서명·공증은 안 한다: curl 로 받은 파일엔 quarantine 이 안 붙고 Apple Silicon 이 요구하는
+ad-hoc 서명은 cargo 가 이미 하니, 브라우저로 받는 DMG 를 낼 때까지는 필요가 없다.
 
 ### ⑤ 가벼움의 기준
 **"가볍다" 는 크기가 아니라 쓰는 동안 버벅이지 않는 것이다.** (2026-09-07, 사용자가 정정) 배포물

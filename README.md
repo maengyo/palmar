@@ -70,8 +70,10 @@ what is still rough there is in [`docs/windows.md`](docs/windows.md).
 palmar
 ```
 
-It prints its address, opens a window — palmar's own when one is installed, else a Chromium-family
-browser in app mode (your default browser when it is one; Windows always has Edge), else a browser tab — and comes straight back. To make
+It prints its address, opens a window and comes straight back. On a Mac the window is palmar's own
+when it is installed; elsewhere it is a Chromium-family browser in app mode (your default browser when
+it is one; Windows always has Edge), and palmar's own window is for a Linux without one. A browser tab
+is the last resort. To make
 it an app of its own with no exe, install it once from Edge or Chrome (menu → Apps → Install palmar):
 it gets its own icon, window and Start Menu entry, and `palmar` opens that from then on — the daemon detaches, so closing the terminal does not take your shells with it. Run `palmar` again and you get the same address
 rather than a second daemon; `palmar --stop` ends it. Lost the address: `cat ~/.palmar/run/url`.

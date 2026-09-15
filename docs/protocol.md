@@ -190,6 +190,7 @@ python3 -m palmar            # 127.0.0.1:8801. --port 만 받는다. host 옵션
 |---|---|---|
 | `GET` | `/api/address` | `{"url": "http://127.0.0.1:<port>/?k=<key>"}` |
 | `POST` | `/api/address/open` | 데몬이 그 주소를 브라우저로 연다. 204, 열 방법이 없으면 500 |
+| `POST` | `/api/notify` | `{title, body}` 를 OS 알림으로 낸다 — Notification API 가 없는 창(맥의 WKWebView)을 위해. 204, 이 기계에 낼 방법이 없으면 501. `hello` 의 `notify` 가 되는지 미리 말한다 (2026-09-15) |
 
 둘 다 토큰이 필요하다. **토큰을 가진 쪽에 키를 줘도 새로 열리는 건 없다** — 토큰은 이미 셸을 열
 수 있고, 토큰을 훔칠 수 있는 것은 이 사용자로 도는 것이므로 `run/key`(0600)를 그냥 읽으면 된다.

@@ -66,6 +66,7 @@ class Daemon:
         # whoever runs the suite. A test about the window passes its own PALMAR_APP (a fake).
         env["PALMAR_APP"] = "0"
         env["PALMAR_CHROMIUM"] = "0"      # nor a real Chrome in app mode
+        env["PALMAR_NOTIFIER"] = "0"      # nor a real OS notification
         env.update(self._extra)
         self.proc = subprocess.Popen(
             [PYTHON, "-m", "palmar", "--port", str(self.port)]

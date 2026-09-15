@@ -1583,3 +1583,30 @@ class InstalledAsAnApp(unittest.TestCase):
             self.assertEqual(code, 200, icon)
             self.assertEqual(ctype, "image/png")
             self.assertEqual(body[:8], b"\x89PNG\r\n\x1a\n", icon + " is not a PNG")
+
+
+class TheDaemonNotifies(unittest.TestCase):
+    """POST /api/notify: the OS says "a terminal wants you" for a window that has no Notification API
+    of its own. 501 when this machine has no way, so the page can say so."""
+
+    def test_the_words_reach_the_notifier(self):
+        box = tempfile.mkdtemp(prefix="palmar-notify-")
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        note = os.path.join(box, "said")
+        say = os.path.join(box, "say.sh")
+        with open(say, "w") as fh:
+            fh.write('#!/bin/sh\nprintf "%s\\n" "$@" > ' + note + '\n')
+        os.chmod(say, 0o755)
+        with Daemon(env={"PALMAR_NOTIFIER": say}) as d:
+            code, _ = d.raw("POST", "/api/notify", json.dumps({"title": "agent-1 wants you", "body": "/home/me"}).encode())
+            self.assertEqual(code, 204)
+            end = time.time() + 5
+            while time.time() < end and not os.path.exists(note):
+                time.sleep(0.1)
+            with open(note) as fh:
+                self.assertEqual(fh.read().split("\n")[:2], ["agent-1 wants you", "/home/me"])
+
+    def test_no_way_here_is_a_501(self):
+        with Daemon(env={"PALMAR_NOTIFIER": "0"}) as d:
+            self.assertEqual(d.raw("POST", "/api/notify", b'{"title": "x"}')[0], 501)
+            self.assertEqual(d.raw("GET", "/api/notify")[0], 405)
