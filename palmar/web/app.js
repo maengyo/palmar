@@ -448,6 +448,14 @@ function applyTheme(mode) {   // mode: 'light' | 'dark' | null (system)
   if (typeof renderBadge === 'function') renderBadge(true);   // the favicon color reads --st-*
   rethemeTerminals();
 }
+// ── popups: one at a time ──
+// Every popup closes on a press outside it, and a press on another popup's button is not "outside" —
+// that button stops the event so its own popup is not closed by it — so two could be up at once
+// (user, 2026-09-15). Each popup registers how it closes, and opening one closes the rest.
+const popups = new Map();     // element → its close()
+function registerPopup(el, close) { if (el) popups.set(el, close); }
+function closePopups(keep) { for (const [el, close] of popups) if (el !== keep && !el.hidden) close(); }
+
 // ── the theme list: System · Light (a palette) · Dark (a palette) ──
 const themeMenu = $('#theme-menu');
 function markThemeMenu() {
@@ -466,6 +474,7 @@ function markThemeMenu() {
 }
 function showThemeMenu(open) {
   if (!themeMenu) return;
+  if (open) closePopups(themeMenu);
   themeMenu.hidden = !open;
   themeBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
   if (open) {
@@ -487,6 +496,7 @@ function pickTheme(v) {
   showThemeMenu(false);
   themeBtn.focus();
 }
+registerPopup(themeMenu, () => showThemeMenu(false));
 themeBtn.addEventListener('click', (e) => { e.stopPropagation(); showThemeMenu(themeMenu && themeMenu.hidden); });
 themeBtn.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showThemeMenu(themeMenu && themeMenu.hidden); } });
 if (themeMenu) {
@@ -2573,7 +2583,25 @@ function tabDrag(tabEl) {
   tabEl.addEventListener('pointerdown', (ev) => {
     if (ev.button !== 0 || ev.target.closest('.ed, .cx')) return;
     const startX = ev.clientX;
-    let dragging = false, aborted = false;
+    let dragging = false, aborted = false, ref = null;
+    // **The strip moves like a browser's.** The carried tab follows the finger; the others slide out of
+    // its way as the destination changes; the DOM is reordered once, on release, and the carried tab
+    // settles into its slot. It used to reorder the DOM on every move, so tabs jumped a slot at a time
+    // as the finger crossed a midpoint (user, 2026-09-15: "크롬에서 탭 순서 바꿀 때처럼").
+    const others = () => [...tabsEl.querySelectorAll('.tab')].filter((o) => o !== tabEl);
+    const slide = () => {
+      const all = [...tabsEl.querySelectorAll('.tab')];
+      const di = all.indexOf(tabEl);
+      const ti = ref === addTabEl ? all.length : all.indexOf(ref);
+      const W = tabEl.getBoundingClientRect().width + 4;          // its width plus the strip's gap
+      all.forEach((o, i) => {
+        if (o === tabEl) return;
+        let dx = 0;
+        if (di < ti && i > di && i < ti) dx = -W;                   // carried rightwards: these move left
+        else if (di > ti && i >= ti && i < di) dx = W;              // carried leftwards: these move right
+        o.style.transform = dx ? 'translateX(' + dx + 'px)' : '';
+      });
+    };
     const move = (e2) => {
       // If the dragged element's canvas was removed meanwhile (another browser's DELETE), this element has already
       // fallen out of the strip. Not giving up here puts the detached element back and leaves a ghost in the strip.
@@ -2582,23 +2610,32 @@ function tabDrag(tabEl) {
         if (Math.abs(e2.clientX - startX) < 4) return;   // tells a press from a drag
         dragging = true;
         tabEl.classList.add('drag');
+        tabsEl.classList.add('reordering');
       }
+      tabEl.style.transform = 'translateX(' + (e2.clientX - startX) + 'px)';
       // Work out the destination in one step: before the **first** neighbour whose midpoint is right of the finger.
       // If there is none, the very end (before ＋). Swapping with one neighbour at a time only moves one slot when
-      // a single move crosses several (measured).
-      let ref = addTabEl;
-      for (const o of tabsEl.querySelectorAll('.tab')) {
-        if (o === tabEl) continue;
+      // a single move crosses several (measured). Midpoints are read from where the tabs *stand*, not where
+      // they have slid to — each neighbour keeps its slot in the DOM until release.
+      let next = addTabEl;
+      for (const o of others()) {
         const r = o.getBoundingClientRect();
-        if (e2.clientX < r.left + r.width / 2) { ref = o; break; }
+        const mid = r.left + r.width / 2 - (parseFloat(o.style.transform.replace(/[^-\d.]/g, '')) || 0);
+        if (e2.clientX < mid) { next = o; break; }
       }
-      if (tabEl.nextSibling !== ref) tabsEl.insertBefore(tabEl, ref);
+      if (next !== ref) { ref = next; slide(); }
     };
     const up = async () => {
       removeEventListener('pointermove', move);
       removeEventListener('pointerup', up);
       removeEventListener('pointercancel', up);
+      // Land: reorder the DOM once, then let every transform go — the neighbours are already where their
+      // new slots are, so nothing jumps; the carried tab glides the last few pixels into its own.
+      if (dragging && !aborted && ref && ref !== tabEl.nextSibling && tabEl.parentNode === tabsEl) tabsEl.insertBefore(tabEl, ref);
+      for (const o of others()) o.style.transform = '';
       tabEl.classList.remove('drag');
+      tabEl.style.transform = '';
+      tabsEl.classList.remove('reordering');
       // Release the ordering deferred during the drag — including when it was given up (then the daemon's order is the source of truth)
       if (!dragging || aborted) { if (tabsPending) renderTabs(); return; }
       tabDragged = true;
@@ -3928,9 +3965,11 @@ function boot() {
   // ── options list, and the shortcuts panel behind one of its items ──
   const optBtn = document.getElementById('options'), optMenu = document.getElementById('options-menu');
   const keysEl = document.getElementById('keys');
-  const showKeys = (on) => { keysEl.hidden = !on; };
+  const showKeys = (on) => { if (on) closePopups(keysEl); keysEl.hidden = !on; };
+  registerPopup(keysEl, () => showKeys(false));
   const showOptions = (on) => {
     if (!optMenu) return;
+    if (on) closePopups(optMenu);
     optMenu.hidden = !on;
     optBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
     if (on) {
@@ -3940,6 +3979,7 @@ function boot() {
     }
   };
   if (optBtn && optMenu) {
+    registerPopup(optMenu, () => showOptions(false));
     optBtn.addEventListener('click', (e) => { e.stopPropagation(); showOptions(optMenu.hidden); });
     optMenu.addEventListener('click', (e) => {
       e.stopPropagation();                                 // a checkbox or select inside stays open
@@ -3969,6 +4009,7 @@ function boot() {
     const webUrl = document.getElementById('web-url');
     const showWeb = (on) => {
       if (!webBox) return;
+      if (on) closePopups(webBox);
       webBox.hidden = !on;
       const b = document.getElementById('toweb');
       if (b) b.setAttribute('aria-expanded', on ? 'true' : 'false');
@@ -3979,6 +4020,7 @@ function boot() {
     // until its × was found (user, 2026-09-15, on Windows). The button's own click must not count
     // as "outside", and clicks inside the box are swallowed.
     if (webBox) {
+      registerPopup(webBox, () => showWeb(false));
       webBox.addEventListener('click', (e) => e.stopPropagation());
       addEventListener('click', () => { if (!webBox.hidden) showWeb(false); });
       addEventListener('keydown', (e) => { if (e.key === 'Escape' && !webBox.hidden) showWeb(false); });

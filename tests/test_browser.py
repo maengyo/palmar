@@ -2500,7 +2500,7 @@ class TopRow(unittest.TestCase):
         if sys.platform == "win32":
             self.skipTest("Windows has no foreground process group — the title is the way in (#30)")
         from tests.helpers import WS
-        s = self.d.open_pane(self.d.home)
+        s = self.d.open_pane(self.d.home, canvas=self.b.ev("window.palmar.canvas()"))
         for _ in range(40):
             time.sleep(0.25)
             if self.b.ev("[...window.palmar.tiles.values()].some(t=>t.id===%s)" % json.dumps(s["id"])):
@@ -2554,6 +2554,83 @@ class TopRow(unittest.TestCase):
         r = self.b.ev("(()=>{const h=document.querySelector('#webbox .keys-h'); return {sw:h.scrollWidth, cw:h.clientWidth, txt:h.textContent.trim()};})()")
         self.assertLessEqual(r["sw"], r["cw"] + 1, "the header is clipped: %r" % r)
         self.b.ev("document.body.click()")
+
+    def test_a_carried_tab_slides_its_neighbours_and_lands_once(self):
+        """Like a browser's strip: the carried tab follows the finger, the others slide out of its way,
+        and the order changes once, on release (user, 2026-09-15). It used to reorder the DOM on every
+        move, a slot at a time as the finger crossed a midpoint."""
+        self.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          await fetch('/api/canvases?token='+T,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:'zeta'})});})()""")
+        for _ in range(40):
+            time.sleep(0.2)
+            if self.b.ev("document.querySelectorAll('#tabs .tab').length") >= 2:
+                break
+        names = lambda: self.b.ev("[...document.querySelectorAll('#tabs .tab .nm')].map(e=>e.textContent)")
+        before = names()
+        first = self.b.ev("(()=>{const r=document.querySelector('#tabs .tab').getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+r.height/2, w:r.width};})()")
+        last = self.b.ev("(()=>{const t=[...document.querySelectorAll('#tabs .tab')].pop(); const r=t.getBoundingClientRect(); return {x:r.right-4, y:r.top+r.height/2};})()")
+        send = lambda **kw: self.b.ws.call("Input.dispatchMouseEvent", dict(button="left", **kw))
+        send(type="mousePressed", x=first["x"], y=first["y"], clickCount=1, buttons=1)
+        for i in (1, 2, 3, 4):
+            send(type="mouseMoved", x=first["x"] + (last["x"] - first["x"]) * i / 4, y=first["y"], buttons=1)
+        time.sleep(0.25)
+        mid = self.b.ev("""(()=>{const tabs=[...document.querySelectorAll('#tabs .tab')];
+          return {order: tabs.map(t=>t.querySelector('.nm').textContent),
+                  carried: tabs[0].style.transform, slid: tabs.slice(1).map(t=>t.style.transform)};})()""")
+        self.assertEqual(mid["order"], before, "the DOM was reordered in the middle of the drag: %r" % mid)
+        self.assertIn("translateX", mid["carried"], "the carried tab does not follow the finger: %r" % mid)
+        self.assertTrue(any("translateX(-" in x for x in mid["slid"]), "no neighbour slid out of the way: %r" % mid)
+        send(type="mouseReleased", x=last["x"], y=first["y"], clickCount=1, buttons=0)
+        time.sleep(0.8)
+        after = names()
+        self.assertEqual(after[-1], before[0], "the carried tab did not land at the end: %r -> %r" % (before, after))
+        self.assertEqual(self.b.ev("[...document.querySelectorAll('#tabs .tab')].filter(t=>t.style.transform).length"), 0, "a transform was left behind")
+        daemon = [c["name"] or None for c in self.d.get("/api/canvases")]
+        self.assertEqual(daemon[-1], "zeta" if before[0] == "zeta" else daemon[-1], "the daemon was not told")
+
+    def test_opening_one_popup_closes_the_others(self):
+        r = self.b.ev("""(()=>{const h=(id)=>document.getElementById(id).hidden;
+          document.getElementById('options').click();
+          const a = !h('options-menu');
+          document.getElementById('theme').click();
+          const b = [h('options-menu'), !h('theme-menu')];
+          document.getElementById('toweb').click();
+          const c = [h('theme-menu'), !h('webbox')];
+          document.body.click();
+          return {a, b, c, end: h('webbox')};})()""")
+        self.assertTrue(r["a"])
+        self.assertEqual(r["b"], [True, True], "the theme button left the options list open: %r" % r)
+        self.assertEqual(r["c"], [True, True], "the web button left the theme list open: %r" % r)
+        self.assertTrue(r["end"])
+
+    def test_a_narrow_rail_keeps_its_buttons(self):
+        # 160px is the narrowest the right rail can be dragged (RAIL_MIN.r); below that the buttons cannot fit by arithmetic.
+        r = self.b.ev("""(()=>{const root=document.documentElement; root.style.setProperty('--rail-r','160px');
+          const rail=document.querySelector('.rail.right').getBoundingClientRect();
+          const ok=(id)=>{const b=document.getElementById(id).getBoundingClientRect(); return b.width>=26 && b.right<=rail.right+1 && b.left>=rail.left-1;};
+          const out={mkdir: ok('mkdir'), refresh: ok('refresh')};
+          root.style.removeProperty('--rail-r'); return out;})()""")
+        self.assertEqual(r, {"mkdir": True, "refresh": True}, "a rail header button is cut off or gone: %r" % r)
+
+    def test_the_close_question_can_be_pressed(self):
+        # On the canvas being viewed — a tab drag earlier in this class may have made another one current.
+        s = self.d.open_pane(self.d.home, canvas=self.b.ev("window.palmar.canvas()"))
+        for _ in range(40):
+            time.sleep(0.25)
+            if self.b.ev("[...window.palmar.tiles.values()].some(t=>t.id===%s)" % json.dumps(s["id"])):
+                break
+        self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.id===%s);
+          t.el.querySelector('.tb .cl').click(); return 1;})()""" % json.dumps(s["id"]))
+        time.sleep(0.3)
+        r = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.id===%s);
+          const b=t.el.querySelector('.cbtn'); if (!b) return null;
+          const cs=getComputedStyle(b); const r=b.getBoundingClientRect();
+          return {h: Math.round(r.height), fs: parseFloat(cs.fontSize), n: t.el.querySelectorAll('.cbtn').length,
+                  connected: b.isConnected, disp: cs.display, tb: getComputedStyle(t.el.querySelector('.tb')).display};})()""" % json.dumps(s["id"]))
+        self.assertIsNotNone(r, "no confirm strip appeared")
+        self.assertGreaterEqual(r["h"], 26, "the buttons are still small: %r" % r)
+        self.assertGreaterEqual(r["fs"], 12, "the text is still small: %r" % r)
+        self.d.delete("/api/sessions/" + s["id"])
 
     def test_the_web_box_closes_like_the_other_popups(self):
         """It used to stay up until its × was found (user, 2026-09-15, on Windows)."""

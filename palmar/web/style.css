@@ -304,8 +304,15 @@ body.wants .brand .wd { fill: var(--st-wait); opacity: 1; }
 .searchbox .search { background: var(--float); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .sx {
   width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line-2); background: var(--float);
-  color: var(--ink-2); font: 16px/1 var(--mono); cursor: pointer; display: grid; place-items: center; padding: 0 0 2px;
+  color: var(--ink-2); font-size: 0; cursor: pointer; display: grid; place-items: center; padding: 0;
   box-shadow: var(--shadow-2); -webkit-appearance: none; appearance: none;
+}
+/* Drawn, not typed: a × glyph sits low in its box and read as off-centre (user, 2026-09-15). The same
+   two strokes as every other close mark here (.cl, .tab .cx). */
+.sx::before {
+  content: ''; width: 9px; height: 9px;
+  background: linear-gradient(45deg, transparent 0 43%, currentColor 43% 57%, transparent 57%),
+              linear-gradient(-45deg, transparent 0 43%, currentColor 43% 57%, transparent 57%);
 }
 .sx:hover { border-color: var(--accent); color: var(--ink); }
 .search {
@@ -504,11 +511,16 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .rail-open.l { left: 0; }
 .rail-open:hover { color: var(--ink); border-color: var(--accent); }
 .rh {
-  display: flex; align-items: center; gap: 8px; padding: 14px 14px 8px;
+  display: flex; align-items: center; gap: 6px; padding: 14px 12px 8px;
   font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); font-weight: 500;
 }
 .rh .n { color: var(--ink-2); letter-spacing: 0; }
-.rh .sp { flex: 1; }
+/* The words give way and the buttons stay: dragged narrow, the header used to push its own buttons
+   out of the rail and they were clipped (user, 2026-09-15). */
+.rh { min-width: 0; }
+.rh .t { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rh .ib, .rh .rail-fold { flex: none; }
+.rh .sp { flex: 1; min-width: 4px; }
 /* 26px, not 22: "버튼도 너무 작은 것 같아" (2026-09-15). Same box on both rails. */
 .ib {
   width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line-2);
@@ -700,7 +712,9 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .tab .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* One dot on a tab and nothing more (decisions.md ⑪ "그 이상 안 넣는다"). Color --st-wait — not a new color */
 .tab .dot { width: 6px; height: 6px; margin-left: 1px; }
-.tab.drag { opacity: .55; }
+.tab.drag { opacity: .92; position: relative; z-index: 3; box-shadow: var(--shadow-2); transition: none; }
+.tabs.reordering .tab { transition: transform .16s ease; }   /* the neighbours slide; the carried one is on the finger */
+.tabs.reordering .tab.drag { transition: none; }
 .tabs .ib { margin: 0 0 2px 4px; }
 
 /* ── canvas ─────────────────────────────────── */
@@ -890,11 +904,13 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
    does not break it. */
 .tb.cfm-on > :not(.cfm) { display: none; }
 .cfm { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
-.cfm .q { font-size: 11px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cfm .q { font-size: 12px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 26px and 12px, like the buttons everywhere else — at 18px and 10.5 they were hard to hit and hard to
+   read (user, 2026-09-15). */
 .cbtn {
-  flex: none; height: 18px; padding: 0 8px; border-radius: 4px; cursor: pointer;
-  border: 1px solid var(--line-2); background: var(--btn); color: var(--ink-2);
-  font: 500 10.5px var(--mono); -webkit-appearance: none; appearance: none;
+  flex: none; height: 26px; padding: 0 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--line-2); background: var(--btn); color: var(--ink);
+  font: 600 12px var(--mono); -webkit-appearance: none; appearance: none;
 }
 .cbtn:hover, .cbtn:focus-visible { border-color: var(--accent); color: var(--ink); }
 .cbtn.yes { margin-left: auto; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
