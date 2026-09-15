@@ -374,6 +374,25 @@ kbd {
 /* The state in a word (#16). The mark says light/half/dark, the word says which — the title attribute
    needed a hover, and the third state read as "some third thing". No color: this is not a status light. */
 .theme b { font: inherit; font-size: 11px; font-weight: 400; letter-spacing: .02em; }
+.theme small { font: inherit; font-size: 10.5px; color: var(--ink-3); }   /* the state, in a word (#16) */
+/* The list behind the theme button. Fixed and placed by JS under the button, so it does not depend on
+   the top bar being a positioning context. One column: three headings and the choices under each. */
+.theme-menu {
+  position: fixed; z-index: 60; min-width: 176px; padding: 6px;
+  background: var(--float); border: 1px solid var(--line-2); border-radius: 9px; box-shadow: var(--shadow-2);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.theme-menu .tm-h { padding: 7px 10px 3px; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+.theme-menu .tm-h + .tm-h { margin-top: 4px; }
+.theme-menu .tm-i {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: 0; border-radius: 6px;
+  background: none; color: var(--ink-2); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.theme-menu .tm-i::before { content: ''; width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--line-2); flex: none; }
+.theme-menu .tm-i:hover, .theme-menu .tm-i:focus-visible { background: var(--hover); color: var(--ink); outline: none; }
+.theme-menu .tm-i.on { color: var(--ink); }
+.theme-menu .tm-i.on::before { background: var(--accent); border-color: var(--accent); }
+.theme-menu .tm-i.chosen::before { border-color: var(--accent); }   /* this side's palette, while the other side shows */
 .theme:hover { border-color: var(--accent); color: var(--ink); }
 .theme i {
   width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid currentColor; display: block;

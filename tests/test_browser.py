@@ -182,12 +182,15 @@ class Theme(unittest.TestCase):
         cls.d.stop()
 
     def test_each_state_names_itself(self):
+        """The button reads "theme" and opens a list now (2026-09-15); the state still stands beside
+        it in a word, because the mark alone cannot say which of three it is."""
         seen = []
-        for _ in range(3):
-            seen.append(self.b.ev("""(()=>{const b=document.getElementById('theme');
-              return [b.dataset.mode, (b.querySelector('b')||{}).textContent];})()"""))
+        for pick in ("system", "light:paper", "dark:earth"):
             self.b.ev("document.getElementById('theme').click()")
-            time.sleep(0.5)
+            self.b.ev("document.querySelector('#theme-menu [data-pick=%s]').click()" % json.dumps(pick))
+            time.sleep(0.2)
+            seen.append(self.b.ev("""(()=>{const b=document.getElementById('theme');
+              return [b.dataset.mode, (b.querySelector('small')||{}).textContent];})()"""))
         modes = [m for m, _ in seen]
         labels = [l for _, l in seen]
         self.assertEqual(len(set(labels)), 3, "two states read the same: %s" % labels)
@@ -1868,6 +1871,29 @@ class Grouping(unittest.TestCase):
         self.assertEqual([r["a"], r["b"]], [1, 1], "alt-drag did not take it out of the group")
         self.assertEqual(after["b"], before["b"], "the one left behind moved anyway")
 
+    def test_moving_a_group_keeps_its_arrangement(self):
+        """**Touching is the whole invariant.** Gravity — every member pulled up, then left — closed
+        holes and also tidied groups nobody had asked it to: a window under a short neighbour, with
+        nothing to its left at that height, slid left the first time the group was so much as moved
+        (user, 2026-09-15: "벽끼리 맞닿아 있기만 하면 딱 좋은데 … 움직일 때 배치가 바뀌네"). A group
+        whose members all touch is left exactly as it is: dragged by one member, every member moves by
+        the same amount and nothing else changes."""
+        self.bench("""put('g1', 40, 40, 240, 160);     // short, left
+                      put('g2', 292, 40, 240, 300);    // tall, right
+                      put('g3', 292, 352, 240, 160);   // under the tall one: touching it, nothing to its left
+                      P.joinGroups(by('g1').id, by('g2').id); P.joinGroups(by('g3').id, by('g1').id); return 1;""")
+        before = self.bench("return {a: at('g1'), b: at('g2'), c: at('g3')};")
+        x, y = self.press("g1")
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x + 90 * i / 3, y=y + 60 * i / 3, buttons=1)
+        self.send(type="mouseReleased", x=x + 90, y=y + 60, clickCount=1, buttons=0)
+        time.sleep(0.6)
+        after = self.bench("return {a: at('g1'), b: at('g2'), c: at('g3')};")
+        for k in "abc":
+            self.assertEqual([after[k][0] - before[k][0], after[k][1] - before[k][1]], [90, 60],
+                             "%s did not simply move with the group: %r -> %r" % (k, before, after))
+
     def test_taking_one_out_of_the_middle_closes_the_hole(self):
         """Closing the middle window closed the group up; taking it out with Alt-drag left its hole
         behind (user, 2026-09-15). Both are "a member is gone" and both close up now."""
@@ -2341,9 +2367,10 @@ class RenamingByHand(unittest.TestCase):
 
 
 class Palettes(unittest.TestCase):
-    """Eight palettes, chosen one per side; the attribute carries only the one in effect, so a light
-    choice never leaks into the dark theme and the other way round (2026-09-15: "테마 다 좋은데,
-    다 적용해 줄 수 있나")."""
+    """Eight palettes behind one theme button: System, then one per side under Light and Dark
+    (2026-09-15: "theme 으로 바꾸고 누르면 리스트 나오고 system light dark 대분류 해서 안에서 선택").
+    Picking under a side sets that theme and that palette; the attribute carries only the palette in
+    effect, so a light choice never leaks into the dark theme."""
 
     @classmethod
     def setUpClass(cls):
@@ -2356,38 +2383,48 @@ class Palettes(unittest.TestCase):
         cls.b.stop()
         cls.d.stop()
 
-    def accent(self):
-        return self.b.ev("getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()")
+    def state(self):
+        return self.b.ev("""(()=>{const root=document.documentElement;
+          return {theme: root.dataset.theme || null, pal: window.palmar.palette(),
+                  accent: getComputedStyle(root).getPropertyValue('--accent').trim(),
+                  open: !document.getElementById('theme-menu').hidden,
+                  on: [...document.querySelectorAll('#theme-menu .tm-i.on')].map(b=>b.dataset.pick)};})()""")
 
-    def test_each_side_keeps_its_own_choice(self):
-        r = self.b.ev("""(()=>{const P=window.palmar, root=document.documentElement;
-          const theme=(m)=>{ if (m) root.dataset.theme=m; else delete root.dataset.theme;
-                             document.querySelector('[data-mode]').click(); };   // cycle to re-run applyTheme
-          const out = {};
-          root.dataset.theme = 'dark'; document.querySelector('[data-mode]').click();   // → system
-          document.querySelector('[data-mode]').click();                                // → light
-          P.choosePalette('light', 'sky'); P.choosePalette('dark', 'graphite');
-          out.lightPal = P.palette(); out.lightAccent = getComputedStyle(root).getPropertyValue('--accent').trim();
-          document.querySelector('[data-mode]').click();                                // → dark
-          out.darkPal = P.palette(); out.darkAccent = getComputedStyle(root).getPropertyValue('--accent').trim();
-          out.kept = [localStorage.getItem('palmar.pal-light'), localStorage.getItem('palmar.pal-dark')];
-          P.choosePalette('dark', 'earth');
-          out.backToDefault = P.palette();
-          out.theme = root.dataset.theme;
-          return out;})()""")
-        self.assertEqual(r["theme"], "dark", "the theme did not end up where the test thinks: %r" % r)
-        self.assertEqual([r["lightPal"], r["lightAccent"]], ["sky", "#2f6fed"], "the light choice did not apply: %r" % r)
-        self.assertEqual([r["darkPal"], r["darkAccent"]], ["graphite", "#7cb3ff"], "the dark choice did not apply: %r" % r)
-        self.assertEqual(r["kept"], ["sky", "graphite"], "the choices were not kept")
-        self.assertIsNone(r["backToDefault"], "the default palette still carries an attribute")
+    def pick(self, v):
+        self.b.ev("document.getElementById('theme').click()")
+        self.assertTrue(self.state()["open"], "the list did not open")
+        self.b.ev("document.querySelector('#theme-menu [data-pick=%s]').click()" % json.dumps(v))
+
+    def test_the_list_sets_theme_and_palette_together(self):
+        self.pick("light:sky")
+        st = self.state()
+        self.assertEqual([st["theme"], st["pal"], st["accent"], st["open"]], ["light", "sky", "#2f6fed", False], st)
+        self.assertEqual(st["on"], ["light:sky"], "the list does not mark what is in effect: %r" % st)
+        self.pick("dark:graphite")
+        st = self.state()
+        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["dark", "graphite", "#7cb3ff"], st)
+        self.pick("system")
+        st = self.state()
+        self.assertIsNone(st["theme"], "system did not clear the explicit theme: %r" % st)
+        self.assertEqual(st["on"], ["system"])
+        kept = self.b.ev("[localStorage.getItem('palmar.pal-light'), localStorage.getItem('palmar.pal-dark'), localStorage.getItem('palmar-theme')]")
+        self.assertEqual(kept, ["sky", "graphite", None], "the choices were not kept the way the theme is")
 
     def test_a_choice_survives_a_reload(self):
-        self.b.ev("""(()=>{window.palmar.choosePalette('light', 'lilac'); const root=document.documentElement;
-          root.dataset.theme='light'; localStorage.setItem('palmar-theme','light'); return 1;})()""")
+        self.pick("light:lilac")
         self.b.ev("location.reload()")
         for _ in range(40):
             time.sleep(0.25)
             if self.b.ev("!!(window.palmar && window.palmar.palette)"):
                 break
-        self.assertEqual(self.b.ev("window.palmar.palette()"), "lilac")
-        self.assertEqual(self.accent(), "#6d4de6")
+        st = self.state()
+        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["light", "lilac", "#6d4de6"], st)
+
+    def test_escape_and_a_click_outside_close_it(self):
+        self.b.ev("document.getElementById('theme').click()")
+        self.assertTrue(self.state()["open"])
+        self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
+        self.assertFalse(self.state()["open"], "Escape did not close the list")
+        self.b.ev("document.getElementById('theme').click()")
+        self.b.ev("document.body.click()")
+        self.assertFalse(self.state()["open"], "a click outside did not close the list")

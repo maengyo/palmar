@@ -429,21 +429,74 @@ function applyTheme(mode) {   // mode: 'light' | 'dark' | null (system)
   if (mode) root.dataset.theme = mode; else delete root.dataset.theme;
   applyPalette();
   themeBtn.dataset.mode = mode || 'system';
-  // **The word is the point** (#16). Three marks cannot say which is which on their own; the only
-  // explanation used to be the title attribute, which needs a hover nobody performs.
-  const lab = themeBtn.querySelector('b');
-  if (lab) lab.textContent = mode || 'auto';
-  themeBtn.title = 'theme: ' + (mode || 'follows the system') + ' — click to change';
+  // The button says "theme" and opens the list (2026-09-15), and beside it, fainter, **the state in a
+  // word** — #16 still holds: three marks cannot say which is which on their own, and a title
+  // attribute needs a hover nobody performs.
+  const st = themeBtn.querySelector('small');
+  if (st) st.textContent = mode || 'auto';
+  themeBtn.title = 'theme: ' + (mode || 'follows the system') + ' — click for the list';
+  markThemeMenu();
   try { if (mode) localStorage.setItem(LS_THEME, mode); else localStorage.removeItem(LS_THEME); } catch (e) {}
   if (typeof renderBadge === 'function') renderBadge(true);   // the favicon color reads --st-*
   rethemeTerminals();
 }
-function cycleTheme() {
-  const cur = root.dataset.theme || null;
-  applyTheme(cur === null ? 'light' : cur === 'light' ? 'dark' : null);
+// ── the theme list: System · Light (a palette) · Dark (a palette) ──
+const themeMenu = $('#theme-menu');
+function markThemeMenu() {
+  if (!themeMenu) return;
+  const mode = root.dataset.theme || null;
+  for (const b of themeMenu.querySelectorAll('.tm-i')) {
+    const v = b.dataset.pick;
+    const on = v === 'system' ? mode === null
+             : v === 'light:' + palLight ? mode === 'light'
+             : v === 'dark:' + palDark ? mode === 'dark' : false;
+    const chosen = v === 'light:' + palLight || v === 'dark:' + palDark;   // this side's palette, even when the other side is showing
+    b.classList.toggle('on', on);
+    b.classList.toggle('chosen', chosen && !on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+  }
 }
-themeBtn.addEventListener('click', cycleTheme);
-themeBtn.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cycleTheme(); } });
+function showThemeMenu(open) {
+  if (!themeMenu) return;
+  themeMenu.hidden = !open;
+  themeBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) {
+    const r = themeBtn.getBoundingClientRect();
+    themeMenu.style.top = (r.bottom + 6) + 'px';
+    themeMenu.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+    markThemeMenu();
+    const cur = themeMenu.querySelector('.tm-i.on') || themeMenu.querySelector('.tm-i');
+    if (cur) cur.focus();
+  }
+}
+function pickTheme(v) {
+  if (v === 'system') applyTheme(null);
+  else {
+    const [side, name] = v.split(':');
+    choosePalette(side, name);
+    applyTheme(side);
+  }
+  showThemeMenu(false);
+  themeBtn.focus();
+}
+themeBtn.addEventListener('click', (e) => { e.stopPropagation(); showThemeMenu(themeMenu && themeMenu.hidden); });
+themeBtn.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showThemeMenu(themeMenu && themeMenu.hidden); } });
+if (themeMenu) {
+  themeMenu.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const b = e.target.closest('.tm-i');
+    if (b) pickTheme(b.dataset.pick);
+  });
+  themeMenu.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { showThemeMenu(false); themeBtn.focus(); return; }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const items = [...themeMenu.querySelectorAll('.tm-i')];
+    const i = items.indexOf(document.activeElement);
+    items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
+  });
+  document.addEventListener('click', () => { if (!themeMenu.hidden) showThemeMenu(false); });
+}
 if (darkMq.addEventListener) darkMq.addEventListener('change', () => { if (!root.dataset.theme) rethemeTerminals(); });
 
 // xterm takes colors as values. Read the values out of the CSS variables and hand them over — so a color never lives in two places.
@@ -1577,42 +1630,68 @@ function dropInto(meId, targetId, side) {
   return ids;
 }
 
-//: **Closing up is gravity, not a grid.** When a member shrinks, is closed, or is taken out, what is
-//: left has to stay touching ("항상 맞닿아 있게") — and a grid of rows could not say "under the shorter
-//: one", it only knew "a row down". So each member is pulled **up, then left**, as far as it goes
-//: before it touches another member or the group's own edge; passes repeat until nothing moves. Up
-//: first because the canvas grows downwards without limit and its width is finite. Nothing ever
-//: moves down or right, and the group's top-left corner stays where it is, so a group does not
-//: drift across the canvas while closing a hole. It never runs on a join — the preview is the promise
-//: there — and it runs after the push has resolved overlaps, on a group that has none.
-function compactGroup(ids) {
+//: **Closing up means re-attaching what came loose — and nothing else moves.** Gravity came first:
+//: every member pulled up, then left. It closed holes, and it also tidied groups nobody had asked it
+//: to: a window sitting under a short neighbour, with nothing to its left at that height, slid left
+//: the first time the group was so much as moved (user, 2026-09-15: "벽끼리 맞닿아 있기만 하면 딱
+//: 좋은데 … 움직일 때 배치가 바뀌네"). Touching is the whole invariant. So: split the group into the
+//: pieces that still touch each other; the piece holding the anchor — or, with none, the top-left
+//: member — stays put; every other piece moves **as one block**, up until it meets the fixed set or
+//: the group's top, then left the same way, and joins it. A group whose members all touch is left
+//: exactly as it is. Members touch when a GAP or less separates them, on either axis.
+function adjacent(a, b) {
+  return a.x <= b.x + b.w + GAP && a.x + a.w + GAP >= b.x &&
+         a.y <= b.y + b.h + GAP && a.y + a.h + GAP >= b.y;
+}
+function compactGroup(ids, anchorId) {
   const mine = ids.filter((id) => layout[id] && tiles.get(id));
   if (mine.length < 2) return false;
   const x0 = Math.min(...mine.map((id) => layout[id].x));
   const y0 = Math.min(...mine.map((id) => layout[id].y));
+  const pieces = () => {
+    const seen = new Set(), out = [];
+    for (const id of mine) {
+      if (seen.has(id)) continue;
+      const piece = [id]; seen.add(id);
+      for (let i = 0; i < piece.length; i++)
+        for (const o of mine)
+          if (!seen.has(o) && adjacent(layout[piece[i]], layout[o])) { seen.add(o); piece.push(o); }
+      out.push(piece);
+    }
+    return out;
+  };
   let moved = false;
   for (let pass = 0; pass < 8; pass++) {
-    let any = false;
-    mine.sort((a, b) => (layout[a].y - layout[b].y) || (layout[a].x - layout[b].x));
-    for (const id of mine) {
+    const ps = pieces();
+    if (ps.length < 2) break;
+    const topLeft = [...mine].sort((a, b) => (layout[a].y - layout[b].y) || (layout[a].x - layout[b].x))[0];
+    const fixedIdx = ps.findIndex((pc) => pc.indexOf(anchorId) >= 0 || (anchorId == null && pc.indexOf(topLeft) >= 0));
+    const fixed = ps[fixedIdx >= 0 ? fixedIdx : 0];
+    const loose = ps.find((pc, i) => i !== (fixedIdx >= 0 ? fixedIdx : 0));
+    // Up: the block may rise until one of its members meets a fixed member below which it sits.
+    let dy = Infinity;
+    for (const id of loose) {
       const m = layout[id];
-      let ny = y0;
-      for (const o of mine) {
-        if (o === id) continue;
-        const r = layout[o];
-        if (r.y < m.y && r.x < m.x + m.w && r.x + r.w > m.x) ny = Math.max(ny, r.y + r.h + GAP);
-      }
-      const my = Math.max(0, Math.min(m.y, ny));
-      let nx = x0;
-      for (const o of mine) {
-        if (o === id) continue;
-        const r = layout[o];
-        if (r.x < m.x && r.y < my + m.h && r.y + r.h > my) nx = Math.max(nx, r.x + r.w + GAP);
-      }
-      const mx = Math.max(0, Math.min(m.x, nx));
-      if (mx !== m.x || my !== m.y) { place(id, mx, my); any = moved = true; }
+      let floor = y0;
+      for (const f of fixed) { const r = layout[f];
+        if (r.y + r.h <= m.y && r.x < m.x + m.w && r.x + r.w > m.x) floor = Math.max(floor, r.y + r.h + GAP); }
+      dy = Math.min(dy, m.y - floor);
     }
-    if (!any) break;
+    dy = Math.max(0, dy);
+    for (const id of loose) if (dy) place(id, layout[id].x, layout[id].y - dy);
+    // Then left, the same way.
+    let dx = Infinity;
+    for (const id of loose) {
+      const m = layout[id];
+      let wall = x0;
+      for (const f of fixed) { const r = layout[f];
+        if (r.x + r.w <= m.x && r.y < m.y + m.h && r.y + r.h > m.y) wall = Math.max(wall, r.x + r.w + GAP); }
+      dx = Math.min(dx, m.x - wall);
+    }
+    dx = Math.max(0, dx);
+    for (const id of loose) if (dx) place(id, layout[id].x - dx, layout[id].y);
+    if (!dx && !dy) break;          // nothing to move it against — it stays where it is
+    moved = true;
   }
   if (moved) { saveLayout(); paintGroups(); }
   return moved;
@@ -1899,7 +1978,7 @@ function settle(anchorId, opts) {
     ? pushAside(t.s.canvas, anchorId, { only: mates, solo: true, dir: opts.dir })
     : [];
   if (inner.length) applyPush(inner);
-  if (opts.compact !== false && mates.length > 1) compactGroup(mates);
+  if (opts.compact !== false && mates.length > 1) compactGroup(mates, anchorId);
   if (!pushOn) return;                  // the switch in the shortcuts panel — closing up is not pushing
   const outer = pushAside(t.s.canvas, anchorId);
   if (outer.length) applyPush(outer);
@@ -3672,7 +3751,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // to the daemon — a test with two browsers needs to tell the two apart.
                   saveLayout, client: () => CLIENT, layoutOnDaemon: () => layoutOnDaemon,
                   holdStyle: () => holdStyle,
-                  palette: () => root.dataset.pal || null, choosePalette,
+                  palette: () => root.dataset.pal || null, choosePalette, applyTheme,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
                   lastOutAt, renderList,
@@ -3919,12 +3998,6 @@ function boot() {
         autoTidy = sw.checked;
         try { if (autoTidy) localStorage.setItem(LS_AUTOTIDY, '1'); else localStorage.removeItem(LS_AUTOTIDY); } catch (e) {}
       });
-    }
-    for (const side of ['light', 'dark']) {
-      const sel = document.getElementById('pal-' + side);
-      if (!sel) continue;
-      sel.value = side === 'light' ? palLight : palDark;
-      sel.addEventListener('change', () => choosePalette(side, sel.value));
     }
     const hsel = document.getElementById('holdstyle');
     if (hsel) {
