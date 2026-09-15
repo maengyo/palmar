@@ -299,6 +299,9 @@ body.wants .brand .wd { fill: var(--st-wait); opacity: 1; }
 .top .cvbar { flex: 1; min-width: 0; background: transparent; border-bottom: 0; -webkit-app-region: no-drag; }
 .top .tabs { height: auto; align-self: stretch; background: transparent; border-bottom: 0; padding: 0 6px; }   /* as tall as the row's content box, not a fixed 36 */
 .searchbox { position: fixed; top: 42px; left: 50%; transform: translateX(-50%); z-index: 70; display: flex; align-items: center; gap: 8px; }
+/* Floating over windows now, so it cannot be the translucent field it was on the bar: the title bar
+   under it showed through (measured 2026-09-15). */
+.searchbox .search { background: var(--float); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .sx {
   width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line-2); background: var(--float);
   color: var(--ink-2); font: 16px/1 var(--mono); cursor: pointer; display: grid; place-items: center; padding: 0 0 2px;
