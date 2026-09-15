@@ -159,7 +159,9 @@ class Daemon:
         url = self.base + path
         if token:
             url += ("&" if "?" in path else "?") + "token=" + self.token
-        data = json.dumps(body).encode() if body is not None else None
+        # **bytes go as they are.** Everything here speaks JSON except PUT /api/file, whose body is the
+        # file (2026-09-15) — so the rule is the type, not another argument.
+        data = body if isinstance(body, bytes) else (json.dumps(body).encode() if body is not None else None)
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("Origin", self.base)
         if data:

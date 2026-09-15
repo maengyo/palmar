@@ -617,6 +617,10 @@ function buildFrame(t, s) {
     t.pillEl = el('span', 'st');
     t.szEl = el('span', 'sz');
     t.rnEl = el('span', 'rn'); t.rnEl.title = 'rename (or double-click the name)';
+    // A viewer's two: hand the file to the machine's own program, and edit it here. Hidden on a
+    // terminal by CSS — the frame is shared, so both are built either way.
+    t.owEl = el('span', 'vw-open'); t.owEl.title = 'open with the system default program';
+    t.edEl = el('span', 'vw-edit'); t.edEl.title = 'edit';
     t.xpEl = el('span', 'xp'); t.xpEl.title = 'expand';
     // **Wired here, in the shared frame.** It used to be wired in Tile's constructor, so a viewer drew the
     // button and nothing happened when it was pressed (user, 2026-09-15).
@@ -628,7 +632,7 @@ function buildFrame(t, s) {
     // (#31 ④). It looks like the spans.
     t.clEl = el('button', 'cl'); t.clEl.type = 'button';
     t.clEl.title = 'close terminal'; t.clEl.setAttribute('aria-label', 'close terminal');
-    tb.append(t.dotEl, t.nameEl, t.pillEl, t.szEl, t.rnEl, t.xpEl, t.clEl);
+    tb.append(t.dotEl, t.nameEl, t.pillEl, t.szEl, t.rnEl, t.owEl, t.edEl, t.xpEl, t.clEl);
     // #25 text size per pane. Ctrl/⌘+wheel is also browser zoom, so it must be blocked — leave it and reaching
     // to enlarge one window enlarges the whole page. A plain wheel is left alone so xterm's scrollback lives.
     // **Take it on the capture phase.** On bubble, xterm's scrollback handler eats it at the child first, and it
@@ -1278,6 +1282,38 @@ class Tile {
 //: it comes back after a reload from the board alone (kind, path, canvas). Read-only: the shell beside it
 //: is where files are changed (2026-09-15).
 const VIEW_MAX_LINES = 20000;
+//: **One window, several ways of showing a file** (2026-09-15). Text with line numbers; an image; a
+//: comma-separated file as a table; HTML rendered in a frame that is sandboxed, so a page cannot reach
+//: palmar around it; a PDF handed to the browser's own viewer — no library is vendored for any of it.
+//: A spreadsheet (.xlsx) is not here: that one needs a library, and that is a decision to take, not to
+//: slip in. The button beside expand hands the file to the machine's own program instead.
+function viewMode(path, ctype) {
+  const ext = (path.match(/\.[^.\\/]+$/) || [''])[0].toLowerCase();
+  if (ctype.startsWith('image/')) return 'image';
+  if (ctype.startsWith('application/pdf')) return 'pdf';
+  if (ext === '.csv' || ext === '.tsv') return 'csv';
+  if (ext === '.html' || ext === '.htm') return 'html';
+  return 'text';
+}
+// A separated-values file, by the rule everyone actually uses: quotes protect a separator, and two
+// quotes inside quotes are one quote.
+function parseSV(text, sep) {
+  const rows = [[]];
+  let cell = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; }
+      else cell += c;
+    } else if (c === '"') q = true;
+    else if (c === sep) { rows[rows.length - 1].push(cell); cell = ''; }
+    else if (c === '\n') { rows[rows.length - 1].push(cell); cell = ''; rows.push([]); }
+    else if (c !== '\r') cell += c;
+  }
+  rows[rows.length - 1].push(cell);
+  if (rows.length && rows[rows.length - 1].every((x) => x === '')) rows.pop();
+  return rows;
+}
 function viewerId(path) {
   let h = 5381;
   for (let i = 0; i < path.length; i++) h = ((h * 33) ^ path.charCodeAt(i)) >>> 0;
@@ -1294,6 +1330,7 @@ class Viewer {
     this.closed = false;
     this.off = false;
     // What the rest of the page asks of a window's terminal, answered harmlessly.
+    this.blobUrl = null;
     this.term = { rows: 0, cols: 0, options: {}, focus() {}, blur() {}, dispose() {}, resize() {},
                   hasSelection: () => false, getSelection: () => '', textarea: null };
     const saved = buildFrame(this, this.s);
@@ -1302,6 +1339,17 @@ class Viewer {
     this.el.dataset.path = path;
     this.termEl.className = 'view';
     this.termEl.tabIndex = 0;
+    this.mode = 'text';
+    this.text = null;          // what was read, while it is being edited
+    this.mtime = '';           // the stamp a save has to match
+    this.canEdit = false;
+    this.editing = false;
+    this.dirty = false;
+    this.barEl = el('div', 'view-bar');
+    this.barEl.hidden = true;
+    this.el.appendChild(this.barEl);
+    this.owEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.openWith(); });
+    this.edEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.toggleEdit(); });
     this.szEl.hidden = true;                      // there are no columns to say
     this.clEl.title = 'close'; this.clEl.setAttribute('aria-label', 'close viewer');
     this.clEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.close(); });
@@ -1337,6 +1385,142 @@ class Viewer {
       this.nameEl.append(s.name + ' ', el('span', null, '· ' + shortPath(s.cwd)));
     }
   }
+  // Hand it to the machine: `open` on macOS, `xdg-open` on Linux, the shell's own on Windows.
+  async openWith() {
+    try {
+      await api('POST', '/api/open', { path: this.s.path });
+      toast([{ b: this.s.name }, ' — opening it with the system default']);
+    } catch (e) {
+      toast(['could not open it — ' + e.message]);
+    }
+  }
+  // Editing is plain text in a plain box: an editor's own undo, its own selection, its own IME.
+  toggleEdit(on) {
+    if (!this.canEdit) { toast(['this one is read-only here — the shell beside it can change it']); return; }
+    const want = on === undefined ? !this.editing : on;
+    if (want === this.editing) return;
+    this.editing = want;
+    this.el.classList.toggle('editing', want);
+    this.edEl.title = want ? 'stop editing' : 'edit';
+    if (want) this.showEditor(); else { this.dirty = false; this.render(); }
+    this.say();
+  }
+  showEditor() {
+    const box = this.termEl;
+    box.className = 'view editor';
+    box.textContent = '';
+    const ta = el('textarea', 'ed-area');
+    ta.value = this.text == null ? '' : this.text;
+    ta.spellcheck = false;
+    ta.addEventListener('input', () => { this.dirty = true; this.say(); });
+    ta.addEventListener('keydown', (ev) => {
+      if ((ev.metaKey || ev.ctrlKey) && (ev.key === 's' || ev.key === 'S')) { ev.preventDefault(); ev.stopPropagation(); this.save(); }
+    });
+    box.appendChild(ta);
+    this.ta = ta;
+    ta.focus();
+  }
+  // The line under the title: what state this file is in, and the way out of a clash.
+  say(msg, actions) {
+    const bar = this.barEl;
+    bar.textContent = '';
+    if (!msg && !this.editing) { bar.hidden = true; return; }
+    bar.hidden = false;
+    bar.append(el('span', 'm', msg || (this.dirty ? 'edited — ' + KMOD + 'S saves' : 'editing — ' + KMOD + 'S saves')));
+    for (const [label, fn] of actions || []) {
+      const b = el('button', 'vb', label);
+      b.type = 'button';
+      b.addEventListener('click', (ev) => { ev.stopPropagation(); fn(); });
+      bar.appendChild(b);
+    }
+  }
+  async save(force) {
+    if (!this.ta) return;
+    const body = this.ta.value;
+    const url = new URL('/api/file', location.origin);
+    url.searchParams.set('path', this.s.path);
+    url.searchParams.set('token', TOKEN);
+    if (!force && this.mtime) url.searchParams.set('mtime', this.mtime);
+    try {
+      const r = await fetch(url, { method: 'PUT', headers: { 'content-type': 'text/plain; charset=utf-8' }, body });
+      if (r.status === 409) {
+        // Something else wrote it — an agent in the terminal beside this window is the case this is for.
+        this.say('it changed on disk since you opened it', [
+          ['Reload', () => { this.toggleEdit(false); this.load(); }],
+          ['Overwrite', () => this.save(true)],
+        ]);
+        return;
+      }
+      if (!r.ok) {
+        let m = r.status + ' ' + r.statusText;
+        try { const j = await r.json(); if (j && j.error) m = j.error; } catch (e) {}
+        this.say('could not save — ' + m);
+        return;
+      }
+      const j = await r.json();
+      this.mtime = String(j.mtime);
+      this.text = body;
+      this.dirty = false;
+      this.say('saved');
+      setTimeout(() => { if (!this.dirty && this.editing) this.say(); }, 1600);
+    } catch (e) {
+      this.say('could not save — ' + (e.message || e));
+    }
+  }
+  render() {
+    const box = this.termEl;
+    box.className = 'view ' + this.mode;
+    box.textContent = '';
+    if (this.mode === 'image') {
+      const img = el('img');
+      img.alt = this.s.name;
+      img.src = this.blobUrl;
+      box.appendChild(img);
+      return;
+    }
+    if (this.mode === 'pdf') {
+      const f = el('iframe', 'doc');
+      f.src = this.blobUrl;
+      box.appendChild(f);
+      return;
+    }
+    if (this.mode === 'html') {
+      const f = el('iframe', 'doc');
+      // **Sandboxed, and no exception to it.** The page is somebody's file; without this it would run
+      // its script in palmar's own origin, next to the token.
+      f.setAttribute('sandbox', '');
+      f.srcdoc = this.text;
+      box.appendChild(f);
+      return;
+    }
+    if (this.mode === 'csv') {
+      const rows = parseSV(this.text, this.s.path.toLowerCase().endsWith('.tsv') ? '\t' : ',');
+      const tbl = el('table', 'sv');
+      const head = el('tr');
+      head.appendChild(el('th', 'n', ''));
+      (rows[0] || []).forEach((c) => head.appendChild(el('th', null, c)));
+      tbl.appendChild(head);
+      rows.slice(1, VIEW_MAX_LINES).forEach((r, i) => {
+        const tr = el('tr');
+        tr.appendChild(el('td', 'n', String(i + 1)));
+        r.forEach((c) => tr.appendChild(el('td', null, c)));
+        tbl.appendChild(tr);
+      });
+      box.appendChild(tbl);
+      return;
+    }
+    const lines = (this.text || '').split('\n');
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+    const frag = document.createDocumentFragment();
+    const n = Math.min(lines.length, VIEW_MAX_LINES);
+    for (let i = 0; i < n; i++) {
+      const l = el('div', 'l');
+      l.append(el('span', 'n', String(i + 1)), el('span', 'c', lines[i]));
+      frag.appendChild(l);
+    }
+    if (lines.length > n) frag.appendChild(el('div', 'view-msg', '… ' + (lines.length - n) + ' more lines'));
+    box.appendChild(frag);
+  }
   async load() {
     const box = this.termEl;
     box.textContent = 'reading…';
@@ -1352,28 +1536,23 @@ class Viewer {
         return;
       }
       const ctype = r.headers.get('content-type') || '';
-      if (ctype.startsWith('image/')) {
+      this.mtime = r.headers.get('x-palmar-mtime') || '';
+      this.canEdit = r.headers.get('x-palmar-editable') === '1';
+      this.el.classList.toggle('can-edit', this.canEdit);
+      this.mode = viewMode(this.s.path, ctype);
+      if (this.mode === 'image' || this.mode === 'pdf') {
         const blob = await r.blob();
         if (this.closed) return;               // closed while it was loading — do not make a URL nobody revokes
-        const img = el('img');
-        img.alt = this.s.name;
-        img.src = URL.createObjectURL(blob);
-        box.textContent = ''; box.classList.add('image'); box.appendChild(img);
-        return;
+        if (this.blobUrl) URL.revokeObjectURL(this.blobUrl);
+        this.blobUrl = URL.createObjectURL(blob);
+        this.text = null;
+      } else {
+        this.text = await r.text();
+        if (this.closed) return;
       }
-      const text = await r.text();
-      if (this.closed) return;
-      const lines = text.split('\n');
-      if (lines.length && lines[lines.length - 1] === '') lines.pop();
-      const frag = document.createDocumentFragment();
-      const n = Math.min(lines.length, VIEW_MAX_LINES);
-      for (let i = 0; i < n; i++) {
-        const l = el('div', 'l');
-        l.append(el('span', 'n', String(i + 1)), el('span', 'c', lines[i]));
-        frag.appendChild(l);
-      }
-      if (lines.length > n) frag.appendChild(el('div', 'view-msg', '… ' + (lines.length - n) + ' more lines'));
-      box.textContent = ''; box.appendChild(frag);
+      this.dirty = false;
+      this.render();
+      this.say();
     } catch (e) {
       box.textContent = ''; box.appendChild(el('div', 'view-msg', 'could not read it — ' + (e.message || e)));
     }
@@ -1399,7 +1578,7 @@ class Viewer {
   }
   dispose() {
     this.closed = true;
-    for (const img of this.termEl.querySelectorAll('img')) { try { URL.revokeObjectURL(img.src); } catch (e) {} }
+    if (this.blobUrl) { try { URL.revokeObjectURL(this.blobUrl); } catch (e) {} this.blobUrl = null; }
     this.el.remove();
   }
 }
@@ -4003,7 +4182,10 @@ function renderTree() {
     r.setAttribute('aria-expanded', n.expanded ? 'true' : 'false');
     // has_children counts folders only; a folder of nothing but files must still open — so a click always
     // asks (expandNode goes to the daemon), and only the caret is greyed when no folder is known below.
-    const car = el('span', 'car' + (n.hasChildren ? '' : ' none'), n.expanded ? '▾' : '▸');
+    // **Known to hold something** — either the listing said so, or opening it proved it. A folder whose
+    // children arrived but whose `has_children` was stale used to keep a hidden caret (2026-09-15).
+    const holds = n.hasChildren || (n.children && n.children.length > 0);
+    const car = el('span', 'car' + (holds ? '' : ' none'), n.expanded ? '▾' : '▸');
     car.addEventListener('click', (ev) => { ev.stopPropagation(); if (n.expanded) collapseNode(n); else expandNode(n); });
     r.appendChild(car);
     if (n.depth > 0) r.appendChild(rowIcon('dir'));

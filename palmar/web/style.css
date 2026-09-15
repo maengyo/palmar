@@ -1170,6 +1170,43 @@ body.fold-r .fab { display: grid; }
 .view.image { display: grid; place-items: center; padding: 10px; }
 .view img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .view-msg { padding: 8px 12px; color: var(--ink-3); }
+/* A viewer's two buttons. They are built on every window and shown only on a viewer — a terminal has
+   no file to hand over and nothing to edit. `edit` appears only when the daemon says the file is text. */
+.vw-open, .vw-edit { display: none; }
+.tile.viewer .vw-open { display: grid; }
+.tile.viewer.can-edit .vw-edit { display: grid; }
+.tile.viewer.editing .vw-edit { color: var(--accent); border-color: var(--accent); }
+/* The editor: the same face and size as the reading view, no line numbers — a textarea is what carries
+   an editor's own undo, selection and IME, and drawing numbers beside one means keeping two scrolls. */
+.view.editor { padding: 0; }
+.ed-area {
+  width: 100%; height: 100%; box-sizing: border-box; resize: none; border: 0; outline: 0;
+  padding: 8px 12px; background: var(--tile); color: var(--term-ink);
+  font: inherit; line-height: 1.55; tab-size: 4; -moz-tab-size: 4;
+}
+/* The line under the title: edited · saved · it changed on disk, with the two ways out of that. */
+.view-bar {
+  flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  border-top: 1px solid var(--line); background: var(--tile-bar); font-size: 11px; color: var(--ink-2);
+}
+.view-bar .m { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.view-bar .vb {
+  margin-left: auto; flex: none; height: 22px; padding: 0 9px; border-radius: 6px;
+  border: 1px solid var(--line-2); background: var(--btn); color: var(--ink); cursor: pointer;
+  font: 500 11px var(--mono); -webkit-appearance: none; appearance: none;
+}
+.view-bar .vb + .vb { margin-left: 0; }
+.view-bar .vb:hover { border-color: var(--accent); }
+/* A table, a document, a page. The frame is sandboxed in the markup — see Viewer.render. */
+.view.csv { padding: 0; }
+.view table.sv { border-collapse: collapse; font-size: inherit; }
+.view table.sv th, .view table.sv td {
+  border: 1px solid var(--line); padding: 3px 8px; text-align: left; white-space: pre; vertical-align: top;
+}
+.view table.sv th { position: sticky; top: 0; background: var(--tile-bar); color: var(--ink); font-weight: 600; z-index: 1; }
+.view table.sv .n { color: var(--ink-3); text-align: right; background: var(--tile-bar); user-select: none; }
+.view.html, .view.pdf { padding: 0; overflow: hidden; }
+.view iframe.doc { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
 .btn {
   height: 30px; border-radius: 6px; border: 1px solid transparent; font: 500 12px var(--mono);
   display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;

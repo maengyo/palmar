@@ -646,14 +646,14 @@ class Stopping(unittest.TestCase):
         self.addCleanup(shutil.rmtree, home, ignore_errors=True)
         r = self.palmar(home, "--stop")
         self.assertEqual(r.returncode, 0, r.stderr[-300:])
-        self.assertIn("없다", r.stdout)
+        self.assertIn("no daemon is running", r.stdout)
 
     def test_it_stops_a_running_daemon(self):
         with Daemon() as d:
             d.open_pane(name="goes with it")
             r = self.palmar(d.home, "--stop")
             self.assertEqual(r.returncode, 0, r.stderr[-300:])
-            self.assertIn("멈췄다", r.stdout)
+            self.assertIn("stopped", r.stdout)
             # It really is gone: the process exited, and the port stops answering.
             d.proc.wait(timeout=15)
             with self.assertRaises(Exception):
@@ -683,7 +683,7 @@ class Stopping(unittest.TestCase):
             fh.write("pid 999999 http://127.0.0.1:8801\n")     # nothing holds a flock on this
         r = self.palmar(home, "--stop")
         self.assertEqual(r.returncode, 0, r.stderr[-300:])
-        self.assertIn("없다", r.stdout, "it treated a stale lock as a running daemon")
+        self.assertIn("no daemon is running", r.stdout, "it treated a stale lock as a running daemon")
 
 
 class TheAddress(unittest.TestCase):
@@ -956,7 +956,7 @@ class StoppingTrustsTheAddress(unittest.TestCase):
             r = subprocess.run([PYTHON, "-m", "palmar", "--stop"], cwd=REPO,
                                env=dict(os.environ, HOME=d.home, PYTHONPATH=REPO),
                                capture_output=True, text=True, timeout=60)
-            self.assertNotIn("도는 데몬이 없다", r.stdout,
+            self.assertNotIn("no daemon is running", r.stdout,
                              "it called a running daemon dead: %r" % r.stdout)
 
     def test_it_asks_over_the_socket(self):
@@ -1008,7 +1008,7 @@ class StoppingTrustsTheAddress(unittest.TestCase):
                            env=dict(os.environ, HOME=home, PYTHONPATH=REPO),
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr[-300:])
-        self.assertIn("도는 데몬이 없다", r.stdout)
+        self.assertIn("no daemon is running", r.stdout)
 
 
 class WhereAPaneIsNow(unittest.TestCase):
@@ -1244,3 +1244,86 @@ class LookingAtADocument(unittest.TestCase):
                                                                         "path": "/tmp/x.md", "canvas": "c1"}}})
         self.assertEqual(st, 200, b)
         self.assertEqual(self.d.get("/api/layout")["layout"]["v:abc"]["path"], "/tmp/x.md")
+
+
+class EditingAFile(unittest.TestCase):
+    """Text and Markdown can be changed from the viewer (user, 2026-09-15); everything else is read-only,
+    and a save that would land on top of somebody else's write is refused rather than won."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.dir = os.path.join(cls.d.home, "edit")
+        os.makedirs(cls.dir)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.d.stop()
+
+    def write(self, name, text="one\n"):
+        p = os.path.join(self.dir, name)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return p
+
+    def put(self, path, body, mtime=None):
+        q = "/api/file?path=" + path + ("&mtime=" + str(mtime) if mtime is not None else "")
+        return self.d.raw("PUT", q, body)
+
+    def test_a_text_file_saves_and_says_its_new_stamp(self):
+        p = self.write("notes.md")
+        st, b = self.d.raw("GET", "/api/file?path=" + p)
+        self.assertEqual(st, 200)
+        st, b = self.put(p, "두 번째\n".encode())
+        self.assertEqual(st, 200, b)
+        self.assertIn("mtime", json.loads(b))
+        with open(p, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "두 번째\n")
+
+    def test_it_keeps_the_mode_the_file_had(self):
+        if os.name == "nt":
+            self.skipTest("no POSIX modes here")
+        p = self.write("script.sh")
+        os.chmod(p, 0o750)
+        self.assertEqual(self.put(p, b"echo hi\n")[0], 200)
+        self.assertEqual(os.stat(p).st_mode & 0o777, 0o750, "saving changed the file's mode")
+
+    def test_a_save_that_would_land_on_somebody_else_is_refused(self):
+        p = self.write("shared.txt")
+        stamp = float(os.stat(p).st_mtime)
+        time.sleep(0.02)
+        with open(p, "w", encoding="utf-8") as fh:      # the agent in the terminal beside it
+            fh.write("theirs\n")
+        st, b = self.put(p, b"mine\n", mtime=stamp)
+        self.assertEqual(st, 409, b)
+        with open(p, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "theirs\n", "it was overwritten anyway")
+        # ...and it can be forced, which is what the page's "Overwrite" does.
+        self.assertEqual(self.put(p, b"mine\n")[0], 200)
+
+    def test_what_may_not_be_written(self):
+        png = os.path.join(self.dir, "x.png")
+        with open(png, "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(self.put(png, b"nope")[0], 415, "an image was writable")
+        p = self.write("ok.txt")
+        self.assertEqual(self.put(p, b"a\x00b")[0], 415, "a NUL went through")
+        self.assertEqual(self.d.raw("PUT", "/api/file?path=" + p, b"x", token=False)[0], 403)
+        self.assertEqual(self.put("/etc/hosts", b"x")[0], 400, "a file outside home was writable")
+
+    def test_the_get_says_whether_it_can_be_edited(self):
+        import urllib.request
+        for name, want in (("a.md", "1"), ("b.png", "0")):
+            p = os.path.join(self.dir, name)
+            with open(p, "wb") as fh:
+                fh.write(b"x")
+            req = urllib.request.Request(self.d.base + "/api/file?path=" + p + "&token=" + self.d.token)
+            req.add_header("Origin", self.d.base)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                self.assertEqual(r.headers.get("X-Palmar-Editable"), want, name)
+                self.assertTrue(r.headers.get("X-Palmar-Mtime"), "no stamp on " + name)
+
+    def test_open_with_needs_a_file_under_home(self):
+        self.assertEqual(self.d.raw("POST", "/api/open", {"path": "/etc/hosts"})[0], 400)
+        self.assertEqual(self.d.raw("POST", "/api/open", {"path": self.dir})[0], 400, "a folder was accepted")
+        self.assertEqual(self.d.raw("POST", "/api/open", {"path": self.write("z.txt")}, token=False)[0], 403)

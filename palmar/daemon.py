@@ -1367,7 +1367,7 @@ class Reaper:
 
     def install(self, loop) -> None:
         if not hasattr(signal, "SIGCHLD"):
-            log("SIGCHLD 가 없는 플랫폼 — pane 의 죽음은 콘솔 EOF 로 안다")
+            log("no SIGCHLD on this platform — a pane's death is the console's EOF")
             return
         loop.add_signal_handler(signal.SIGCHLD, self.reap)
 
@@ -1775,6 +1775,25 @@ def _cwd_of_win(pid: int):
         k32.CloseHandle(h)
 
 
+def write_atomic(path: Path, data: bytes) -> float:
+    """Write beside it and rename over it, so the file is never half-written — and keep the mode it had.
+    Returns the new mtime, which is the stamp the next save has to match."""
+    tmp = path.with_name(path.name + ".palmar-tmp")
+    try:
+        mode = path.stat().st_mode & 0o777
+    except OSError:
+        mode = 0o644
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | NOFOLLOW | BINARY, mode)
+    try:
+        if POSIX_PERMS:
+            os.fchmod(fd, mode)
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+    return path.stat().st_mtime
+
+
 def write_private(path: Path, data: bytes, mode: int) -> None:
     """Writes anew with mode. Writes a temp file and renames — never leaves a running shim half-written."""
     tmp = path.with_name(path.name + ".tmp")
@@ -2011,11 +2030,11 @@ def stop_daemon() -> int:
     try:
         fd = os.open(str(path), os.O_RDWR | NOFOLLOW | BINARY)
     except FileNotFoundError:
-        print("palmar: 도는 데몬이 없다" if not answering else
+        print("palmar: no daemon is running" if not answering else
               "palmar: 주소는 응답하는데 run/lock 이 없다 — 그 데몬은 palmar 가 만든 것이 아니거나 파일이 지워졌다")
         return 0 if not answering else 1
     except OSError as e:
-        print(f"palmar: run/lock 을 못 열었다 — {e}")
+        print(f"palmar: could not open run/lock — {e}")
         return 1
     try:
         try:
@@ -2025,24 +2044,24 @@ def stop_daemon() -> int:
         else:
             unlock_fd(fd)
             if not answering:
-                print("palmar: 도는 데몬이 없다")
+                print("palmar: no daemon is running")
                 return 0
             # The lock is free and the address still answers. An older build locked a different byte.
-            print("palmar: 잠금은 비었는데 주소가 응답한다 — run/lock 의 pid 로 멈춰 본다")
+            print("palmar: the lock is free but the address answers — trying the pid in run/lock")
         raw, why = _read_lock_line(fd)
         if raw is None:
-            print(f"palmar: run/lock 을 못 읽었다 — {why}")
+            print(f"palmar: could not read run/lock — {why}")
             if answering:
-                print(f"        그런데 {said.split('/?')[0]} 는 응답한다 — 도는 데몬이 있다는 뜻이다.")
+                print(f"        but {said.split('/?')[0]} answers, so a daemon is running.")
                 if sys.platform == "win32":
-                    print("        그 python 을 끝내라:  Get-Process python | Stop-Process")
+                    print("        end that python:  Get-Process python | Stop-Process")
                 else:
-                    print("        그 프로세스를 끝내라:  pkill -f 'python.*-m palmar'")
+                    print("        end that process:  pkill -f 'python.*-m palmar'")
             return 1
         # "pid 1234 http://127.0.0.1:8801" — the address is there for --doctor; only the pid matters here.
         line = raw.split()
         if len(line) < 2 or line[0] != "pid" or not line[1].isdigit():
-            print(f"palmar: run/lock 의 내용을 알아볼 수 없다 ({' '.join(line)[:60]})")
+            print(f"palmar: run/lock says nothing it can read ({' '.join(line)[:60]})")
             return 1
         pid = int(line[1])
         # **Ask over the socket first.** A console event cannot reach a daemon that has no console,
@@ -2051,17 +2070,17 @@ def stop_daemon() -> int:
         # (user, 2026-09-14, after I assumed the process group would be enough). The socket is there
         # on every platform, it is already authenticated, and it ends in the same place Ctrl-C does.
         if answering and _ask_to_stop(said):
-            print(f"palmar: pid {pid} 에 멈추라고 했다. 기다린다…")
+            print(f"palmar: asked pid {pid} to stop; waiting…")
         else:
             try:
                 os.kill(pid, signal.SIGTERM)
             except ProcessLookupError:
-                    print("palmar: 그 데몬은 이미 없다")
+                    print("palmar: that daemon is already gone")
                     return 0
             except PermissionError:
-                print(f"palmar: pid {pid} 에 신호를 못 보낸다 — 다른 사용자의 것이다")
+                print(f"palmar: cannot signal pid {pid} — it belongs to another user")
                 return 1
-            print(f"palmar: pid {pid} 에 멈추라고 했다. 기다린다…")
+            print(f"palmar: asked pid {pid} to stop; waiting…")
     finally:
         os.close(fd)
     # Gone means the lock is free again. Poll rather than waitpid — it is not our child.
@@ -2071,7 +2090,7 @@ def stop_daemon() -> int:
         try:
             fd = os.open(str(path), os.O_RDWR | NOFOLLOW | BINARY)
         except OSError:
-            print("palmar: 멈췄다")
+            print("palmar: stopped")
             return 0
         try:
             lock_fd(fd)
@@ -2079,11 +2098,11 @@ def stop_daemon() -> int:
             continue
         else:
             unlock_fd(fd)
-            print("palmar: 멈췄다")
+            print("palmar: stopped")
             return 0
         finally:
             os.close(fd)
-    print(f"palmar: {STOP_WAIT_S:.0f}초 안에 안 멈췄다. 다시 해 보거나, 정 안 되면 `kill -9 {pid}`")
+    print(f"palmar: it did not stop within {STOP_WAIT_S:.0f}s. Try again, or as a last resort `kill -9 {pid}`")
     return 1
 
 
@@ -2139,7 +2158,7 @@ def load_or_make_key() -> str:
     except FileNotFoundError:
         got = ""            # the first start on this HOME. Not worth a line that reads like a fault.
     except (OSError, ValueError, UnicodeDecodeError) as e:
-        log(f"run/key 를 못 읽었다 ({e}) — 새로 만든다")
+        log(f"could not read run/key ({e}) — making a new one")
         got = ""
     # Check the length and the characters. Trust a hand-edited or half-written file and characters that
     # cannot go in a URL slip in, leaving a daemon nobody can open.
@@ -2149,14 +2168,14 @@ def load_or_make_key() -> str:
         try:
             if KEY_FILE.stat().st_mode & 0o077:
                 os.chmod(KEY_FILE, 0o600)
-                log(f"run/key 의 권한을 0600 으로 조였다")
+                log(f"tightened run/key to 0600")
         except OSError as e:
-            log(f"run/key 의 권한을 못 고쳤다 — {e}")
+            log(f"could not fix the mode of run/key — {e}")
         return got
     if had:
         # **Never swapped out silently.** A changed key kills the bookmark, and that is exactly what this
         # scheme promised the user (#14). Change it, but say why it changed.
-        log("run/key 가 비었거나 모양이 아니다 — 새로 만든다. **주소가 바뀐다**(북마크를 다시 잡아라)")
+        log("run/key is empty or malformed — making a new one. **The address changes** (take the bookmark again)")
     key = secrets.token_urlsafe(32)
     write_private(KEY_FILE, key.encode() + b"\n", 0o600)
     return key
@@ -2488,6 +2507,23 @@ FILE_MAX = 2 * 1024 * 1024
 #: 2026-09-15). An SVG is served as its source, which is also the more useful thing to see.
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                ".webp": "image/webp", ".bmp": "image/bmp", ".ico": "image/x-icon"}
+#: A PDF goes out as a PDF so the browser's own viewer draws it — no library is vendored for this
+#: (2026-09-15). **HTML does not**: served as text/html from this origin, a page opened in a tab would
+#: run its script beside palmar's own; the viewer renders it in a sandboxed frame from text instead.
+DOC_TYPES = {".pdf": "application/pdf"}
+#: Writing is narrower than reading, and deliberately: plain text and Markdown (user, 2026-09-15
+#: "편집은 텍스트 파일이나 md 파일만"). Everything else is read-only — the shell beside it is where a
+#: binary gets changed. An extension not on this list is refused rather than guessed at.
+EDITABLE = {".txt", ".md", ".markdown", ".text", ".log", ".csv", ".tsv", ".json", ".yaml", ".yml",
+            ".toml", ".ini", ".cfg", ".conf", ".env", ".sh", ".bash", ".zsh", ".ps1", ".py", ".js",
+            ".ts", ".jsx", ".tsx", ".css", ".html", ".htm", ".xml", ".sql", ".rs", ".go", ".c", ".h",
+            ".cpp", ".hpp", ".java", ".rb", ".php", ".lua", ".vim", ".gitignore", ".dockerignore"}
+
+
+def editable(f: Path) -> bool:
+    """Plain text by its name. A file with no suffix (Makefile, LICENSE) counts — those are text by
+    convention and refusing them would be pedantic; one with a suffix nobody writes by hand does not."""
+    return f.suffix.lower() in EDITABLE or not f.suffix
 
 
 def resolve_file(raw) -> Path | None:
@@ -2535,7 +2571,7 @@ def resolve_under_roots(raw) -> Path | None:
 
 # ── HTTP ─────────────────────────────────────────────────────────────────────
 def http(status: int, body: bytes = b"", ctype: str = "application/json; charset=utf-8",
-         head_only: bool = False) -> bytes:
+         head_only: bool = False, extra: str = "") -> bytes:
     # The body of a 4xx is {"error": "one human-readable line"} (protocol.md, under the HTTP table). A 4xx with
     # no body is filled with the reason phrase here — the browser toasts it as-is, so no paths, no internals.
     if status >= 400 and not body:
@@ -2547,6 +2583,7 @@ def http(status: int, body: bytes = b"", ctype: str = "application/json; charset
             "X-Frame-Options: DENY\r\nContent-Security-Policy: frame-ancestors 'none'\r\n")
     if body:
         head += f"Content-Type: {ctype}\r\n"
+    head += extra                      # a route's own headers, each already ending in CRLF
     return head.encode() + b"\r\n" + (b"" if head_only else body)
 
 
@@ -2984,7 +3021,7 @@ async def handle_request(reader, writer) -> None:
         return
 
     if path == "/api/file":
-        if method != "GET":
+        if method not in ("GET", "PUT"):
             writer.write(http(405))
             return
         if not token_ok:
@@ -2993,6 +3030,40 @@ async def handle_request(reader, writer) -> None:
         f = resolve_file(qget(q, "path"))
         if f is None:
             writer.write(http_error(400, "path must be an absolute file"))
+            return
+        if method == "PUT":
+            # **Writing is narrower than reading.** Reading reaches anywhere this uid can read, because
+            # looking is looking; writing stays under the roots, which is the floor everything that
+            # *acts* on the machine already uses.
+            if not under_roots(f):
+                writer.write(http_error(400, "a file outside your home is read-only here"))
+                return
+            if not editable(f):
+                writer.write(http_error(415, "only text files can be edited here"))
+                return
+            if len(body) > FILE_MAX:
+                writer.write(http_error(413, f"too big to save (the limit is {FILE_MAX} bytes)"))
+                return
+            if b"\x00" in body:
+                writer.write(http_error(415, "that is not text"))
+                return
+            want = qget(q, "mtime", "")
+            try:
+                now = f.stat().st_mtime
+            except OSError as e:
+                writer.write(http_error(400, f"cannot read: {e.strerror or e}"))
+                return
+            # **Refuse rather than win.** Something else may have written it since it was read — an agent
+            # in the terminal beside this window is exactly the case. The page asks what to do.
+            if want and abs(float(want) - now) > 1e-6:
+                writer.write(http_error(409, "it changed on disk since you opened it"))
+                return
+            try:
+                data = write_atomic(f, body)
+            except OSError as e:
+                writer.write(http_error(400, f"could not save: {e.strerror or e}"))
+                return
+            writer.write(http_json(200, {"mtime": data}))
             return
         # **Bounded by what is read, not by what stat says.** A procfs file reports 0 bytes and goes on
         # forever — /proc/self/pagemap is 256 GiB of it — so trusting st_size was a way to ask the daemon to
@@ -3006,7 +3077,15 @@ async def handle_request(reader, writer) -> None:
         if len(data) > FILE_MAX:
             writer.write(http_error(413, f"too big to show (the limit is {FILE_MAX} bytes)"))
             return
-        ctype = IMAGE_TYPES.get(f.suffix.lower())
+        try:
+            mtime = f.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        # **The stamp the writer has to match.** Saving sends it back; if the file moved on in between,
+        # the save is refused rather than quietly winning over whatever else wrote it (an agent in the
+        # terminal beside it is the case that matters).
+        extra = f"X-Palmar-Mtime: {mtime!r}\r\nX-Palmar-Editable: {'1' if editable(f) else '0'}\r\n"
+        ctype = IMAGE_TYPES.get(f.suffix.lower()) or DOC_TYPES.get(f.suffix.lower())
         if ctype is None:
             if b"\x00" in data[:8192]:
                 writer.write(http_error(415, "not a text file"))
@@ -3024,7 +3103,36 @@ async def handle_request(reader, writer) -> None:
                 writer.write(http_error(415, "not a text file"))
                 return
             ctype = "text/plain; charset=utf-8"
-        writer.write(http(200, data, ctype))
+        writer.write(http(200, data, ctype, extra=extra))
+        return
+
+    if path == "/api/open":
+        # **Hand it to the machine's own program.** The viewer shows text and images; a spreadsheet or a
+        # design file belongs to whatever opens it there (user, 2026-09-15). Under the roots only — the
+        # same floor as opening a terminal, because this starts a program on the person's behalf.
+        if method != "POST":
+            writer.write(http(405))
+            return
+        if not token_ok:
+            writer.write(http(403))
+            return
+        obj = parse_json_body(body) or {}
+        target = resolve_file(obj.get("path"))
+        if target is None or not under_roots(target):
+            writer.write(http_error(400, "path must be a file under your home"))
+            return
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(target))                      # type: ignore[attr-defined]
+            else:
+                argv = ["open", str(target)] if sys.platform == "darwin" else ["xdg-open", str(target)]
+                subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as e:
+            writer.write(http_error(400, f"could not open it: {e.strerror or e}"))
+            return
+        log(f"opening {target.name} with the system default program")
+        writer.write(http(204))
         return
 
     if path == "/api/canvases":
@@ -3131,7 +3239,7 @@ async def handle_request(reader, writer) -> None:
         if method != "POST":
             writer.write(http_error(405, "POST"))
             return
-        log("멈추라는 요청을 받았다 (POST /api/stop)")
+        log("asked to stop (POST /api/stop)")
         writer.write(http_json(200, {"stopping": True}))
         await writer.drain()
         STOP_NOW[0] and STOP_NOW[0]()
@@ -3357,7 +3465,7 @@ def open_browser(url: str) -> bool:
     line is the address and that is a contract (docs/protocol.md)."""
     argv = browser_argv(url)
     if not argv:
-        log("브라우저를 열 방법을 못 찾았다 — 위 주소를 직접 열어라")
+        log("found no way to open a browser — open the address above yourself")
         return False
     try:
         # start_new_session so the browser does not die with the daemon and never reaches for the
@@ -3365,10 +3473,10 @@ def open_browser(url: str) -> bool:
         subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True)
     except OSError as e:
-        log(f"{Path(argv[0]).name} 로 브라우저를 못 열었다 ({e}) — 위 주소를 직접 열어라")
+        log(f"could not open a browser with {Path(argv[0]).name} ({e}) — open the address above yourself")
         return False
     # **Name the program, never the address** — the address carries the key.
-    log(f"{Path(argv[0]).name} 로 브라우저를 연다 (--no-browser 로 끈다)")
+    log(f"opening a browser with {Path(argv[0]).name} (--no-browser turns this off)")
     return True
 
 
@@ -3384,7 +3492,7 @@ async def main(port: int, open_page: bool = True) -> None:
         # token and its panes' hooks are untouched by this path.
         # The address still goes to stdout and only to stdout: "the last line is the address" is a
         # contract the app reads on (docs/protocol.md), and this path has to keep it.
-        log("이미 도는 데몬이 있다 — 그것을 연다 (데몬은 HOME 당 하나)")
+        log("a daemon is already running — opening that one (one daemon per HOME)")
         # **announce, not print.** Detached, stdout is a log file and the only thing the person who
         # typed the command can still see is the pipe. This path is the ordinary one for a second
         # `palmar`, so sending its address down the log was the first thing detaching broke.
@@ -3454,7 +3562,7 @@ async def main(port: int, open_page: bool = True) -> None:
     try:
         write_private(URL_FILE, url.encode() + b"\n", 0o600)
     except OSError as e:
-        log(f"run/url 을 못 남겼다 — {e}")
+        log(f"could not write run/url — {e}")
     announce(url)
     # After the address, never before: if it cannot be shown the person still has it, and everything
     # this says goes to stderr so stdout's last line stays the address (docs/protocol.md).
@@ -3791,7 +3899,7 @@ def detached_no_fork(port: int, open_page: bool) -> int:
         ensure_private_dir(PALMAR_DIR)
         logf = open(str(PALMAR_DIR / "log"), "ab")
     except OSError as e:
-        print("palmar: 로그 파일을 못 열었다 — %s" % e, file=sys.stderr)
+        print("palmar: could not open the log file — %s" % e, file=sys.stderr)
         return 1
     argv = [sys.executable, "-m", "palmar", "--foreground", "--port", str(port)]
     if not open_page:
@@ -3801,7 +3909,7 @@ def detached_no_fork(port: int, open_page: bool) -> int:
             argv, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, close_fds=True,
             creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
     except OSError as e:
-        print("palmar: 떨어져 나온 데몬을 못 띄웠다 — %s" % e, file=sys.stderr)
+        print("palmar: could not start the detached daemon — %s" % e, file=sys.stderr)
         return 1
     finally:
         logf.close()
@@ -3817,11 +3925,11 @@ def detached_no_fork(port: int, open_page: bool) -> int:
         if child.poll() is not None:
             # It is gone. Whatever it had to say went to the log, so point at that rather than
             # inventing a reason — the same rule the POSIX side follows with its pipe.
-            print("palmar: 데몬이 떠 있지 못했다 (종료 %s)\n        무슨 일이 있었는지: %s"
+            print("palmar: the daemon did not stay up (exit %s)\n        what happened: %s"
                   % (child.returncode, PALMAR_DIR / "log"), file=sys.stderr)
             return 1
         time.sleep(0.2)
-    print("palmar: %.0f초 안에 주소를 못 냈다 — %s 를 봐라"
+    print("palmar: no address within %.0fs — look at %s"
           % (STOP_WAIT_S * 3, PALMAR_DIR / "log"), file=sys.stderr)
     return 1
 
@@ -3849,7 +3957,7 @@ def detached(port: int, open_page: bool) -> int:
         with os.fdopen(r, "rb") as back:
             said = back.read().decode("utf-8", "replace").strip()
         if not said:
-            print("palmar: 데몬이 주소를 못 냈다 — `palmar --doctor` 로 본다", file=sys.stderr)
+            print("palmar: the daemon gave no address — try `palmar --doctor`", file=sys.stderr)
             return 1
         if not said.startswith("http://"):
             print(said, file=sys.stderr)        # it failed, and this is why

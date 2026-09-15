@@ -2890,3 +2890,119 @@ class TextSizeAndColours(unittest.TestCase):
             self.assertLess(lum(r["light"][key]), 0.35, "%s is too pale for a light theme: %s" % (key, r["light"][key]))
             self.assertGreater(lum(r["dark"][key]), 0.5, "%s is too dark for a dark theme: %s" % (key, r["dark"][key]))
         self.assertNotEqual(r["light"]["brightWhite"], r["dark"]["brightWhite"])
+
+
+class ViewerModes(unittest.TestCase):
+    """One window, several ways of showing a file (2026-09-15): text with line numbers, a table for
+    separated values, a sandboxed frame for HTML, the browser's own viewer for a PDF — no library
+    vendored for any of it. Text and Markdown can also be edited here; a save that would land on top of
+    somebody else's write is refused."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.dir = os.path.join(cls.d.home, "files")
+        os.makedirs(cls.dir)
+        cls.write("notes.md", "# 메모\nsecond\n")
+        cls.write("rows.csv", 'a,b\n1,"x,y"\n')
+        cls.write("page.html", "<h1>hi</h1><script>window.parent.__pwned = 1</script>")
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+        time.sleep(1.2)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    @classmethod
+    def write(cls, name, text):
+        p = os.path.join(cls.dir, name)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return p
+
+    def open_file(self, name):
+        path = os.path.join(self.dir, name)
+        self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').forEach(v=>v.close()); 1")
+        self.b.ev("window.palmar.openViewer(%s); 1" % json.dumps(path))
+        for _ in range(40):
+            time.sleep(0.2)
+            got = self.b.ev("""(()=>{const v=[...window.palmar.tiles.values()].find(t=>t.s.kind==='file');
+              return v && v.mode && !v.termEl.textContent.startsWith('reading') ? v.mode : null;})()""")
+            if got:
+                return path
+        self.fail("the viewer never loaded " + name)
+
+    def test_text_shows_with_line_numbers_and_says_it_can_be_edited(self):
+        # Its own file: the editing test writes notes.md, and these two share a browser.
+        self.write("plain.md", "# 메모\nsecond\n")
+        self.open_file("plain.md")
+        r = self.b.ev("""(()=>{const v=[...window.palmar.tiles.values()].find(t=>t.s.kind==='file');
+          return {mode: v.mode, lines: v.termEl.querySelectorAll('.l').length, canEdit: v.canEdit,
+                  editShown: getComputedStyle(v.edEl).display !== 'none',
+                  openShown: getComputedStyle(v.owEl).display !== 'none', stamp: !!v.mtime};})()""")
+        self.assertEqual([r["mode"], r["lines"], r["canEdit"]], ["text", 2, True], r)
+        self.assertTrue(r["editShown"] and r["openShown"], "the viewer's buttons are not shown: %r" % r)
+        self.assertTrue(r["stamp"], "no stamp came with the file, so a save could not be checked")
+
+    def test_a_separated_file_is_a_table(self):
+        self.open_file("rows.csv")
+        r = self.b.ev("""(()=>{const v=[...window.palmar.tiles.values()].find(t=>t.s.kind==='file');
+          const cells=[...v.termEl.querySelectorAll('tr')].map(tr=>[...tr.children].map(c=>c.textContent));
+          return {mode: v.mode, cells};})()""")
+        self.assertEqual(r["mode"], "csv")
+        self.assertEqual(r["cells"], [["", "a", "b"], ["1", "1", "x,y"]],
+                         "a quoted comma did not stay in its cell: %r" % r["cells"])
+
+    def test_html_renders_in_a_frame_that_cannot_reach_out(self):
+        self.open_file("page.html")
+        r = self.b.ev("""(()=>{const v=[...window.palmar.tiles.values()].find(t=>t.s.kind==='file');
+          const f=v.termEl.querySelector('iframe');
+          return {mode: v.mode, frame: !!f, sandbox: f && f.getAttribute('sandbox'), pwned: !!window.__pwned};})()""")
+        self.assertEqual(r["mode"], "html")
+        self.assertTrue(r["frame"], "no frame was made")
+        self.assertEqual(r["sandbox"], "", "the frame is not sandboxed: %r" % r)
+        time.sleep(0.5)
+        self.assertFalse(self.b.ev("!!window.__pwned"), "the page's script ran in palmar's own origin")
+
+    def test_editing_saves_and_a_clash_is_refused_then_can_be_forced(self):
+        path = self.open_file("notes.md")
+        self.b.ev("""(()=>{const v=[...window.palmar.tiles.values()].find(t=>t.s.kind==='file');
+          v.toggleEdit(true); v.ta.value = 'edited by hand\\n'; v.ta.dispatchEvent(new Event('input')); return 1;})()""")
+        self.assertTrue(self.b.ev("""(()=>{const v=[...window.palmar.tiles.values()].find(t=>t.s.kind==='file');
+          return v.editing && v.dirty && !v.barEl.hidden;})()"""), "it did not go into editing")
+        self.b.ev("[...window.palmar.tiles.values()].find(t=>t.s.kind==='file').save(); 1")
+        for _ in range(40):
+            time.sleep(0.2)
+            with open(path, encoding="utf-8") as fh:
+                if fh.read() == "edited by hand\n":
+                    break
+        with open(path, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "edited by hand\n", "the save did not reach the file")
+        # Somebody else writes it, and the next save is refused with a way out.
+        time.sleep(0.05)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("theirs\n")
+        self.b.ev("""(()=>{const v=[...window.palmar.tiles.values()].find(t=>t.s.kind==='file');
+          v.ta.value='mine\\n'; v.ta.dispatchEvent(new Event('input')); v.save(); return 1;})()""")
+        bar = None
+        for _ in range(40):
+            time.sleep(0.2)
+            bar = self.b.ev("""(()=>{const v=[...window.palmar.tiles.values()].find(t=>t.s.kind==='file');
+              return {msg: v.barEl.textContent, buttons: [...v.barEl.querySelectorAll('.vb')].map(b=>b.textContent)};})()""")
+            if bar["buttons"]:
+                break
+        self.assertIn("changed on disk", bar["msg"], bar)
+        self.assertEqual(bar["buttons"], ["Reload", "Overwrite"], bar)
+        with open(path, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "theirs\n", "it was overwritten anyway")
+        self.b.ev("""(()=>{const v=[...window.palmar.tiles.values()].find(t=>t.s.kind==='file');
+          [...v.barEl.querySelectorAll('.vb')].find(b=>b.textContent==='Overwrite').click(); return 1;})()""")
+        for _ in range(40):
+            time.sleep(0.2)
+            with open(path, encoding="utf-8") as fh:
+                if fh.read() == "mine\n":
+                    break
+        with open(path, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "mine\n", "Overwrite did not force it through")
