@@ -35,13 +35,10 @@ class Install(unittest.TestCase):
         """`python -m` puts the current directory first on sys.path, so `palmar` typed inside any other
         checkout ran the palmar of *that* checkout — an old clone kept for testing answered
         `unrecognized arguments: --stop` while the launcher pointed at the right tree all along
-        (user, 2026-09-15). PYTHONSAFEPATH turns that off on Python 3.11+."""
-        if sys.version_info < (3, 11):
-            self.skipTest("PYTHONSAFEPATH needs Python 3.11; older ones keep the trap")
-        # The launcher has to be built on *this* interpreter, or the guard above is about the wrong
-        # Python: run_install's clean PATH finds /usr/bin/python3, a 3.9 on macOS, and 3.9 ignores
-        # PYTHONSAFEPATH — measured: the shadow won under a 3.13 test runner (2026-09-15).
-        self.run_install(extra_env={"PATH": os.path.dirname(sys.executable) + ":/usr/bin:/bin"})
+        (user, 2026-09-15). PYTHONSAFEPATH turned that off on Python 3.11+ only — macOS ships 3.9 —
+        so the launcher runs the tree by script path now, which puts the tree first on every Python
+        (review, 2026-09-15). Whatever python run_install's clean PATH finds, this has to hold."""
+        self.run_install()
         shim = os.path.join(self.prefix, "bin", "palmar")
         cwd = tempfile.mkdtemp(prefix="palmar-shadow-")
         self.addCleanup(shutil.rmtree, cwd, ignore_errors=True)
@@ -54,6 +51,36 @@ class Install(unittest.TestCase):
         self.assertNotIn("SHADOW", r.stdout + r.stderr, "the launcher ran the palmar in the cwd")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("palmar ", r.stdout, "the real palmar did not answer --version")
+        # And a repository that shadows a standard module — json.py — must not reach the daemon either.
+        with open(os.path.join(cwd, "json.py"), "w") as fh:
+            fh.write("raise SystemExit('SHADOW-STDLIB')\n")
+        r = subprocess.run([shim, "--version"], cwd=cwd, capture_output=True, text=True, timeout=60)
+        self.assertNotIn("SHADOW", r.stdout + r.stderr, "a json.py in the cwd was imported over the standard library")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_piped_in_it_does_not_take_the_cwd_for_a_checkout(self):
+        """Under `curl … | sh` $0 is `sh`, and `dirname sh` is `.`: the one-liner run inside a
+        repository holding a palmar/ package used to install that repository (review, 2026-09-15)."""
+        cwd = tempfile.mkdtemp(prefix="palmar-cwdpkg-")
+        self.addCleanup(shutil.rmtree, cwd, ignore_errors=True)
+        os.makedirs(os.path.join(cwd, "palmar"))
+        with open(os.path.join(cwd, "palmar", "__init__.py"), "w") as fh:
+            fh.write("")
+        env = dict(os.environ, PALMAR_PREFIX=self.prefix, PALMAR_TARBALL="/nonexistent/palmar.tar.gz")
+        env["PATH"] = "/usr/bin:/bin"
+        with open(INSTALL, "rb") as script:
+            r = subprocess.run(["/bin/sh"], stdin=script, cwd=cwd, capture_output=True, text=True, timeout=60, env=env)
+        self.assertNotIn("installing from the checkout", r.stdout + r.stderr, "the cwd was taken for a checkout")
+        self.assertNotEqual(r.returncode, 0, "with no tarball to fetch it should have stopped")
+        self.assertFalse(os.path.exists(os.path.join(self.prefix, "bin", "palmar")))
+
+    def test_a_prefix_others_can_write_is_refused(self):
+        os.makedirs(os.path.join(self.prefix, "bin"), exist_ok=True)
+        os.chmod(os.path.join(self.prefix, "bin"), 0o777)
+        r = self.run_install()
+        self.assertNotEqual(r.returncode, 0, "it put a world-writable directory first on PATH")
+        self.assertIn("writable by nobody else", r.stdout + r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.prefix, "bin", "palmar")))
 
     def test_outside_a_checkout_it_fetches_the_tree_and_keeps_it(self):
         """`curl … | sh` runs with no checkout around it: the tree is downloaded and kept under the
@@ -65,6 +92,7 @@ class Install(unittest.TestCase):
         tgz = os.path.join(elsewhere, "palmar-main.tar.gz")
         with tarfile.open(tgz, "w:gz") as tf:
             tf.add(os.path.join(REPO, "palmar"), arcname="palmar-main/palmar")
+            tf.add(os.path.join(REPO, "launch.py"), arcname="palmar-main/launch.py")
         copy = os.path.join(elsewhere, "install.sh")
         shutil.copy(INSTALL, copy)
         home = tempfile.mkdtemp(prefix="palmar-sh-home-")
@@ -319,9 +347,9 @@ class InstallPs1(unittest.TestCase):
         with open(cmd, encoding="ascii") as fh:
             body = fh.read()
         # A launcher, not a copy — so `git pull` updates palmar with no reinstall, as on POSIX.
-        self.assertIn("PYTHONPATH", body)
         self.assertIn(REPO, body, "the launcher does not point at this checkout")
-        self.assertIn("-m palmar", body)
+        self.assertIn("launch.py", body, "the launcher must run the tree by script path, not -m (review, 2026-09-15)")
+        self.assertNotIn('set "PYTHONPATH', body, "an empty PYTHONPATH element is the cwd")
         self.assertIn("PYTHONSAFEPATH=1", body, "a palmar in the current directory would shadow the checkout")
 
     def test_it_asks_before_writing(self):

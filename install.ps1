@@ -189,6 +189,16 @@ function Find-Python {
       if (-not (Test-Path -LiteralPath $d)) { continue }
       foreach ($sub in @(Get-ChildItem -LiteralPath $d -Directory -ErrorAction SilentlyContinue |
                          Where-Object { $_.Name -match '^(Python3|Python 3|anaconda3|miniconda3|miniforge3)' })) {
+        # A folder under C:\ or C:\ProgramData can be made by any account on the machine, and this
+        # would run its python.exe and bake it into the launcher. Only one owned by an administrator,
+        # SYSTEM or the person installing is a Python that was installed (review, 2026-09-15).
+        $owner = ''
+        try { $owner = (Get-Acl -LiteralPath $sub.FullName).Owner } catch { $owner = '' }
+        $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        if ($owner -notin @('BUILTIN\Administrators', 'NT AUTHORITY\SYSTEM', 'NT SERVICE\TrustedInstaller', $me)) {
+          Say ("  python       {0} -- skipped: owned by {1}, not an installer" -f $sub.FullName, $owner)
+          continue
+        }
         Add-Cand (Join-Path $sub.FullName 'python.exe') @() ("folder " + $sub.FullName)
       }
     }
@@ -321,11 +331,11 @@ $preArgs = if ($found.Pre.Count) { ($found.Pre -join ' ') + ' ' } else { '' }
   'rem rather than left for you to type every time: you read the warning above before this was'
   'rem written, and nothing else on the machine gets it. Remove this line and `palmar` refuses again.'
   'set "PALMAR_WINDOWS_ANYWAY=1"'
-  'rem PYTHONSAFEPATH: python -m puts the current directory first on sys.path, so palmar typed inside'
-  'rem another checkout ran that checkout. Python 3.11+ honours this; older ones ignore it.'
+  'rem By script path, not python -m: -m puts the current directory first on sys.path (PYTHONSAFEPATH'
+  'rem only stops that on 3.11+), and a cloned repository holding a palmar\ or a json.py would run.'
+  'rem No PYTHONPATH either: an empty element in it is the current directory too (review, 2026-09-15).'
   'set "PYTHONSAFEPATH=1"'
-  ('set "PYTHONPATH={0};%PYTHONPATH%"' -f $src)
-  ('"{0}" {1}-m palmar %*' -f $found.Exe, $preArgs)
+  ('"{0}" {1}"{2}\launch.py" %*' -f $found.Exe, $preArgs, $src)
 ) | Set-Content -Path $cmd -Encoding ASCII
 
 Say ''

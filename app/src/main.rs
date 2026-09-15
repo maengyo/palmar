@@ -214,8 +214,47 @@ fn spawn_daemon() -> Result<String, String> {
     Err(last)
 }
 
+/// Is a daemon holding this HOME's lock? `Some(false)` when the lock is free — nobody alive, whatever
+/// run/url says and whatever answers on its port. `None` when there is no lock file to ask.
+///
+/// **The file is not evidence, and neither is a listener.** run/url outlives a daemon that was
+/// killed -9 or rebooted away, and "something answers on that port" is what any local account can
+/// arrange by binding it — that listener would then be handed the persistent key in the first request
+/// (review, 2026-09-15). The daemon holds an exclusive flock on run/lock for exactly as long as it
+/// lives (daemon.py acquire_single_instance_lock), and that is the one thing that cannot be faked
+/// from another account: the lock file is 0600 in a 0700 directory.
+#[cfg(unix)]
+fn daemon_alive() -> Option<bool> {
+    use std::os::unix::io::AsRawFd;
+    let lock = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".palmar/run/lock"))?;
+    // No lock file: no daemon has ever run here, or run/ was cleared — either way nobody holds it,
+    // and a run/url without it is not one a daemon of ours is behind.
+    let f = match std::fs::OpenOptions::new().read(true).write(true).open(&lock) {
+        Ok(f) => f,
+        Err(_) => return Some(false),
+    };
+    // SAFETY: flock on a descriptor we own; LOCK_NB makes it return at once.
+    let got = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+    if got {
+        unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_UN); }
+        Some(false)
+    } else {
+        Some(true)
+    }
+}
+
+#[cfg(not(unix))]
+fn daemon_alive() -> Option<bool> {
+    None
+}
+
 /// The address to show: a daemon already up, or one we start.
 fn find_or_start() -> Result<String, String> {
+    if daemon_alive() == Some(false) {
+        // The lock is free: whatever run/url says, no daemon of ours is behind it. Start one — it
+        // removes the stale file on its way up and writes its own once it is bound.
+        return spawn_daemon();
+    }
     if let Some(path) = url_file() {
         if let Ok(text) = std::fs::read_to_string(&path) {
             let url = text.trim().to_string();
@@ -366,7 +405,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
         if bare {
             let w = std::rc::Rc::clone(&window);
-            b = b.with_ipc_handler(move |req| match req.body().as_str() {
+            // Only the daemon's own page gets to move or close the window: the request carries the
+            // sender's URL, and anything else that ends up in this webview (a navigation away, a
+            // page on a squatted port) is not it (review, 2026-09-15).
+            let ours = addr_of(&url).map(|a| a.to_string());
+            b = b.with_ipc_handler(move |req| {
+                let from = req.uri().authority().map(|a| a.as_str().to_string());
+                if from.is_none() || from != ours {
+                    return;
+                }
+                match req.body().as_str() {
                 // Dragging has to be handed to the window manager at the moment the button goes
                 // down; there is no way to do it from the page alone.
                 "drag" => { let _ = w.drag_window(); }
@@ -377,6 +425,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // this one — the same as pressing the title bar's X, which is what this replaces.
                 "close" => std::process::exit(0),
                 _ => {}
+                }
             });
         }
         b.build()?

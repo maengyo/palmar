@@ -27,6 +27,11 @@ path = "src/main.rs"
 tao = "0.30"
 wry = "0.45"
 
+# flock on ~/.palmar/run/lock: the one thing that says a daemon is alive (see daemon_alive). Already
+# in the tree through tao and wry; naming it here only makes the call ours to write.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Linux only, and only to undo one line inside wry: it disables the IME preedit unconditionally
 # (webkitgtk/mod.rs:360, "fcitx input editor can anchor at edit cursor position"), which leaves ibus
 # users with no composing syllable on screen. Reaching the setting needs wry's own WebView type, so

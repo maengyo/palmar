@@ -2127,12 +2127,18 @@ def acquire_single_instance_lock() -> None:
         os.close(fd)
         # run/url is 0600 and holds the address with its key. Reaching it is the whole point here, so
         # unlike the lock file — which never holds the key — this one is read and handed on.
-        try:
-            running = URL_FILE.read_text("utf-8").strip()
-        except OSError:
-            running = ""
-        if running.startswith("http://") and daemon_answers(running):
-            raise AlreadyRunning(running)
+        # The holder removes run/url the moment it takes the lock and writes it back once it is
+        # bound (below), so a file that is there is the holder's — and one that is not yet there is a
+        # start still in progress: wait a moment for it rather than call a live daemon unreachable.
+        running = ""
+        for _ in range(30):
+            try:
+                running = URL_FILE.read_text("utf-8").strip()
+            except OSError:
+                running = ""
+            if running.startswith("http://") and daemon_answers(running):
+                raise AlreadyRunning(running)
+            time.sleep(0.1)
         # **The key is never written into the lock file** — `--doctor` prints this line as-is, and that
         # output exists to be pasted (#14). So we do not hand out the whole address here either, only where
         # to get it back. Otherwise we would point at a keyless address, and opening that gives 403 (measured).
@@ -2142,6 +2148,17 @@ def acquire_single_instance_lock() -> None:
     os.ftruncate(fd, 0)
     os.write(fd, f"pid {os.getpid()} http://127.0.0.1:{PORT[0]}\n".encode())
     LOCK_FH[0] = fd     # kept open while the daemon lives — the lock drops when it closes
+    # **A run/url on disk means a live daemon wrote it — nothing older.** It used to outlive the
+    # daemon (a clean stop, a reboot), and everything that found it trusted a bare TCP connect to
+    # say the address was still ours: any local account could bind the old port and be handed the
+    # key by the window, by a second `palmar`, by the Windows start (review, 2026-09-15). Gone here,
+    # the moment the lock is ours; written back only once this daemon is bound.
+    try:
+        URL_FILE.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        log(f"could not remove the old run/url — {e}")
 
 
 KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
@@ -3446,6 +3463,12 @@ def shutdown() -> None:
             w.close()
         except Exception:
             pass
+    # The address dies with the daemon (see acquire_single_instance_lock). A kill -9 skips this,
+    # which is why the lock — not this file — is what the window and the launchers go by.
+    try:
+        URL_FILE.unlink()
+    except OSError:
+        pass
 
 
 # ── opening the page ───────────────────────────────────────────────────────────────────────
@@ -4588,7 +4611,12 @@ def detached_no_fork(port: int, open_page: bool, web: bool = False) -> int:
     except OSError as e:
         print("palmar: could not open the log file — %s" % e, file=sys.stderr)
         return 1
-    argv = [sys.executable, "-m", "palmar", "--foreground", "--port", str(port)]
+    # By script path, not `-m`: `-m` puts the caller's cwd first on sys.path (PYTHONSAFEPATH or not on
+    # 3.9/3.10), and a cloned repository with a palmar/ or a json.py in it would then be what runs.
+    root = WEB.parent.parent
+    entry = root / "launch.py"
+    argv = ([sys.executable, str(entry)] if entry.is_file() else [sys.executable, "-P", "-m", "palmar"]) \
+        + ["--foreground", "--port", str(port)]
     if not open_page:
         argv.append("--no-browser")
     if web:
@@ -4603,9 +4631,13 @@ def detached_no_fork(port: int, open_page: bool, web: bool = False) -> int:
     finally:
         logf.close()
     end = time.monotonic() + STOP_WAIT_S * 3
+    born = time.time()
     while time.monotonic() < end:
+        # Only an address the child wrote — one older than this start is a dead daemon's, and
+        # whoever answers on it is not necessarily palmar (review, 2026-09-15).
         try:
-            url = URL_FILE.read_text("utf-8").strip()
+            fresh = URL_FILE.stat().st_mtime >= born - 2
+            url = URL_FILE.read_text("utf-8").strip() if fresh else ""
         except OSError:
             url = ""
         if url.startswith("http://") and daemon_answers(url):

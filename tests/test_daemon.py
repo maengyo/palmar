@@ -1610,3 +1610,28 @@ class TheDaemonNotifies(unittest.TestCase):
         with Daemon(env={"PALMAR_NOTIFIER": "0"}) as d:
             self.assertEqual(d.raw("POST", "/api/notify", b'{"title": "x"}')[0], 501)
             self.assertEqual(d.raw("GET", "/api/notify")[0], 405)
+
+
+class TheAddressDiesWithTheDaemon(unittest.TestCase):
+    """run/url used to outlive the daemon, and everything that found it trusted a bare TCP connect to
+    say the address was still palmar's — so any local account could bind the old port and be handed
+    the key (review, 2026-09-15). Now the file is removed the moment a daemon takes the lock and
+    again when it stops: on disk means alive."""
+
+    def test_a_clean_stop_removes_it(self):
+        d = Daemon().start()
+        self.assertTrue(os.path.exists(d.url_file))
+        d.stop(wipe=False)
+        self.addCleanup(shutil.rmtree, d.home, ignore_errors=True)
+        self.assertFalse(os.path.exists(d.url_file), "run/url survived the daemon")
+
+    def test_a_start_removes_a_stale_one_before_it_binds(self):
+        d = Daemon()
+        run = os.path.dirname(d.url_file)
+        os.makedirs(run, mode=0o700, exist_ok=True)
+        with open(d.url_file, "w") as fh:
+            fh.write("http://127.0.0.1:1/?k=stale\n")           # a dead daemon's, or a squatter's
+        d.start()
+        self.addCleanup(d.stop)
+        with open(d.url_file) as fh:
+            self.assertNotIn("stale", fh.read())
