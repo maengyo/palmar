@@ -51,11 +51,22 @@
       </svg>
     </div>
     <div class="c">
-      <label class="search">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-        <input id="search" type="search" placeholder="Search sessions and folders" autocomplete="off" spellcheck="false">
-        <span class="k" id="kmod"><kbd>Ctrl</kbd><kbd>K</kbd></span>
-      </label>
+      <!-- The canvas tabs live up here now (2026-09-15): the bar that carried them sat on top of the
+           canvas and the search box sat up here doing little, so the two rows became one and the canvas
+           took the difference. The tab strip and the canvas button. The button is **outside the tab strip**, so more tabs never
+           push it away (the strip scrolls sideways, and inside it the button gets shoved to the end like ＋). -->
+      <div class="cvbar">
+        <div class="tabs" id="tabs" role="tablist" aria-label="canvases"></div>
+        <button id="undo" class="tidy" disabled title="undo — nothing has moved yet">undo</button>
+      <button class="tidy" id="tidy" type="button"
+                title="tidy this canvas — pull the windows back to the corner">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M4 4v16"/><path d="M4 4h16"/>
+            <rect x="8" y="8" width="5" height="5" rx="1"/><rect x="8" y="16" width="9" height="4" rx="1"/>
+          </svg>
+        </button>
+      </div>
     </div>
     <div class="r">
       <span class="bell" id="bell" role="button" tabindex="0" data-on="0"
@@ -90,9 +101,38 @@
            a character the machine may not have (AGENTS.md; the add-canvas button was a box on WSL). -->
       <button class="toweb" id="toweb" type="button" title="open this in a browser"
               aria-haspopup="dialog" aria-expanded="false">web</button>
-      <button class="help" id="help" type="button" title="keyboard shortcuts" aria-label="keyboard shortcuts"
-              aria-haspopup="dialog" aria-expanded="false">?</button>
+      <!-- Options. The ? that opened the shortcuts is a list now, and the shortcuts are one item in it
+           beside the three settings that used to sit under them with a paragraph each (2026-09-15). -->
+      <button class="options ib" id="options" type="button" title="options" aria-label="options"
+              aria-haspopup="menu" aria-expanded="false">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="15" cy="7" r="2.5"/><circle cx="9" cy="17" r="2.5"/>
+        </svg>
+      </button>
+      <div class="theme-menu options-menu" id="options-menu" role="menu" hidden>
+        <button type="button" class="tm-i" role="menuitem" data-do="keys">Keyboard shortcuts</button>
+        <button type="button" class="tm-i" role="menuitem" data-do="search">Search sessions and folders</button>
+        <div class="tm-h">Windows</div>
+        <label class="tm-row" title="drop a window on another and the one that was there moves out of the way, by exactly the overlap"><input type="checkbox" id="pushaside" checked> Push windows aside</label>
+        <label class="tm-row" title="when a terminal closes, pull the rest back to the corner on their own"><input type="checkbox" id="autotidy"> Tidy automatically</label>
+        <label class="tm-row" title="how the wait is shown while holding a window over another">Hold to group
+          <select id="holdstyle">
+            <option value="grow">landing box fills</option>
+            <option value="ring">ring round the window</option>
+            <option value="both">both</option>
+          </select></label>
+      </div>
     </div>
+  </div>
+
+  <!-- Search. Off the bar and behind Ctrl/⌘K (2026-09-15: "검색창의 영역도 낭비가 심한 것 같아") —
+       the same input, so the list and the tree filter exactly as before. Esc on an empty field closes it. -->
+  <div class="searchbox" id="searchbox" hidden>
+    <label class="search">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="search" type="search" placeholder="Search sessions and folders" autocomplete="off" spellcheck="false">
+      <span class="k" id="kmod"><kbd>Ctrl</kbd><kbd>K</kbd></span>
+    </label>
   </div>
 
   <!-- The address of this daemon, for moving to a browser. Asked for when opened and not kept:
@@ -144,29 +184,6 @@
       <dt>double-click a name</dt><dd>rename a terminal or a canvas (<kbd>F2</kbd> on a tab)</dd>
       <dt><kbd>Ctrl</kbd><kbd>−</kbd> <kbd>Ctrl</kbd><kbd>+</kbd></dt><dd>the browser's own zoom — every terminal at once</dd>
     </dl>
-    <div class="keys-act">
-      <label class="keys-sw"><input type="checkbox" id="pushaside" checked> Push windows aside</label>
-      <span>drop a window on another and the one that was there moves out of the way, by exactly
-            the overlap. On by default. Turn it off and windows may sit on top of each other —
-            click one to bring it to the front.</span>
-    </div>
-    <div class="keys-act">
-      <label class="keys-sw">Hold to group
-        <select id="holdstyle">
-          <option value="grow">landing box fills</option>
-          <option value="ring">ring round the window</option>
-          <option value="both">both</option>
-        </select></label>
-      <span>hold a window over another and it joins its group. This is how the wait is shown:
-            the landing box filling up from the side it will attach on, a ring running round the
-            window in your hand, or both.</span>
-    </div>
-    <div class="keys-act">
-      <label class="keys-sw"><input type="checkbox" id="autotidy"> Tidy automatically</label>
-      <span>when a terminal closes, pull the rest back to the corner on their own.
-            Off by default: it moves windows you can see, and a window should not
-            jump because a different one closed.</span>
-    </div>
   </div>
 
   <div class="body">
@@ -193,20 +210,6 @@
     <!-- ⑪: the tab strip sits **above** the canvas and does not reach over either rail — so .cvcol splits
          the middle column vertically again. JS fills the tabs and minimap (app.js "canvas tabs" · "minimap"). -->
     <section class="cvcol">
-      <!-- The tab strip and the canvas button. The button is **outside the tab strip**, so more tabs never
-           push it away (the strip scrolls sideways, and inside it the button gets shoved to the end like ＋). -->
-      <div class="cvbar">
-        <div class="tabs" id="tabs" role="tablist" aria-label="canvases"></div>
-        <button id="undo" class="tidy" disabled title="undo — nothing has moved yet">undo</button>
-      <button class="tidy" id="tidy" type="button"
-                title="tidy this canvas — pull the windows back to the corner">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-               stroke-width="2" stroke-linecap="round" aria-hidden="true">
-            <path d="M4 4v16"/><path d="M4 4h16"/>
-            <rect x="8" y="8" width="5" height="5" rx="1"/><rect x="8" y="16" width="9" height="4" rx="1"/>
-          </svg>
-        </button>
-      </div>
       <main class="cv" id="cv">
         <div class="cv-scroll" id="cv-scroll"></div>
         <!-- One minimap only, for the canvas you are looking at (⑪).

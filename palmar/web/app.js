@@ -131,7 +131,15 @@ const LINE_HEIGHT = 1.15;
 // ── DOM handles ─────────────────────────────────────────
 const cv = $('#cv'), cvScroll = $('#cv-scroll'), listEl = $('#list'), treeEl = $('#tree');
 const tabsEl = $('#tabs'), mmEl = $('#mm'), mmWorldEl = $('#mm-w'), mmVpEl = $('#mm-vp');
-const toastEl = $('#toast'), searchEl = $('#search');
+const toastEl = $('#toast'), searchEl = $('#search'), searchBox = $('#searchbox');
+// The search field floats now (2026-09-15) — the same input, shown on Ctrl/⌘K or from the options
+// list, so everything that reads it (the list's fold, the tree's filter) is untouched.
+function showSearch(on) {
+  if (!searchBox) return;
+  searchBox.hidden = !on;
+  if (on) { searchEl.focus(); searchEl.select(); }
+  else if (searchEl.value) { searchEl.value = ''; searchEl.dispatchEvent(new Event('input')); }
+}
 const launchBtn = $('#launch'), launchPath = $('#launch-path');
 
 // ── state ───────────────────────────────────────────────
@@ -2989,9 +2997,11 @@ function onSearch() {
   findDirs();
 }
 searchEl.addEventListener('input', onSearch);
+// Esc in the field: a search input clears itself on Esc; with nothing left to clear, the box goes away.
+searchEl.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !searchEl.value) { e.preventDefault(); showSearch(false); } });
 addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
-  if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); searchEl.focus(); searchEl.select(); }
+  if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); showSearch(true); searchEl.select(); }
   // **⌘T·⌘N cannot be used** — the browser takes them and preventDefault does not hold (new tab, new window).
   // Enter is free, and Shift alone separates "one more" (a terminal) from "something bigger" (a canvas).
   if (mod && e.key === 'Enter' && !e.altKey) {
@@ -3903,14 +3913,34 @@ function boot() {
       if (ks.length === 3 && ks[1].textContent === 'Shift') ks[1].remove();
     }
   }
-  // ── shortcuts panel ──
-  const helpBtn = document.getElementById('help'), keysEl = document.getElementById('keys');
-  const showKeys = (on) => {
-    keysEl.hidden = !on;
-    helpBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
+  // ── options list, and the shortcuts panel behind one of its items ──
+  const optBtn = document.getElementById('options'), optMenu = document.getElementById('options-menu');
+  const keysEl = document.getElementById('keys');
+  const showKeys = (on) => { keysEl.hidden = !on; };
+  const showOptions = (on) => {
+    if (!optMenu) return;
+    optMenu.hidden = !on;
+    optBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
+    if (on) {
+      const r = optBtn.getBoundingClientRect();
+      optMenu.style.top = (r.bottom + 6) + 'px';
+      optMenu.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+    }
   };
-  if (helpBtn && keysEl) {
-    helpBtn.addEventListener('click', (e) => { e.stopPropagation(); showKeys(keysEl.hidden); });
+  if (optBtn && optMenu) {
+    optBtn.addEventListener('click', (e) => { e.stopPropagation(); showOptions(optMenu.hidden); });
+    optMenu.addEventListener('click', (e) => {
+      e.stopPropagation();                                 // a checkbox or select inside stays open
+      const b = e.target.closest('.tm-i');
+      if (!b) return;
+      showOptions(false);
+      if (b.dataset.do === 'keys') showKeys(true);
+      if (b.dataset.do === 'search') showSearch(true);
+    });
+    addEventListener('click', () => { if (!optMenu.hidden) showOptions(false); });
+    addEventListener('keydown', (e) => { if (e.key === 'Escape' && !optMenu.hidden) showOptions(false); });
+  }
+  if (keysEl) {
     document.getElementById('keys-x').addEventListener('click', () => showKeys(false));
     // A press outside the panel or Esc closes it. Clicks inside the panel are swallowed.
     keysEl.addEventListener('click', (e) => e.stopPropagation());

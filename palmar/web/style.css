@@ -258,7 +258,7 @@ body {
      a rail wide, so this can only remove horizontal scrolling, never add it. */
   position: relative; height: 100vh; min-height: 680px;
   min-width: min(1120px, calc(var(--rail-l) + var(--rail-r) + 632px));
-  display: grid; grid-template-rows: 44px 1fr 26px;
+  display: grid; grid-template-rows: 36px 1fr 26px;   /* 44 → 36 (2026-09-15): the tabs moved up here */
   background:
     radial-gradient(1200px 700px at 8% -10%, var(--atmo-1), transparent 60%),
     radial-gradient(1000px 600px at 100% 110%, var(--atmo-2), transparent 60%),
@@ -277,23 +277,30 @@ body {
   border-bottom: 1px solid var(--line); background: var(--topbar);
   -webkit-app-region: drag;
 }
-.top .l { display: flex; align-items: center; gap: 14px; padding: 0 16px 0 22px; }
+.top .l { display: flex; align-items: center; gap: 14px; padding: 0 12px 0 16px; min-width: 0; overflow: hidden; }
 /* .lights: the mockup's macOS window buttons. They do nothing in a browser tab, and their red·yellow·green
    belong to the status lights, so they must not sit here (AGENTS.md "macOS 식 …버튼을 달지 마라").
    They are not in the DOM either (index.html). So the dead rule (#19) was deleted — if window buttons are
    needed when this is wrapped in Tauri, they come back then in colors that are not the status lights'. */
 /* Wordmark. Height only; the viewBox decides the width. Strokes are currentColor, so it follows the theme. */
 /* The top bar is 44px. The logo is as big as the leftover space above and below allows — 15px → 21px → 26px. */
-.brand { height: 26px; width: auto; display: block; color: var(--ink); flex: none; }
+.brand { height: 20px; width: auto; display: block; color: var(--ink); flex: none; }
+/* Folded, the rail's column is gone and the wordmark would push the tabs over — it shrinks to a mark's
+   height and keeps its corner (2026-09-15). The open handle sits under it. */
+body.fold-l .brand { height: 15px; }
+body.fold-l .top .l { padding: 0 8px 0 10px; }
 .brand .qd { fill: currentColor; opacity: .34; }
 /* The dot inside the last one. It lights only when something is calling for you — the same rule and the
    same color as the canvas tabs (⑥). However many are waiting, only one lights: it is not a gauge
    (docs/brand/README.md "점 규칙"). */
 .brand .wd { fill: currentColor; opacity: .34; }
 body.wants .brand .wd { fill: var(--st-wait); opacity: 1; }
-.top .c { display: flex; justify-content: center; }
+.top .c { display: flex; align-items: stretch; min-width: 0; }
+.top .cvbar { flex: 1; min-width: 0; background: transparent; border-bottom: 0; -webkit-app-region: no-drag; }
+.top .tabs { height: 36px; background: transparent; border-bottom: 0; padding: 0 6px; }
+.searchbox { position: fixed; top: 42px; left: 50%; transform: translateX(-50%); z-index: 70; }
 .search {
-  display: flex; align-items: center; gap: 8px; width: 380px; height: 28px;
+  display: flex; align-items: center; gap: 8px; width: 380px; height: 30px; box-shadow: var(--shadow-2);
   padding: 0 10px; border: 1px solid var(--line); border-radius: 7px;
   background: var(--search); color: var(--ink-3); font-size: 12px;
   -webkit-app-region: no-drag;
@@ -316,16 +323,20 @@ kbd {
    crushed — true before the bell too (measured: the gear squeezed from 16px to 2px), it just did not show. */
 .top .r .bell, .top .r .theme, .top .r .gear { flex: none; }
 /* Shortcuts button. The same box as the theme button — no new shape on the top bar. */
-.help {
-  width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--btn);
-  display: grid; place-items: center; cursor: pointer; color: var(--ink-3); flex: none;
-  padding: 0; font: 600 12px/1 var(--mono); -webkit-appearance: none; appearance: none;
-  -webkit-app-region: no-drag;
+.options { -webkit-app-region: no-drag; -webkit-appearance: none; appearance: none; padding: 0; }
+.options[aria-expanded="true"] { border-color: var(--accent); color: var(--ink); }
+/* Settings rows inside the options list: a control and its name, the explanation in the title. */
+.options-menu { min-width: 232px; }
+.options-menu .tm-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px;
+  color: var(--ink-2); font-size: 12px; cursor: pointer; white-space: nowrap;
 }
-.help:hover, .help[aria-expanded="true"] { border-color: var(--accent); color: var(--ink); }
+.options-menu .tm-row:hover { background: var(--hover); color: var(--ink); }
+.options-menu .tm-row input { accent-color: var(--accent); margin: 0; }
+.options-menu .tm-row select { margin-left: auto; font: inherit; font-size: 11.5px; color: var(--ink); background: var(--btn); border: 1px solid var(--line-2); border-radius: 5px; padding: 2px 4px; }
 /* Shortcuts panel. It opens under the right end of the top bar — near the button that called it. */
 .keys {
-  position: absolute; top: 46px; right: 14px; z-index: 90; width: 372px; max-width: calc(100vw - 28px);
+  position: absolute; top: 40px; right: 14px; z-index: 90; width: 372px; max-width: calc(100vw - 28px);
   background: var(--float); border: 1px solid var(--line-2); border-radius: 10px;
   box-shadow: var(--shadow); backdrop-filter: blur(8px); padding: 10px 14px 12px;
   font-size: 11.5px; color: var(--ink-2);
@@ -620,13 +631,15 @@ body.fold-r .rail.right .rail-fold       { display: none; }
   background: var(--rail); border-bottom: 1px solid var(--line);
 }
 .cvbar .tabs { flex: 1; min-width: 0; border-bottom: 0; background: transparent; }
+/* 26px like every other button here; undo is a word, so it grows to fit (2026-09-15: "너무 작아서 깨져 보여"). */
 .tidy {
-  flex: none; align-self: center; margin: 0 8px 0 6px;
-  width: 24px; height: 22px; border-radius: 6px; border: 1px solid var(--line-2);
-  background: var(--btn); color: var(--ink-3);
-  display: grid; place-items: center; cursor: pointer; padding: 0;
-  -webkit-appearance: none; appearance: none;
+  flex: none; align-self: center; margin: 0 4px 0 2px;
+  min-width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line-2);
+  background: var(--btn); color: var(--ink-2); font: inherit; font-size: 11.5px;
+  display: grid; place-items: center; cursor: pointer; padding: 0 8px;
+  -webkit-appearance: none; appearance: none; -webkit-app-region: no-drag;
 }
+.tidy:last-child { margin-right: 8px; }
 .tidy:hover { border-color: var(--accent); color: var(--ink); }
 /* With nothing to do it only says it is there and stays back — a button that does nothing when pressed lies. */
 .tidy:disabled { opacity: .3; cursor: default; border-color: var(--line); }
@@ -638,10 +651,10 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 }
 .tabs::-webkit-scrollbar { height: 0; }
 .tab {
-  flex: none; display: flex; align-items: center; gap: 6px; max-width: 190px;
-  height: 25px; padding: 0 9px; margin-bottom: -1px;
-  border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0;
-  color: var(--ink-2); font-size: 11.5px; cursor: pointer; user-select: none;
+  flex: none; display: flex; align-items: center; gap: 7px; max-width: 220px;
+  height: 29px; padding: 0 12px; margin-bottom: -1px;
+  border: 1px solid transparent; border-bottom: 0; border-radius: 7px 7px 0 0;
+  color: var(--ink-2); font-size: 13px; cursor: pointer; user-select: none;   /* 11.5 → 13 (2026-09-15) */
 }
 .tab:hover { background: var(--hover); }
 /* Delete canvas (#18). **It appears only when deleting is possible** — the tab being viewed, with not one

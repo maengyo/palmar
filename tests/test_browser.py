@@ -671,7 +671,7 @@ class NoTitleBar(unittest.TestCase):
             time.sleep(0.2)
             self.assertEqual(b.ev("window.__sent"), ["drag"])
             # a control inside the bar is marked no-drag, so it must not start a move
-            b.ev("""(()=>{document.getElementById('help')
+            b.ev("""(()=>{document.getElementById('options')
                  .dispatchEvent(new PointerEvent('pointerdown',{button:0,bubbles:true})); return 1;})()""")
             time.sleep(0.2)
             self.assertEqual(b.ev("window.__sent"), ["drag"], "pressing a button dragged the window")
@@ -2428,3 +2428,68 @@ class Palettes(unittest.TestCase):
         self.b.ev("document.getElementById('theme').click()")
         self.b.ev("document.body.click()")
         self.assertFalse(self.state()["open"], "a click outside did not close the list")
+
+
+class TopRow(unittest.TestCase):
+    """One row up top (2026-09-15). The canvas tabs used to sit on a bar of their own over the canvas
+    while the top bar spent its middle on a search box; the tabs moved up, the search went behind
+    Ctrl/⌘K, the ? became an options list with the shortcuts as one item, and the canvas took the
+    difference. The buttons in that row are the same 26px box as everywhere else."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def test_the_tabs_are_in_the_top_row_and_the_canvas_starts_right_under_it(self):
+        r = self.b.ev("""(()=>{const top=document.querySelector('.top').getBoundingClientRect();
+          const tabs=document.getElementById('tabs').getBoundingClientRect();
+          const cv=document.getElementById('cv').getBoundingClientRect();
+          return {tabsInTop: tabs.top >= top.top && tabs.bottom <= top.bottom + 1,
+                  gap: Math.round(cv.top - top.bottom), topH: Math.round(top.height),
+                  search: !!document.querySelector('.top .search')};})()""")
+        self.assertTrue(r["tabsInTop"], "the tab strip is not in the top row: %r" % r)
+        self.assertLessEqual(r["gap"], 1, "something still sits between the top row and the canvas: %r" % r)
+        self.assertEqual(r["topH"], 36)
+        self.assertFalse(r["search"], "the search box is still on the bar")
+
+    def test_the_buttons_up_there_are_not_tiny(self):
+        r = self.b.ev("""(()=>{const h=(id)=>Math.round(document.getElementById(id).getBoundingClientRect().height);
+          return {undo: h('undo'), tidy: h('tidy'), options: h('options'),
+                  tab: parseFloat(getComputedStyle(document.querySelector('.tab')).fontSize)};})()""")
+        for k in ("undo", "tidy", "options"):
+            self.assertGreaterEqual(r[k], 26, "%s is %spx tall" % (k, r[k]))
+        self.assertGreaterEqual(r["tab"], 13, "the canvas tab text is %spx" % r["tab"])
+
+    def test_the_options_list_holds_the_shortcuts_and_the_settings(self):
+        r = self.b.ev("""(()=>{document.getElementById('options').click();
+          const m=document.getElementById('options-menu');
+          const out={open: !m.hidden, has: ['pushaside','autotidy','holdstyle'].map(id=>!!m.querySelector('#'+id))};
+          m.querySelector('[data-do="keys"]').click();
+          out.keys = !document.getElementById('keys').hidden; out.closed = m.hidden;
+          out.inKeys = !!document.querySelector('#keys #holdstyle');
+          return out;})()""")
+        self.assertTrue(r["open"], "the options list did not open")
+        self.assertEqual(r["has"], [True, True, True], "a setting is missing from the list: %r" % r)
+        self.assertTrue(r["keys"], "the shortcuts item did not open the shortcuts")
+        self.assertTrue(r["closed"], "picking an item left the list open")
+        self.assertFalse(r["inKeys"], "the settings are still under the shortcuts too")
+        self.b.ev("document.getElementById('keys-x').click()")
+
+    def test_search_is_behind_the_shortcut(self):
+        self.assertTrue(self.b.ev("document.getElementById('searchbox').hidden"))
+        mod = 4 if self.b.ev("navigator.platform.startsWith('Mac')") else 2      # ⌘ or Ctrl
+        self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "k", "code": "KeyK", "modifiers": mod, "windowsVirtualKeyCode": 75})
+        self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "k", "code": "KeyK", "modifiers": mod, "windowsVirtualKeyCode": 75})
+        time.sleep(0.2)
+        r = self.b.ev("(()=>({shown: !document.getElementById('searchbox').hidden, focused: document.activeElement === document.getElementById('search')}))()")
+        self.assertEqual([r["shown"], r["focused"]], [True, True], "Ctrl/⌘K did not bring the search up: %r" % r)
+        self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
+        time.sleep(0.2)
+        self.assertTrue(self.b.ev("document.getElementById('searchbox').hidden"), "Escape did not put the search away")
