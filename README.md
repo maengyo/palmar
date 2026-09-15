@@ -36,17 +36,26 @@ step, no packages, no network at runtime.
 
 ## Install
 
-macOS ships `/usr/bin/python3`; most Linux has one.
+One line. Python is the only thing it needs already — macOS ships `/usr/bin/python3`, most Linux
+has one, Windows has python.org's.
+
+macOS · Linux:
 
 ```
-git clone https://github.com/maengyo/palmar && sh palmar/install.sh
+curl -fsSL https://raw.githubusercontent.com/maengyo/palmar/main/install.sh | sh
 ```
 
-That drops a `palmar` launcher in `~/.local/bin` and changes nothing else — no root, nothing
-started. Or skip it and run the checkout with `python3 -m palmar`.
+Windows, in PowerShell:
 
-**Windows** runs natively now; `install.ps1` does the same job there. See
-[`docs/windows.md`](docs/windows.md) for what is still rough.
+```
+irm https://raw.githubusercontent.com/maengyo/palmar/main/install.ps1 | iex
+```
+
+It downloads the tree, drops a `palmar` launcher (`~/.local/bin`, or `%LOCALAPPDATA%\palmar\bin`),
+puts that on your PATH once, and starts nothing. No root, no build. Prefer to read first?
+`git clone https://github.com/maengyo/palmar && sh palmar/install.sh` installs the checkout you can
+see, and `python3 -m palmar` runs one with nothing installed at all. Windows is native (ConPTY);
+what is still rough there is in [`docs/windows.md`](docs/windows.md).
 
 ## Running it
 

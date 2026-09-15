@@ -55,6 +55,41 @@ class Install(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("palmar ", r.stdout, "the real palmar did not answer --version")
 
+    def test_outside_a_checkout_it_fetches_the_tree_and_keeps_it(self):
+        """`curl … | sh` runs with no checkout around it: the tree is downloaded and kept under the
+        prefix, and the launcher runs that. An earlier draft extracted into mktemp and deleted it on
+        exit, so the launcher pointed at nothing. Here the download is a local tarball of this repo."""
+        import tarfile
+        elsewhere = tempfile.mkdtemp(prefix="palmar-sh-out-")
+        self.addCleanup(shutil.rmtree, elsewhere, ignore_errors=True)
+        tgz = os.path.join(elsewhere, "palmar-main.tar.gz")
+        with tarfile.open(tgz, "w:gz") as tf:
+            tf.add(os.path.join(REPO, "palmar"), arcname="palmar-main/palmar")
+        copy = os.path.join(elsewhere, "install.sh")
+        shutil.copy(INSTALL, copy)
+        home = tempfile.mkdtemp(prefix="palmar-sh-home-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        env = dict(os.environ, PALMAR_PREFIX=self.prefix, PALMAR_TARBALL=tgz, HOME=home, SHELL="/bin/zsh",
+                   PATH="/usr/bin:/bin")
+        r = subprocess.run(["/bin/sh", copy], capture_output=True, text=True, timeout=120, env=env, cwd=elsewhere)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        tree = os.path.join(self.prefix, "share", "palmar")
+        self.assertTrue(os.path.exists(os.path.join(tree, "palmar", "__init__.py")), "the tree was not kept")
+        shim = os.path.join(self.prefix, "bin", "palmar")
+        v = subprocess.run([shim, "--version"], capture_output=True, text=True, timeout=60, cwd="/tmp")
+        self.assertEqual(v.returncode, 0, v.stderr)
+        self.assertIn("palmar ", v.stdout, "the launcher does not run the kept tree")
+        # PATH: one marked line in the shell's file, and not a second one on a second run.
+        rc = os.path.join(home, ".zshrc")
+        self.assertTrue(os.path.exists(rc), "no PATH line was written for zsh")
+        with open(rc) as fh:
+            first = fh.read()
+        self.assertIn(self.prefix + "/bin", first)
+        subprocess.run(["/bin/sh", copy], capture_output=True, text=True, timeout=120, env=env, cwd=elsewhere)
+        with open(rc) as fh:
+            second = fh.read()
+        self.assertEqual(first, second, "a second install wrote the PATH line again")
+
     def test_it_is_valid_sh(self):
         r = subprocess.run(["/bin/sh", "-n", INSTALL], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -197,9 +232,9 @@ class InstallPs1(unittest.TestCase):
         """**The thing a person must not be left to discover by running it.** Until #29 the launcher
         prints a refusal, and a script that installs it without saying so is setting up a surprise."""
         out = self.run_ps("-Check").stdout
-        self.assertIn("does not run natively on Windows yet", out)
-        self.assertIn("WSL", out, "it does not name the path that does work today")
-        self.assertIn("conpty-check", out, "it does not name what this machine could do for the port")
+        self.assertIn("runs natively on Windows", out, "the report still says the port is not there")
+        self.assertNotIn("does not run natively", out)
+        self.assertIn("windows.md", out, "it does not say where the rough edges are written")
 
     def test_it_installs_a_launcher_that_points_at_the_checkout(self):
         prefix = tempfile.mkdtemp(prefix="palmar-ps-")
@@ -284,17 +319,31 @@ class InstallPs1(unittest.TestCase):
         self.assertIn("via -Python", r.stdout)
         self.assertIn(os.path.basename(sys.executable), r.stdout)
 
-    def test_it_refuses_outside_a_checkout(self):
-        """Run from somewhere else there is nothing to install — the repository is private, so there is
-        nothing to download either (#23). It has to say that rather than write a broken launcher."""
+    def test_outside_a_checkout_it_fetches_the_tree_and_keeps_it(self):
+        """The one-liner: `irm … | iex` has no checkout around it, so the tree is downloaded into the
+        prefix and the launcher runs that (2026-09-15). Here the download is a local zip of this repo,
+        so the test needs no network and no public repository."""
+        import zipfile
         elsewhere = tempfile.mkdtemp(prefix="palmar-ps-out-")
         self.addCleanup(shutil.rmtree, elsewhere, ignore_errors=True)
+        z = os.path.join(elsewhere, "palmar-main.zip")
+        with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, _, files in os.walk(os.path.join(REPO, "palmar")):
+                for f in files:
+                    full = os.path.join(root, f)
+                    zf.write(full, "palmar-main/" + os.path.relpath(full, REPO))
         copy = os.path.join(elsewhere, "install.ps1")
         shutil.copy(self.SCRIPT, copy)
-        r = subprocess.run([pwsh_path(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", copy, "-Yes"],
-                           capture_output=True, text=True, timeout=180, cwd=elsewhere)
-        self.assertNotEqual(r.returncode, 0, "it accepted a directory with no palmar in it")
-        self.assertIn("checkout", (r.stdout + r.stderr))
+        prefix = os.path.join(elsewhere, "prefix")
+        env = dict(os.environ, PALMAR_ZIP=z)
+        r = subprocess.run([pwsh_path(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", copy, "-Yes",
+                            "-Prefix", prefix, "-Python", sys.executable],
+                           capture_output=True, text=True, timeout=180, cwd=elsewhere, env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(os.path.exists(os.path.join(prefix, "src", "palmar", "__init__.py")), "the tree was not kept under the prefix")
+        with open(os.path.join(prefix, "bin", "palmar.cmd"), encoding="ascii") as fh:
+            body = fh.read()
+        self.assertIn(os.path.join(prefix, "src"), body, "the launcher does not point at the kept tree")
 
 
 if __name__ == "__main__":

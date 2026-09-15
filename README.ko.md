@@ -31,17 +31,26 @@
 
 ## 설치
 
-macOS 에는 `/usr/bin/python3` 가 있고, 리눅스도 대개 하나는 있다.
+한 줄. 이미 있어야 하는 것은 파이썬뿐이다 — macOS 에는 `/usr/bin/python3` 가 있고, 리눅스도 대개
+하나는 있고, 윈도우는 python.org 의 것.
+
+macOS · Linux:
 
 ```
-git clone https://github.com/maengyo/palmar && sh palmar/install.sh
+curl -fsSL https://raw.githubusercontent.com/maengyo/palmar/main/install.sh | sh
 ```
 
-`~/.local/bin` 에 `palmar` 실행기 하나를 놓는 것이 전부다 — root 도, 시작도 없다. 아니면 그냥
-체크아웃에서 `python3 -m palmar`.
+윈도우, PowerShell 에서:
 
-**윈도우**도 이제 네이티브로 돈다. `install.ps1` 이 같은 일을 한다. 아직 거친 부분은
-[`docs/windows.md`](docs/windows.md).
+```
+irm https://raw.githubusercontent.com/maengyo/palmar/main/install.ps1 | iex
+```
+
+트리를 받아 두고, `palmar` 실행기를 놓고(`~/.local/bin`, 윈도우는 `%LOCALAPPDATA%\palmar\bin`),
+PATH 에 한 번 올리고, 아무것도 시작하지 않는다. root 도 빌드도 없다. 먼저 읽어 보고 싶으면
+`git clone https://github.com/maengyo/palmar && sh palmar/install.sh` 가 눈앞의 체크아웃을 설치하고,
+`python3 -m palmar` 는 아무것도 설치하지 않고 돌린다. 윈도우는 네이티브(ConPTY)이고, 아직 거친
+부분은 [`docs/windows.md`](docs/windows.md) 에 있다.
 
 ## 실행
 

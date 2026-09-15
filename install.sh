@@ -17,10 +17,11 @@
 set -eu
 
 # ── where palmar comes from ────────────────────────────────────────────────────────────────
-# Left as placeholders until the repo is public / on PyPI (the user's call). When either is set,
-# this script fetches from there; run from inside a clone, it installs the checkout you are in.
-PALMAR_PYPI="${PALMAR_PYPI:-}"          # e.g. "palmar" once uploaded — then pip/uv can be used
-PALMAR_TARBALL="${PALMAR_TARBALL:-}"    # e.g. a github codeload .tar.gz once the repo is public
+# Run from inside a clone, this installs the checkout you are in. Run any other way — the one-line
+# `curl … | sh` — it downloads the tree from GitHub and keeps it under $PREFIX/share/palmar, which is
+# what the launcher then runs. PALMAR_TARBALL overrides the source: a URL, or a local .tar.gz (tests).
+PALMAR_PYPI="${PALMAR_PYPI:-}"          # "palmar" once it is on PyPI — then pip is used instead
+PALMAR_TARBALL="${PALMAR_TARBALL:-https://codeload.github.com/maengyo/palmar/tar.gz/refs/heads/main}"
 PREFIX="${PALMAR_PREFIX:-$HOME/.local}"
 
 say()  { printf '%s\n' "$*"; }
@@ -58,19 +59,25 @@ elif [ -n "$PALMAR_PYPI" ]; then
   say "installing $PALMAR_PYPI from PyPI"
   "$PY" -m pip install --user --upgrade "$PALMAR_PYPI" || die "pip install failed"
   INSTALLED_VIA_PIP=1
-elif [ -n "$PALMAR_TARBALL" ]; then
+else
+  # **The tree is kept, not the temp dir.** An earlier draft extracted into mktemp and deleted it on
+  # exit — the launcher then pointed at nothing. It lives under the prefix, and a reinstall replaces it.
   TMP="$(mktemp -d)"
   trap 'rm -rf "$TMP"' EXIT
-  say "downloading palmar"
-  curl -fsSL "$PALMAR_TARBALL" -o "$TMP/palmar.tar.gz" || die "download failed"
-  tar -xzf "$TMP/palmar.tar.gz" -C "$TMP"
-  SRC="$(find "$TMP" -maxdepth 2 -name '__init__.py' -path '*/palmar/*' -exec dirname {} \; | head -1)"
-  SRC="$(dirname "$SRC")"
-  [ -f "$SRC/palmar/__init__.py" ] || die "the downloaded archive did not contain palmar/"
-else
-  die "no source to install from.
-  Run this from inside a 'git clone' of palmar, or set PALMAR_PYPI / PALMAR_TARBALL.
-  (The repository is private for now; a public one-line install is coming.)"
+  if [ -f "$PALMAR_TARBALL" ]; then
+    cp "$PALMAR_TARBALL" "$TMP/palmar.tar.gz"
+  else
+    say "downloading palmar"
+    command -v curl >/dev/null 2>&1 || die "curl is needed to download palmar (or git clone it and run install.sh from the clone)"
+    curl -fsSL "$PALMAR_TARBALL" -o "$TMP/palmar.tar.gz" || die "download failed — is the repository public, and is the network up?"
+  fi
+  mkdir -p "$TMP/x" && tar -xzf "$TMP/palmar.tar.gz" -C "$TMP/x" || die "could not unpack the archive"
+  GOT="$(find "$TMP/x" -maxdepth 3 -name '__init__.py' -path '*/palmar/*' | head -1)"
+  [ -n "$GOT" ] || die "the archive did not contain palmar/"
+  GOT="$(dirname "$(dirname "$GOT")")"
+  SRC="$PREFIX/share/palmar"
+  rm -rf "$SRC" && mkdir -p "$(dirname "$SRC")" && mv "$GOT" "$SRC" || die "could not place palmar under $SRC"
+  say "installed the tree at $SRC"
 fi
 
 # ── 3. make `palmar` runnable ──────────────────────────────────────────────────────────────
@@ -99,9 +106,27 @@ SHIM_EOF
   say "installed a launcher at $SHIM"
   case ":$PATH:" in
     *":$PREFIX/bin:"*) say "run:  palmar" ;;
-    *) say "add $PREFIX/bin to your PATH, then run:  palmar
-  e.g.  echo 'export PATH=\"$PREFIX/bin:\$PATH\"' >> ~/.profile
-  or just run it directly:  $SHIM" ;;
+    *)
+      # **Put it on the PATH, once, in the file this shell reads.** A launcher nobody can call is not
+      # installed. One marked line, added only if it is not there — so running this twice adds nothing
+      # twice. The running shell cannot be changed from here; the next one has it.
+      RC=""
+      case "$(basename -- "${SHELL:-sh}")" in
+        zsh)  RC="$HOME/.zshrc" ;;
+        bash) RC="$HOME/.bashrc"; [ "$(uname -s)" = "Darwin" ] && RC="$HOME/.bash_profile" ;;
+        fish) RC="" ;;
+        *)    RC="$HOME/.profile" ;;
+      esac
+      LINE="export PATH=\"$PREFIX/bin:\$PATH\"  # palmar"
+      if [ -n "$RC" ] && ! grep -qs '# palmar$' "$RC"; then
+        printf '\n%s\n' "$LINE" >> "$RC" && say "added $PREFIX/bin to your PATH in $RC"
+      elif [ -n "$RC" ]; then
+        say "$RC already puts $PREFIX/bin on your PATH"
+      else
+        say "add $PREFIX/bin to your PATH (fish: fish_add_path $PREFIX/bin)"
+      fi
+      say "open a new terminal (or run: exec \$SHELL), then:  palmar"
+      say "or run it directly now:  $SHIM" ;;
   esac
 fi
 

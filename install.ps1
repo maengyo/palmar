@@ -7,17 +7,15 @@
       powershell -ExecutionPolicy Bypass -File .\install.ps1 -Check     # look, change nothing
       powershell -ExecutionPolicy Bypass -File .\install.ps1            # ...then ask before writing
 
-  **Read this before expecting a working palmar.** The daemon does not run natively on Windows yet:
-  palmar/daemon.py exits on win32, above its own imports, because fcntl, pty and termios are not there
-  (#29, docs/windows.md). So what this installs is a launcher that will work the day that port lands,
-  and what it does today is answer the question that is actually blocking the port -- **what is on this
-  machine**. Run it with -Check and read the report; nothing is written.
+  The daemon runs natively on Windows (ConPTY through ctypes, 2026-09-14). What is still rough is in
+  docs/windows.md. Run with -Check to see what this machine has; nothing is written then.
 
-  What works on Windows today is the daemon inside WSL with any Windows browser pointed at the address
-  it prints. That needs nothing from this script.
+  The one-liner, from any PowerShell:
 
-  Deliberately like install.sh: no administrator, no PATH edited behind your back, nothing downloaded
-  when run from a checkout, and it never starts anything.
+      irm https://raw.githubusercontent.com/maengyo/palmar/main/install.ps1 | iex
+
+  Deliberately like install.sh: no administrator, the user PATH only and only after asking, nothing
+  downloaded when run from a checkout, and it never starts anything.
 
   **ASCII only, on purpose.** Windows PowerShell 5.1 -- which is what Windows has built in, and what
   this has to run on -- reads a BOM-less file in the system code page, not UTF-8. One em dash in a
@@ -68,12 +66,17 @@ if (-not $Prefix) {
 }
 
 # -- where palmar is ----------------------------------------------------------
-# Only the checkout, as on POSIX. The repository is private, so there is nothing to download yet (#23);
-# when there is, this grows the same PALMAR_TARBALL branch install.sh already has.
-$here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$src = if (Test-Path (Join-Path $here 'palmar\__init__.py')) { $here }
-       elseif (Test-Path (Join-Path $here 'palmar/__init__.py')) { $here }
-       else { $null }
+# Run from a checkout, that checkout. Run any other way -- the one-liner `irm ... | iex`, where this
+# script has no path of its own -- the tree is downloaded from GitHub into $Prefix\src and the launcher
+# runs it from there. PALMAR_ZIP overrides the source: a URL, or a local .zip (tests). PALMAR_YES=1
+# stands in for -Yes, which a piped script cannot be given.
+if ($env:PALMAR_YES -eq '1') { $Yes = $true }
+$here = $null
+if ($MyInvocation.MyCommand.Path) { $here = Split-Path -Parent $MyInvocation.MyCommand.Path }
+$src = $null
+if ($here -and (Test-Path (Join-Path $here 'palmar\__init__.py'))) { $src = $here }
+$zip = if ($env:PALMAR_ZIP) { $env:PALMAR_ZIP } else { 'https://github.com/maengyo/palmar/archive/refs/heads/main.zip' }
+$fetched = $false
 
 # -- 1. what is here ----------------------------------------------------------
 Say ''
@@ -240,23 +243,46 @@ if ($script:Trouble.Count) {
 }
 Say ''
 
-# -- 3. the part that is not ready --------------------------------------------
-Warn 'The daemon does not run natively on Windows yet (#29).'
-Say  '  palmar/daemon.py exits on win32 because fcntl, pty and termios are not there, so the'
-Say  '  launcher below will print that sentence until the port lands (docs/windows.md).'
-Say  '  What works today: run the daemon inside WSL and open the address it prints in any'
-Say  '  Windows browser. That needs nothing from this script.'
+# -- 3. what is still rough ---------------------------------------------------
+Say  'The daemon runs natively on Windows (ConPTY through ctypes). What is still rough there'
+Say  '  is written in docs/windows.md: the shell prompt does not yet tell palmar where it cd-ed'
+Say  '  (#30), and a pane opens under your profile only (#31).'
 Say  ''
 if ($found -and $src) {
-  Say  'What this machine can do for the port, right now:'
+  Say  'The ConPTY layer''s own check, if something looks wrong on this machine:'
   Say  ("    {0} {1}dev\conpty-check.py" -f $found.Exe, $(if ($src -eq $here) { '' } else { "$src\" }))
-  Say  '  That is the ConPTY layer''s own check -- the one thing #29 has been waiting for a machine to run.'
   Say  ''
 }
 
 if ($Check) { Say 'Nothing was written (-Check).'; exit 0 }
 if (-not $found) { Die "no Python 3.9 or newer. Install one from python.org, or use WSL." }
-if (-not $src)   { Die "run this from inside a palmar checkout. (A one-line download needs #23.)" }
+if (-not $src) {
+  # Not in a checkout: fetch the tree and keep it. The old tree, if any, is replaced whole.
+  $srcRoot = Join-Path $Prefix 'src'
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) ('palmar-' + [IO.Path]::GetRandomFileName())
+  New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+  $zipFile = Join-Path $tmp 'palmar.zip'
+  if (Test-Path -LiteralPath $zip) {
+    Copy-Item -LiteralPath $zip -Destination $zipFile
+  } else {
+    Say ("downloading palmar from {0}" -f $zip)
+    try { Invoke-WebRequest -UseBasicParsing -Uri $zip -OutFile $zipFile }
+    catch { Die ("download failed -- is the repository public, and is the network up? ({0})" -f $_.Exception.Message) }
+  }
+  try { Expand-Archive -LiteralPath $zipFile -DestinationPath (Join-Path $tmp 'x') -Force }
+  catch { Die ("could not unpack the archive ({0})" -f $_.Exception.Message) }
+  $init = Get-ChildItem -Path (Join-Path $tmp 'x') -Recurse -Depth 3 -Filter '__init__.py' |
+          Where-Object { $_.Directory.Name -eq 'palmar' } | Select-Object -First 1
+  if (-not $init) { Die 'the archive did not contain palmar/' }
+  $tree = $init.Directory.Parent.FullName
+  if (Test-Path -LiteralPath $srcRoot) { Remove-Item -LiteralPath $srcRoot -Recurse -Force }
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $srcRoot) | Out-Null
+  Move-Item -LiteralPath $tree -Destination $srcRoot
+  Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+  $src = $srcRoot
+  $fetched = $true
+  Say ("installed the tree at {0}" -f $src)
+}
 
 # -- 4. write the launcher ----------------------------------------------------
 $bin = Join-Path $Prefix 'bin'
@@ -313,7 +339,10 @@ if ($env:PATH -and ($env:PATH -split ';' | Where-Object { $_ -eq $bin })) {
       $next = if ($mine) { $mine.TrimEnd(';') + ';' + $bin } else { $bin }
       try {
         [Environment]::SetEnvironmentVariable('PATH', $next, 'User')
-        Say 'added. Open a new terminal and run:  palmar'
+        # **And this session too.** Run as `irm ... | iex` this script is in the person's own
+        # console, so `palmar` works the moment it returns -- not only in the next window.
+        $env:PATH = $env:PATH.TrimEnd(';') + ';' + $bin
+        Say 'added. Run:  palmar'
       } catch {
         Say ('could not write it -- add it by hand: {0}' -f $bin)
       }
