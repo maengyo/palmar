@@ -116,6 +116,11 @@
         <label class="tm-row" title="drop a window on another and the one that was there moves out of the way, by exactly the overlap"><input type="checkbox" id="pushaside" checked> Push windows aside</label>
         <label class="tm-row" title="when a terminal closes, pull the rest back to the corner on their own"><input type="checkbox" id="autotidy"> Tidy automatically</label>
         <label class="tm-row" title="the small map of the canvas, bottom right"><input type="checkbox" id="minimap" checked> Minimap</label>
+        <label class="tm-row" title="the face the rails, tabs and menus are set in — terminals keep their own">Interface font
+          <select id="uifont">
+            <option value="system">system</option>
+            <option value="mono">monospace</option>
+          </select></label>
         <label class="tm-row" title="the text size a terminal opens at — Ctrl/⌘ + wheel changes one window">Text size
           <select id="fontsize">
             <option value="11">11</option>
@@ -219,7 +224,9 @@
       <!-- The line that says where status comes from. Not a value asked of the daemon — a stated fact.
            **No listing of agent names** — reading by title (protocol.md "제목으로 읽기") works with
            any agent, so the moment names are counted, whatever is not on that list reads as unsupported. -->
-      <div class="rf"><b>status</b> <i>any agent, by title</i> <i>hooks: claude</i></div>
+      <!-- The two lines that stood here ("status: any agent, by title" · "hooks: claude") said how the
+           lights are worked out. That is the daemon's business and --doctor's to report; here it was
+           noise under the list (user, 2026-09-15). -->
     </aside>
 
     <!-- ── canvas ─────────────────────────────── -->

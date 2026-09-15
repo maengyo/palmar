@@ -51,6 +51,13 @@ Windows, in PowerShell:
 irm https://raw.githubusercontent.com/maengyo/palmar/main/install.ps1 | iex
 ```
 
+or, to read it before it runs (and to pass `-Check` / `-Prefix`):
+
+```
+irm https://raw.githubusercontent.com/maengyo/palmar/main/install.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
 It downloads the tree, drops a `palmar` launcher (`~/.local/bin`, or `%LOCALAPPDATA%\palmar\bin`),
 puts that on your PATH once, and starts nothing. No root, no build. Prefer to read first?
 `git clone https://github.com/maengyo/palmar && sh palmar/install.sh` installs the checkout you can

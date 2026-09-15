@@ -88,6 +88,12 @@
      A machine with none still needs one installed. On Debian/Ubuntu the small right answer for a
      terminal is fonts-naver-d2coding (~8 MB); fonts-noto-cjk (~89 MB) covers four languages you
      probably do not need. */
+  /* **The chrome reads in the system's own face; the terminal keeps its mono** (2026-09-15). Everything
+     set in the monospace read as an old program — labels, lists, menus all in a typewriter. Rails, tabs,
+     buttons, lists and menus are in --ui now; terminals, the viewer's text, paths, keys and sizes stay
+     in --mono, which is where a fixed pitch means something. body.ui-mono puts the old face back. */
+  --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Helvetica Neue", "Apple SD Gothic Neo",
+        "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace,
           "D2Coding", "NanumGothicCoding", "Noto Sans Mono CJK KR", "Noto Sans CJK KR",
           "Malgun Gothic", "Apple SD Gothic Neo";
@@ -243,7 +249,7 @@
 html, body { height: 100%; }
 body {
   margin: 0; background: var(--ground); color: var(--ink);
-  font: 12px/1.5 var(--mono); -webkit-font-smoothing: antialiased;
+  font: 13px/1.5 var(--ui); -webkit-font-smoothing: antialiased;
   overflow: auto;
 }
 ::selection { background: var(--accent-2); }
@@ -326,7 +332,7 @@ body.wants .brand .wd { fill: var(--st-wait); opacity: 1; }
 .search input::placeholder { color: var(--ink-3); }
 .search:focus-within { border-color: var(--accent); }
 kbd {
-  font: 10.5px var(--mono); color: var(--kbd-ink); background: var(--kbd);
+  font: 11px var(--mono); color: var(--kbd-ink); background: var(--kbd);
   border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 4px;
   padding: 1px 5px 0; line-height: 15px; display: inline-block;
 }
@@ -537,7 +543,7 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .rail-open:focus-visible i { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent); }
 .rh {
   display: flex; align-items: center; gap: 6px; padding: 14px 12px 8px;
-  font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); font-weight: 500;
+  font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2); font-weight: 600;
 }
 .rh .n { color: var(--ink-2); letter-spacing: 0; }
 /* The words give way and the buttons stay: dragged narrow, the header used to push its own buttons
@@ -640,10 +646,10 @@ body.fold-r .rail.right .rail-fold       { display: none; }
    status-grouping path (renderByStatus): there the group is a status, not a canvas, nothing to indent under. */
 .ses.cvrow { margin-left: 14px; }
 .ses.cur { background: var(--accent-2); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
-.ses .who { font-size: 12.5px; font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ses .who { font-size: 13.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ses .who span { color: var(--ink-3); font-weight: 400; }
-.ses .ago { font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
-.ses .msg { grid-column: 2 / 5; grid-row: 2; font-size: 11px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ses .ago { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+.ses .msg { grid-column: 2 / 5; grid-row: 2; font-size: 12px; font-family: var(--mono); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ses.wait .msg { color: var(--st-wait); }
 /* #31 ④ Close, on a list row. **The slot is always held** (one column) — a column appearing on hover would
    shake the row. It shows, and can be pressed, only on hover or focus. The keyboard reaches it with Tab. */
@@ -663,19 +669,12 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 }
 .ses .cvb { display: inline-block; max-width: 84px; overflow: hidden; text-overflow: ellipsis; vertical-align: -1px; }
 .ses.hide, .grp.hide, .row.hide { display: none; }
-.empty { padding: 18px 20px; font-size: 11px; color: var(--ink-3); line-height: 1.7; }
-.rf {
-  border-top: 1px solid var(--line); padding: 10px 14px; font-size: 11px; color: var(--ink-3);
-  display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center;
-}
-.rf b { color: var(--ink-2); font-weight: 500; }
-.rf i { font-style: normal; color: var(--ink-2); }
-/* #18: the hook-installed mark (✓) and the daemon dot (●) below in the status bar are not session status —
-   using status-light green (--st-work) would break AGENTS "신호등 색을 다른 데 쓰지 마라", so
-   they were changed to --accent. The mockup used green, so the design source of truth and the rules source of
-   truth conflict — which way to go is for a person to settle in the design section of decisions.md. */
-.rf i::before { content: "✓ "; color: var(--accent); }
-.rf i.no { color: var(--ink-3); } .rf i.no::before { content: "– "; color: var(--ink-3); }
+.empty { padding: 18px 20px; font-size: 12.5px; color: var(--ink-3); line-height: 1.7; }
+/* **The rail's icon buttons are quiet until the hand arrives** — no edge, no fill, the mark alone;
+   hover draws the edge (user, 2026-09-15: "테두리가 안 보이는 상태에서 마우스 올리면 조금 보이게"). */
+.rh .ib { border-color: transparent; background: transparent; box-shadow: none; color: var(--ink-3); }
+.rh .ib:hover { border-color: color-mix(in srgb, var(--line-2) 80%, transparent); background: var(--hover); color: var(--ink); box-shadow: inset 0 1px 0 rgba(255,255,255,.35); }
+body.ui-mono { --ui: var(--mono); }
 
 /* ── canvas tabs (⑪) ────────────────────────── */
 /* Tabs attach **above** the canvas and never reach over the rails (protocol.md "캔버스"). So inside the middle
@@ -886,9 +885,9 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
 /* **The name takes the slack.** The buttons used to be pushed right by `margin-left:auto` on the size
    readout — and a viewer has no size to show, so with it hidden the buttons sat in the middle of the bar
    (user, 2026-09-15). Now the name grows and everything after it is at the right edge, readout or not. */
-.tb .name { flex: 1 1 auto; min-width: 0; font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tb .name { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tb .name span { color: var(--ink-3); font-weight: 400; }
-.tb .sz { margin-left: auto; font-size: 10.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; flex: none; }
+.tb .sz { margin-left: auto; font-size: 11.5px; font-family: var(--mono); color: var(--ink-3); font-variant-numeric: tabular-nums; flex: none; }
 /* #25 For when this pane's font size is not the default. All it need say is where you put it back, so it is
    one underline — laid onto the size readout already there, to avoid one more button on the title bar. */
 .tb .sz.own { cursor: pointer; color: var(--ink-2); text-decoration: underline dotted; text-underline-offset: 2px; }
@@ -1070,14 +1069,25 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
    so it stands in for that list now — shown while the *left* rail is folded (2026-09-15). */
 body.fold-l .fab { display: grid; }
 
+/* **It has to be seen.** A quiet line at the bottom was missed, and the bell got pressed again and
+   again (user, 2026-09-15). It rises into place, its edge glows the accent for a moment, and the text
+   is a size up. Still one line, still where it was. */
 .toast {
-  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
-  background: var(--float); border: 1px solid var(--line-2); border-radius: 7px;
-  padding: 6px 12px; font-size: 11px; color: var(--ink-2); display: flex; gap: 10px; align-items: center;
+  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%) translateY(8px);
+  background: var(--float); border: 1px solid var(--line-2); border-radius: 8px;
+  padding: 8px 14px; font-size: 12.5px; color: var(--ink-2); display: flex; gap: 10px; align-items: center;
   box-shadow: var(--shadow-2); z-index: 20;
-  opacity: 0; pointer-events: none; transition: opacity .25s;
+  opacity: 0; pointer-events: none; transition: opacity .22s, transform .22s cubic-bezier(.2,.8,.2,1);
 }
-.toast.show { opacity: 1; pointer-events: auto; }
+.toast.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); animation: toast-glow 1.1s ease-out; }
+@keyframes toast-glow {
+  0%   { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent), var(--shadow-2); }
+  100% { border-color: var(--line-2); box-shadow: var(--shadow-2); }
+}
+@media (prefers-reduced-motion: reduce) { .toast.show { animation: none; } }
+/* The bell says it heard: one ring on press. */
+.bell.ping { animation: bell-ping .5s ease-out; }
+@keyframes bell-ping { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); } 100% { box-shadow: 0 0 0 9px transparent; } }
 .toast b { color: var(--ink); font-weight: 500; }
 .toast .d { color: var(--ink-3); }
 /* The undo beside a push-aside toast. A real <button> so it is reachable by keyboard, stripped back to
@@ -1160,7 +1170,7 @@ body.fold-l .fab { display: grid; }
 .row.dim { color: var(--ink-3); }
 .row.loading .car { opacity: .4; }
 .i1 { padding-left: 22px; } .i2 { padding-left: 38px; }
-.hint2 { padding: 4px 16px 10px; font-size: 10.5px; color: var(--ink-3); }
+.hint2 { padding: 4px 16px 10px; font-size: 11.5px; color: var(--ink-3); }
 /* File rows in the tree, and the viewer window they open (2026-09-15). */
 .row .ic { flex: none; width: 15px; height: 15px; display: grid; place-items: center; }
 .row .ic svg { width: 15px; height: 15px; display: block; }
@@ -1169,7 +1179,7 @@ body.fold-l .fab { display: grid; }
 .row.file .nm { color: var(--ink-2); }
 .row.file:hover .nm, .row.file.sel .nm { color: var(--ink); }
 .row.file.sel .ic.file { color: var(--accent); opacity: 1; }
-.row .fsz { margin-left: auto; font-size: 10.5px; color: var(--ink-3); flex: none; font-variant-numeric: tabular-nums; }
+.row .fsz { margin-left: auto; font-size: 11.5px; font-family: var(--mono); color: var(--ink-3); flex: none; font-variant-numeric: tabular-nums; }
 .row.file[draggable="true"] { cursor: grab; }
 .row.file.dragging { opacity: .5; }
 /* While a file is over the canvas, the canvas says it will take it. */
@@ -1186,7 +1196,7 @@ body.fold-l .fab { display: grid; }
 .tile.viewer .rn { display: none; }     /* a file is called by its name; there is nothing to rename */
 .view {
   flex: 1; min-height: 0; overflow: auto; background: var(--tile); color: var(--term-ink);
-  font: 12px/1.55 var(--mono); padding: 8px 10px 12px 0; tab-size: 4; -moz-tab-size: 4;
+  font: 13px/1.55 var(--mono); padding: 8px 10px 12px 0; tab-size: 4; -moz-tab-size: 4;
   outline: none;
 }
 .view .l { display: flex; white-space: pre; }
@@ -1212,7 +1222,7 @@ body.fold-l .fab { display: grid; }
 /* The line under the title: edited · saved · it changed on disk, with the two ways out of that. */
 .view-bar {
   flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 10px;
-  border-top: 1px solid var(--line); background: var(--tile-bar); font-size: 11px; color: var(--ink-2);
+  border-top: 1px solid var(--line); background: var(--tile-bar); font-size: 12px; color: var(--ink-2);
 }
 .view-bar .m { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .view-bar .vb {
@@ -1243,7 +1253,7 @@ body.fold-l .fab { display: grid; }
 /* ── status bar ─────────────────────────────── */
 .sb {
   display: flex; align-items: center; gap: 18px; padding: 0 14px; border-top: 1px solid var(--line);
-  background: var(--rail); font-size: 10.5px; color: var(--ink-3);
+  background: var(--rail); font-size: 12px; color: var(--ink-3); font-family: var(--mono);
 }
 .sb .sp { flex: 1; }
 .sb i { font-style: normal; color: var(--ink-2); }

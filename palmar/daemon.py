@@ -2501,7 +2501,14 @@ async def find_dirs(qs: str) -> list:
 #: nothing else — a file with a NUL in its first bytes is "not text" (415), one over FILE_MAX is "too
 #: big" (413). Read-only; there is no PUT. The boundary is the one browsing has (resolve_dir): anywhere
 #: this uid can read — the same files the shell beside it can `cat`, so nothing new is reachable.
-FILE_MAX = 2 * 1024 * 1024
+#: **A big file is shown from the top, not refused.** Most real files were over the old 2 MB and the
+#: viewer just said no (user, 2026-09-15). Text goes out as its first TEXT_HEAD bytes with the total in
+#: a header, and the page says "the first 4 MB of 48"; an image or a PDF goes whole up to BLOB_MAX,
+#: because the browser draws those and half a picture is nothing. A truncated file is read-only —
+#: saving a head over a whole would destroy the rest.
+FILE_MAX = 8 * 1024 * 1024            # the most a PUT may carry
+TEXT_HEAD = 4 * 1024 * 1024           # of a text file, the part that is shown
+BLOB_MAX = 64 * 1024 * 1024           # an image or a document, whole or not at all
 #: **.svg is not in here on purpose.** It is a document that can carry script, and the viewer hands what it
 #: gets to a blob: URL — "open image in new tab" would then run that script in palmar's own origin (review,
 #: 2026-09-15). An SVG is served as its source, which is also the more useful thing to see.
@@ -3068,15 +3075,28 @@ async def handle_request(reader, writer) -> None:
         # **Bounded by what is read, not by what stat says.** A procfs file reports 0 bytes and goes on
         # forever — /proc/self/pagemap is 256 GiB of it — so trusting st_size was a way to ask the daemon to
         # read a machine's memory into a string (review, 2026-09-15). One byte past the limit is enough.
+        blob = f.suffix.lower() in IMAGE_TYPES or f.suffix.lower() in DOC_TYPES
+        cap = BLOB_MAX if blob else TEXT_HEAD
         try:
             with open(f, "rb") as fh:
-                data = fh.read(FILE_MAX + 1)
+                data = fh.read(cap + 1)
         except OSError as e:
             writer.write(http_error(400, f"cannot read: {e.strerror or e}"))
             return
-        if len(data) > FILE_MAX:
-            writer.write(http_error(413, f"too big to show (the limit is {FILE_MAX} bytes)"))
-            return
+        truncated = 0
+        if len(data) > cap:
+            if blob:
+                writer.write(http_error(413, f"too big to show (the limit is {BLOB_MAX // (1024 * 1024)} MB)"))
+                return
+            try:
+                truncated = f.stat().st_size            # the whole, for the page to name
+            except OSError:
+                truncated = len(data)
+            data = data[:cap]
+            # Not in the middle of a line: the last partial one is dropped so what is shown is whole lines.
+            cut = data.rfind(b"\n")
+            if cut > 0:
+                data = data[:cut + 1]
         try:
             mtime = f.stat().st_mtime
         except OSError:
@@ -3084,7 +3104,8 @@ async def handle_request(reader, writer) -> None:
         # **The stamp the writer has to match.** Saving sends it back; if the file moved on in between,
         # the save is refused rather than quietly winning over whatever else wrote it (an agent in the
         # terminal beside it is the case that matters).
-        extra = f"X-Palmar-Mtime: {mtime!r}\r\nX-Palmar-Editable: {'1' if editable(f) else '0'}\r\n"
+        extra = (f"X-Palmar-Mtime: {mtime!r}\r\nX-Palmar-Editable: {'1' if editable(f) and not truncated else '0'}\r\n"
+                 + (f"X-Palmar-Truncated: {truncated}\r\n" if truncated else ""))
         ctype = IMAGE_TYPES.get(f.suffix.lower()) or DOC_TYPES.get(f.suffix.lower())
         if ctype is None:
             if b"\x00" in data[:8192]:

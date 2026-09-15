@@ -1232,8 +1232,32 @@ class LookingAtADocument(unittest.TestCase):
     def test_what_is_neither_is_refused(self):
         st, b = self.d.raw("GET", "/api/file?path=" + os.path.join(self.dir, "blob.bin"))
         self.assertEqual(st, 415, b)
-        st, b = self.d.raw("GET", "/api/file?path=" + os.path.join(self.dir, "huge.txt"))
+        # An image too big to draw is refused; text that size is shown from the top instead (below).
+        big = os.path.join(self.dir, "big.png")
+        with open(big, "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n"); fh.truncate(65 * 1024 * 1024)
+        st, b = self.d.raw("GET", "/api/file?path=" + big)
         self.assertEqual(st, 413, b)
+
+    def test_a_big_text_file_is_shown_from_the_top_and_is_read_only(self):
+        """Most real files were over the old limit and the viewer just said no (user, 2026-09-15). The
+        first TEXT_HEAD bytes go out, cut at a line end, with the whole size named — and no offer to
+        edit, because saving a head over a whole would destroy the rest."""
+        import urllib.request
+        p = os.path.join(self.dir, "long.log")
+        with open(p, "wb") as fh:
+            for i in range(300000):
+                fh.write(b"line %07d of a log that is bigger than the head\n" % i)
+        total = os.path.getsize(p)
+        req = urllib.request.Request(self.d.base + "/api/file?path=" + p + "&token=" + self.d.token)
+        req.add_header("Origin", self.d.base)
+        with urllib.request.urlopen(req, timeout=20) as r:
+            body = r.read()
+            self.assertEqual(r.headers.get("X-Palmar-Truncated"), str(total))
+            self.assertEqual(r.headers.get("X-Palmar-Editable"), "0", "a head must not be editable")
+        self.assertLess(len(body), total)
+        self.assertGreater(len(body), 3 * 1024 * 1024)
+        self.assertTrue(body.endswith(b"\n"), "the head was cut in the middle of a line")
         st, b = self.d.raw("GET", "/api/file?path=" + self.dir)
         self.assertEqual(st, 400, "a folder was served as a file")
         st, b = self.d.raw("GET", "/api/file?path=" + os.path.join(self.dir, "notes.md"), token=False)

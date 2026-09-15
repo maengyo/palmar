@@ -1425,6 +1425,7 @@ class Viewer {
     const bar = this.barEl;
     bar.textContent = '';
     if (!msg && !this.editing) { bar.hidden = true; return; }
+    if (!msg && this.truncated) msg = 'a file this size is shown from the top, and is read-only';
     bar.hidden = false;
     bar.append(el('span', 'm', msg || (this.dirty ? 'edited — ' + KMOD + 'S saves' : 'editing — ' + KMOD + 'S saves')));
     for (const [label, fn] of actions || []) {
@@ -1538,6 +1539,7 @@ class Viewer {
       const ctype = r.headers.get('content-type') || '';
       this.mtime = r.headers.get('x-palmar-mtime') || '';
       this.canEdit = r.headers.get('x-palmar-editable') === '1';
+      this.truncated = parseInt(r.headers.get('x-palmar-truncated') || '0', 10) || 0;
       this.el.classList.toggle('can-edit', this.canEdit);
       this.mode = viewMode(this.s.path, ctype);
       if (this.mode === 'image' || this.mode === 'pdf') {
@@ -1552,7 +1554,10 @@ class Viewer {
       }
       this.dirty = false;
       this.render();
-      this.say();
+      if (this.truncated) {
+        const mb = (n) => (n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0) + ' MB';
+        this.say('showing the first ' + mb(this.text ? this.text.length : 0) + ' of ' + mb(this.truncated) + ' — read-only');
+      } else this.say();
     } catch (e) {
       box.textContent = ''; box.appendChild(el('div', 'view-msg', 'could not read it — ' + (e.message || e)));
     }
@@ -3688,7 +3693,10 @@ async function toggleNotify() {
   notifyTest();
 }
 if (bellEl) {
-  bellEl.addEventListener('click', toggleNotify);
+  bellEl.addEventListener('click', () => {
+    bellEl.classList.remove('ping'); void bellEl.offsetWidth; bellEl.classList.add('ping');   // one ring, every press
+    toggleNotify();
+  });
   bellEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleNotify(); }
   });
@@ -4599,6 +4607,17 @@ function boot() {
       sw.addEventListener('change', () => {
         autoTidy = sw.checked;
         try { if (autoTidy) localStorage.setItem(LS_AUTOTIDY, '1'); else localStorage.removeItem(LS_AUTOTIDY); } catch (e) {}
+      });
+    }
+    const uf = document.getElementById('uifont');
+    if (uf) {
+      let face = 'system';
+      try { if (localStorage.getItem('palmar.uifont') === 'mono') face = 'mono'; } catch (e) {}
+      document.body.classList.toggle('ui-mono', face === 'mono');
+      uf.value = face;
+      uf.addEventListener('change', () => {
+        document.body.classList.toggle('ui-mono', uf.value === 'mono');
+        try { if (uf.value === 'mono') localStorage.setItem('palmar.uifont', 'mono'); else localStorage.removeItem('palmar.uifont'); } catch (e) {}
       });
     }
     const mmsw = document.getElementById('minimap');
