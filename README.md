@@ -70,14 +70,15 @@ what is still rough there is in [`docs/windows.md`](docs/windows.md).
 palmar
 ```
 
-It prints its address, opens your browser and comes straight back — the daemon detaches, so closing
-the terminal does not take your shells with it. Run `palmar` again and you get the same address
+It prints its address, opens palmar's own window when one is installed and a browser otherwise, and
+comes straight back — the daemon detaches, so closing the terminal does not take your shells with it. Run `palmar` again and you get the same address
 rather than a second daemon; `palmar --stop` ends it. Lost the address: `cat ~/.palmar/run/url`.
 If 8801 is busy — a palmar on Windows beside one in WSL, say — it takes the next free port and says so.
 
-There is also a **741 KB** program that shows the same thing in its own window
-([`app/`](app/README.md)) — the OS's own webview, not Electron. Both at once is fine: one daemon per
-home, and a terminal opened in either shows up in the other, live.
+The window is a **741 KB** program that shows the same thing without a browser
+([`app/`](app/README.md)) — the OS's own webview, not Electron. `palmar` opens it when it is there;
+the web button inside it opens a browser, and so does `palmar --web`. Both at once is fine: one daemon
+per home, and a terminal opened in either shows up in the other, live.
 
 ## Worth knowing
 

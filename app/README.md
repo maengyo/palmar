@@ -9,6 +9,13 @@ daemon — and your shells — running, exactly as closing a browser tab always 
 To stop the daemon too — closing the window never does — `palmar --stop`, or `python3 -m palmar
 --stop` from the checkout.
 
+**`palmar` opens this window by itself when it can find it** (2026-09-15) — in this order:
+`$PALMAR_APP` (a path; `0` means "there is no window"), `palmar-app` on PATH (install.sh links a
+build from the checkout, or copies one from `PALMAR_APP_URL` or the latest release asset, beside the
+launcher), then `app/target/{universal,release}/palmar-app` inside the checkout. `palmar --web` opens
+a browser instead, and the web button inside the window always does. Under WSL the window is only
+used with WSLg; on Linux only with a DISPLAY.
+
 ## Why not Electron, and why not the Tauri CLI
 
 Being heavy is the thing this project is avoiding: `cate` ships a 496 MB dmg and installs 1.1 GB

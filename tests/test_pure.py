@@ -678,5 +678,43 @@ class WindowsNextDoor(unittest.TestCase):
         self.assertTrue(D.start_notes(running=True)[0].startswith("already running"))
 
 
+class TheWindowFirst(unittest.TestCase):
+    """`palmar` opens its own window before a browser — "that is what the web button is for"
+    (user, 2026-09-15). Where the window is looked for, in order, and when it is not looked for at
+    all because there is no screen to put it on."""
+
+    def test_the_order_it_is_looked_for_in(self):
+        on_path = lambda n: "/home/me/.local/bin/palmar-app" if n == "palmar-app" else None   # noqa: E731
+        self.assertEqual(D.find_app(env={"DISPLAY": ":0"}, which=on_path, exists=lambda p: False, platform="linux"),
+                         "/home/me/.local/bin/palmar-app")
+        got = D.find_app(env={}, which=lambda n: None, exists=lambda p: p.endswith("app/target/release/palmar-app"),
+                         platform="darwin")
+        self.assertTrue(got.endswith("app/target/release/palmar-app"), "the checkout's build comes after PATH")
+        self.assertEqual(D.find_app(env={}, which=lambda n: None, exists=lambda p: False, platform="darwin"), "")
+
+    def test_palmar_app_names_it_or_turns_it_off(self):
+        self.assertEqual(D.find_app(env={"PALMAR_APP": "/opt/w/palmar-app"}, which=lambda n: "/x/palmar-app",
+                                    exists=lambda p: p == "/opt/w/palmar-app", platform="darwin"), "/opt/w/palmar-app")
+        for off in ("0", "", "no"):
+            self.assertEqual(D.find_app(env={"PALMAR_APP": off}, which=lambda n: "/x/palmar-app",
+                                        exists=lambda p: True, platform="darwin"), "", off)
+        self.assertEqual(D.find_app(env={"PALMAR_APP": "/gone"}, which=lambda n: "/x/palmar-app",
+                                    exists=lambda p: p != "/gone", platform="darwin"),
+                         "/x/palmar-app", "a PALMAR_APP that points at nothing falls through, and is logged")
+
+    def test_no_screen_no_window(self):
+        anywhere = lambda n: "/x/palmar-app"   # noqa: E731
+        self.assertEqual(D.find_app(env={}, which=anywhere, exists=lambda p: True, kind="wsl", platform="linux"),
+                         "", "WSL without WSLg has no screen inside Linux")
+        self.assertEqual(D.find_app(env={"DISPLAY": ":0"}, which=anywhere, exists=lambda p: True, kind="wslg",
+                                    platform="linux"), "/x/palmar-app")
+        self.assertEqual(D.find_app(env={}, which=anywhere, exists=lambda p: True, kind="", platform="linux"),
+                         "", "a Linux with no DISPLAY is an ssh session or a container")
+        self.assertEqual(D.find_app(env={"WAYLAND_DISPLAY": "wayland-0"}, which=anywhere, exists=lambda p: True,
+                                    kind="", platform="linux"), "/x/palmar-app")
+        self.assertEqual(D.find_app(env={}, which=lambda n: "C:/u/palmar-app.exe" if n.endswith(".exe") else None,
+                                    exists=lambda p: True, platform="win32"), "C:/u/palmar-app.exe")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -150,6 +150,44 @@ SHIM_EOF
   chmod +x "$SHIM"
   say ""
   say "installed a launcher at $SHIM"
+  # ── 3b. the window, when there is one ───────────────────────────────────────────────────
+  # `palmar` opens its own window before a browser (2026-09-15), so a built one goes beside the
+  # launcher. Three sources, none required: PALMAR_APP_URL (a URL, or a local file), a build inside
+  # the checkout (linked, so a rebuild is picked up), or the latest release's asset for this OS and
+  # CPU. Nothing here needs Rust — the binary runs with no toolchain (app/README.md). No window is
+  # not a failure: `palmar` opens a browser instead.
+  APP_DEST="$PREFIX/bin/palmar-app"
+  APP_FROM=""
+  if [ -n "${PALMAR_APP_URL:-}" ]; then
+    if [ -f "$PALMAR_APP_URL" ]; then
+      cp "$PALMAR_APP_URL" "$APP_DEST" && chmod +x "$APP_DEST" && APP_FROM="$PALMAR_APP_URL"
+    elif curl -fsSL "$PALMAR_APP_URL" -o "$APP_DEST.new"; then
+      mv "$APP_DEST.new" "$APP_DEST" && chmod +x "$APP_DEST" && APP_FROM="$PALMAR_APP_URL"
+    else
+      rm -f "$APP_DEST.new"; warn "could not get the window from $PALMAR_APP_URL — palmar opens a browser instead"
+    fi
+  elif [ -x "$SRC/app/target/universal/palmar-app" ]; then
+    ln -sf "$SRC/app/target/universal/palmar-app" "$APP_DEST" && APP_FROM="the checkout's build"
+  elif [ -x "$SRC/app/target/release/palmar-app" ]; then
+    ln -sf "$SRC/app/target/release/palmar-app" "$APP_DEST" && APP_FROM="the checkout's build"
+  elif command -v curl >/dev/null 2>&1; then
+    case "$(uname -s 2>/dev/null)/$(uname -m 2>/dev/null)" in
+      Darwin/*)                  ASSET="palmar-app-macos-universal" ;;
+      Linux/x86_64)              ASSET="palmar-app-linux-x86_64" ;;
+      Linux/aarch64|Linux/arm64) ASSET="palmar-app-linux-aarch64" ;;
+      *)                         ASSET="" ;;
+    esac
+    if [ -n "$ASSET" ] && curl -fsSL "https://github.com/maengyo/palmar/releases/latest/download/$ASSET" -o "$APP_DEST.new" 2>/dev/null; then
+      mv "$APP_DEST.new" "$APP_DEST" && chmod +x "$APP_DEST" && APP_FROM="the latest release"
+    else
+      rm -f "$APP_DEST.new"
+    fi
+  fi
+  if [ -n "$APP_FROM" ]; then
+    say "installed the window at $APP_DEST (from $APP_FROM) — \`palmar\` opens it; its web button opens a browser"
+  else
+    say "no window build for this machine — \`palmar\` opens a browser (app/README.md says how to get one)"
+  fi
   case ":$PATH:" in
     *":$PREFIX/bin:"*) say "run:  palmar" ;;
     *)

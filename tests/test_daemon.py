@@ -549,6 +549,7 @@ class TwoWaysIn(unittest.TestCase):
         from tests.helpers import PYTHON, REPO
         env = dict(os.environ, HOME=home)
         env.pop("LC_ALL", None)
+        env["PALMAR_APP"] = "0"      # never the real window — the same rule as tests.helpers.Daemon
         env.update(extra_env or {})
         return subprocess.run([PYTHON, "-m", "palmar"] + list(args), cwd=REPO,
                               capture_output=True, text=True, timeout=40, env=env)
@@ -1452,3 +1453,65 @@ class TheKeyPage(unittest.TestCase):
         self.assertIn("different palmar", body)
         self.assertIn("WSL beside one on Windows", body)
         self.assertNotIn(self.d.url.split("k=", 1)[1], body, "the real key went out on the wrong-key page")
+
+
+class TheWindowOpensFirst(unittest.TestCase):
+    """`palmar` opened a browser tab while the window sat right there; the web button was made so
+    the browser is the thing you *ask* for (user, 2026-09-15). The window first, when there is one;
+    `--web` for a browser; the web button always a browser; a window that dies at once gives way
+    to the browser and says so."""
+
+    def fakes(self):
+        box = tempfile.mkdtemp(prefix="palmar-window-")
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        app_ran, browser_ran = os.path.join(box, "app-ran"), os.path.join(box, "browser-argv")
+        app = os.path.join(box, "palmar-app")
+        with open(app, "w") as fh:
+            fh.write('#!/bin/sh\nprintf "%s\\n" "$@" > ' + app_ran + '\n')
+        browser = os.path.join(box, "browser.sh")
+        with open(browser, "w") as fh:
+            fh.write('#!/bin/sh\nprintf "%s\\n" "$@" > ' + browser_ran + '\n')
+        for f in (app, browser):
+            os.chmod(f, 0o755)
+        return app, browser, app_ran, browser_ran
+
+    def wait_for(self, path, secs=6.0):
+        end = time.time() + secs
+        while time.time() < end and not os.path.exists(path):
+            time.sleep(0.1)
+        return os.path.exists(path)
+
+    def test_the_window_when_there_is_one_and_the_web_button_still_means_a_browser(self):
+        app, browser, app_ran, browser_ran = self.fakes()
+        with Daemon(env={"PALMAR_APP": app, "BROWSER": browser}, browser=True) as d:
+            self.assertTrue(self.wait_for(app_ran), "the window was not opened")
+            with open(app_ran) as fh:
+                self.assertEqual(fh.read().strip(), "", "the window was handed arguments — it finds the daemon by run/url itself")
+            time.sleep(1.0)
+            self.assertFalse(os.path.exists(browser_ran), "a browser opened as well as the window")
+            said = stderr_so_far(d, "opening the window")
+            self.assertIn("opening the window", said)
+            self.assertEqual(d.raw("POST", "/api/address/open")[0], 204)
+            self.assertTrue(self.wait_for(browser_ran), "the web button opened nothing")
+            with open(browser_ran) as fh:
+                self.assertIn(d.url, fh.read())
+
+    def test_web_asks_for_a_browser_outright(self):
+        app, browser, app_ran, browser_ran = self.fakes()
+        with Daemon(env={"PALMAR_APP": app, "BROWSER": browser}, browser=True, web=True) as d:
+            self.assertTrue(self.wait_for(browser_ran), "--web opened no browser")
+            time.sleep(0.5)
+            self.assertFalse(os.path.exists(app_ran), "--web opened the window too")
+
+    def test_a_window_that_dies_gives_way_to_the_browser(self):
+        app, browser, app_ran, browser_ran = self.fakes()
+        with open(app, "w") as fh:
+            fh.write('#!/bin/sh\necho "palmar-app: no webkit here" >&2\nexit 3\n')
+        with Daemon(env={"PALMAR_APP": app, "BROWSER": browser}, browser=True) as d:
+            self.assertTrue(self.wait_for(browser_ran), "no browser after the window died")
+            said = stderr_so_far(d, "did not start")
+            self.assertIn("the window did not start (palmar-app: no webkit here)", said)
+
+    def test_the_web_button_says_when_no_browser_can_be_opened(self):
+        with Daemon(env={"BROWSER": "/nonexistent/definitely-not-here"}) as d:
+            self.assertEqual(d.raw("POST", "/api/address/open")[0], 500, "the 500 the protocol promises")

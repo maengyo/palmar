@@ -44,11 +44,12 @@ class Daemon:
             d.post("/api/sessions", {"cwd": d.home})
     """
 
-    def __init__(self, env=None, shell=None, browser=False):
+    def __init__(self, env=None, shell=None, browser=False, web=False):
         # browser=False adds --no-browser, or every test on this machine opens a browser window.
         # A test that wants to measure the opening itself passes browser=True *and* a $BROWSER that
         # only writes down its argv — never one that really opens something.
         self.browser = browser
+        self.web = web                   # --web: a browser even when a window is installed
         self.home = tempfile.mkdtemp(prefix="palmar-test-")
         self.port = free_port()
         self.proc = None
@@ -60,13 +61,17 @@ class Daemon:
     def start(self):
         env = dict(os.environ, HOME=self.home)
         env.pop("LC_ALL", None)          # a test should not inherit the running shell's locale
+        # **Never the real window.** The daemon opens palmar's own window before a browser when it finds
+        # one, and this checkout has a build — a test that let it would pop a window on the screen of
+        # whoever runs the suite. A test about the window passes its own PALMAR_APP (a fake).
+        env["PALMAR_APP"] = "0"
         env.update(self._extra)
         self.proc = subprocess.Popen(
             [PYTHON, "-m", "palmar", "--port", str(self.port)]
             # **--foreground.** The daemon detaches by default now (2026-09-14), and a test that
             # cannot terminate what it started leaks a daemon per test class.
             + ["--foreground"]
-            + ([] if self.browser else ["--no-browser"]),
+            + ([] if self.browser else ["--no-browser"]) + (["--web"] if self.web else []),
             cwd=REPO, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         end = time.time() + START_TIMEOUT
         while time.time() < end:

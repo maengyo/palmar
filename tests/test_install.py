@@ -211,6 +211,36 @@ class Install(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("did not go through", r.stdout + r.stderr)
 
+    def test_a_window_named_by_url_goes_beside_the_launcher(self):
+        """`palmar` opens its own window before a browser (2026-09-15), so a built one is put next to
+        the launcher. PALMAR_APP_URL with a local file stands in for the release asset here."""
+        fake = tempfile.mkdtemp(prefix="palmar-appbin-")
+        self.addCleanup(shutil.rmtree, fake, ignore_errors=True)
+        src = os.path.join(fake, "palmar-app-macos-universal")
+        with open(src, "w") as fh:
+            fh.write("#!/bin/sh\necho window\n")
+        r = self.run_install(extra_env={"PALMAR_APP_URL": src})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        dest = os.path.join(self.prefix, "bin", "palmar-app")
+        self.assertTrue(os.access(dest, os.X_OK), "no executable window beside the launcher")
+        self.assertIn("installed the window", r.stdout)
+
+    def test_a_build_in_the_checkout_is_linked_not_copied(self):
+        """A rebuild in the checkout is then picked up, the same way the launcher runs the tree in place."""
+        built = os.path.join(REPO, "app", "target", "release", "palmar-app")
+        if not os.access(built, os.X_OK):
+            self.skipTest("no palmar-app built in this checkout")
+        r = self.run_install()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        dest = os.path.join(self.prefix, "bin", "palmar-app")
+        self.assertTrue(os.path.islink(dest), "the checkout's build was copied, not linked")
+        self.assertEqual(os.path.realpath(dest), os.path.realpath(built))
+
+    def test_no_window_is_not_a_failure(self):
+        r = self.run_install(extra_env={"PALMAR_APP_URL": "/nonexistent/palmar-app"})
+        self.assertEqual(r.returncode, 0, "a missing window took the install down")
+        self.assertIn("browser", r.stdout + r.stderr)
+
 
 def pwsh_path():
     """PowerShell, or None. Windows has it built in; elsewhere it is `pwsh` if someone installed it."""

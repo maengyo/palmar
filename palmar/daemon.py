@@ -2980,7 +2980,8 @@ async def handle_request(reader, writer) -> None:
         # **The daemon opens it, not the page.** A webview cannot reach the system browser, and on
         # WSL the browser that matters is on the Windows side — which is exactly the walk
         # browser_argv already knows how to make. This way the key never crosses into the page at all.
-        ok = open_browser(f"http://127.0.0.1:{PORT[0]}/?k={KEY[0]}")
+        # A browser, never the window: this is the window's own button (and the page's).
+        ok, _ = open_browser(f"http://127.0.0.1:{PORT[0]}/?k={KEY[0]}")
         writer.write(http(204) if ok else http_error(500, "found no way to open a browser here"))
         return
 
@@ -3502,9 +3503,83 @@ def browser_argv(url: str, *, platform=None, kind=None, env=None, which=None, sy
     return None
 
 
-def open_browser(url: str) -> str:
-    """Hand the address to a browser and do not wait. Returns one line saying how that went, for
-    the printout next to the address.
+def find_app(env=None, which=None, exists=None, kind=None, platform=None) -> str:
+    """The path of palmar's own window (app/), or '' when there is none to open here.
+
+    Looked for in this order: `$PALMAR_APP` (a path; `0` or empty means there is none), `palmar-app`
+    on PATH (install.sh puts a built one beside the launcher), then a build inside the checkout this
+    daemon runs from. The window needs a screen: under WSL that means WSLg, and on Linux a DISPLAY —
+    without one the browser is the page, as before. Pure: every input is injectable, so the order is
+    measured on a machine that has none of these (tests/test_pure.py)."""
+    env = os.environ if env is None else env
+    which = shutil.which if which is None else which
+    exists = (lambda p: Path(p).is_file()) if exists is None else exists
+    platform = sys.platform if platform is None else platform
+    chosen = env.get("PALMAR_APP")
+    if chosen is not None:
+        chosen = chosen.strip()
+        if chosen in ("", "0", "no", "off"):
+            return ""
+        if exists(chosen):
+            return chosen
+        log(f"PALMAR_APP points at nothing ({chosen}) — looking for the window elsewhere")
+    if platform.startswith("linux"):
+        kind = wsl_kind(env=env) if kind is None else kind
+        if kind == "wsl":
+            return ""                    # no screen inside Linux; the Windows browser is the page
+        if not (env.get("DISPLAY") or env.get("WAYLAND_DISPLAY")):
+            return ""                    # ssh, a container, a bare console
+    name = "palmar-app.exe" if platform == "win32" else "palmar-app"
+    hit = which(name)
+    if hit:
+        return hit
+    root = WEB.parent.parent
+    for rel in ("app/target/universal/" + name, "app/target/release/" + name):
+        if exists(str(root / rel)):
+            return str(root / rel)
+    return ""
+
+
+#: How long the window gets to fall over before it is trusted. A palmar-app on a Linux without the
+#: webkit library dies within a few hundred ms and says so on stderr; a live one is still up.
+APP_GRACE_S = 0.8
+
+
+def show_page(url: str, web: bool = False) -> str:
+    """Show the address: **the window when there is one, else a browser.** One line back, for the
+    printout next to the address.
+
+    The window first (2026-09-15, user): the web button inside it is what opens a browser, and a
+    `palmar` that opened a tab while the window sat right there had the two backwards. `--web` asks
+    for a browser outright; PALMAR_APP=0 says there is no window to open. The window finds the daemon
+    by run/url on its own, so it is started with no arguments and never handed the address."""
+    app = "" if web else find_app()
+    if app:
+        try:
+            proc = subprocess.Popen([app], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.PIPE, start_new_session=True)
+        except OSError as e:
+            log(f"could not start the window {app} ({e}) — opening a browser instead")
+        else:
+            try:
+                code = proc.wait(timeout=APP_GRACE_S)
+            except subprocess.TimeoutExpired:
+                code = None
+            if code in (None, 0):
+                log(f"opening the window ({app})")
+                return "opening the window (palmar-app; --web opens a browser instead)"
+            said = (proc.stderr.read() or b"").decode("utf-8", "replace").strip().splitlines()
+            why = said[-1] if said else f"exit {code}"
+            log(f"the window did not start ({why}) — opening a browser instead")
+            ok, note = open_browser(url)
+            return f"the window did not start ({why}) — " + note
+    ok, note = open_browser(url)
+    return note
+
+
+def open_browser(url: str):
+    """Hand the address to a browser and do not wait. Returns `(ok, line)` — whether one was
+    started, and one line saying how that went, for the printout next to the address.
 
     **Never raises.** Failing to open one is not a reason for the daemon not to run: the address is
     on stdout and in run/url either way. Everything it says goes to stderr, because stdout's last
@@ -3513,7 +3588,7 @@ def open_browser(url: str) -> str:
     if not argv:
         where = " — on Windows, for a palmar in WSL" if wsl_kind() else ""
         log("found no way to open a browser — open the address above yourself")
-        return "no browser found here — open the address yourself" + where
+        return False, "no browser found here — open the address yourself" + where
     try:
         # start_new_session so the browser does not die with the daemon and never reaches for the
         # terminal; the pipes are closed so it cannot write over the address that was just printed.
@@ -3521,11 +3596,10 @@ def open_browser(url: str) -> str:
                          stderr=subprocess.DEVNULL, start_new_session=True)
     except OSError as e:
         log(f"could not open a browser with {Path(argv[0]).name} ({e}) — open the address above yourself")
-        return f"could not start {Path(argv[0]).name} ({e}) — open the address yourself"
+        return False, f"could not start {Path(argv[0]).name} ({e}) — open the address yourself"
     # **Name the program, never the address** — the address carries the key.
     log(f"opening a browser with {Path(argv[0]).name} (--no-browser turns this off)")
-    return f"opening a browser with {Path(argv[0]).name} (--no-browser turns this off)"
-    return True
+    return True, f"opening a browser with {Path(argv[0]).name} (--no-browser turns this off)"
 
 
 #: How far past the asked-for port to look before giving up. Twenty is more neighbours than any
@@ -3671,7 +3745,7 @@ def start_notes(browser_note: str = "", port_note: str = "", running: bool = Fal
     return out
 
 
-async def main(port: int, open_page: bool = True) -> None:
+async def main(port: int, open_page: bool = True, web: bool = False) -> None:
     PORT[0] = port
     UTF8_CTYPE[0] = pick_utf8_locale()
     try:
@@ -3687,7 +3761,7 @@ async def main(port: int, open_page: bool = True) -> None:
         # **announce, not print.** Detached, stdout is a log file and the only thing the person who
         # typed the command can still see is the pipe. This path is the ordinary one for a second
         # `palmar`, so sending its address down the log was the first thing detaching broke.
-        how = open_browser(e.url) if open_page else ""
+        how = show_page(e.url, web) if open_page else ""
         announce(e.url, start_notes(how, "", running=True))
         return
     # **Canvases come back on their own; terminals are offered.** A canvas is data — restoring it
@@ -3753,7 +3827,7 @@ async def main(port: int, open_page: bool = True) -> None:
     # The browser is asked first so the printout can say how that went — open_browser never raises and
     # never waits, so the address is not held up by it. Everything but the address goes to stderr, so
     # stdout's last line stays the address (docs/protocol.md).
-    how = open_browser(url) if open_page else ""
+    how = show_page(url, web) if open_page else ""
     announce(url, start_notes(how, port_note))
 
     # Polled rather than hooked into every broadcast: what it watches is the *directory* a pane sits
@@ -3851,6 +3925,9 @@ def doctor(port: int) -> int:
         out("  ! the rail would fail here — %s: %s" % (type(e).__name__, e))
     out("  browser   %s%s" % (Path(tab[0]).name if tab else "(found no way to open one — open the address yourself)",
                               "   <- $BROWSER" if (os.environ.get("BROWSER") or "").strip() else ""))
+    # The window comes before the browser when `palmar` opens the page — say whether there is one.
+    app = find_app()
+    out("  window    %s" % (app if app else "(none found — `palmar` opens a browser; app/README.md says how to get one)"))
     # The pane's character encoding. If it is not UTF-8, Korean, Japanese and Chinese input breaks — on screen it looks like "it will not type".
     loc = " ".join("%s=%s" % (k, os.environ[k]) for k in ("LC_ALL", "LC_CTYPE", "LANG") if os.environ.get(k))
     utf8 = has_utf8(os.environ)
@@ -4071,7 +4148,7 @@ def announce(line: str, notes=()) -> None:
     ANNOUNCE[0] = None
 
 
-def detached_no_fork(port: int, open_page: bool) -> int:
+def detached_no_fork(port: int, open_page: bool, web: bool = False) -> int:
     """The same promise where there is no `fork` — Windows.
 
     **Start a second copy of ourselves, detached, and wait for it to answer.** `DETACHED_PROCESS`
@@ -4097,6 +4174,8 @@ def detached_no_fork(port: int, open_page: bool) -> int:
     argv = [sys.executable, "-m", "palmar", "--foreground", "--port", str(port)]
     if not open_page:
         argv.append("--no-browser")
+    if web:
+        argv.append("--web")
     try:
         child = subprocess.Popen(
             argv, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, close_fds=True,
@@ -4134,7 +4213,7 @@ def detached_no_fork(port: int, open_page: bool) -> int:
     return 1
 
 
-def detached(port: int, open_page: bool) -> int:
+def detached(port: int, open_page: bool, web: bool = False) -> int:
     """Start the daemon in its own session and come straight back.
 
     **The terminal was killing it.** The daemon caught SIGINT and SIGTERM but not SIGHUP, and closing
@@ -4190,7 +4269,7 @@ def detached(port: int, open_page: bool) -> int:
         if fd > 2:
             os.close(fd)
     try:
-        asyncio.run(main(port, open_page=open_page))
+        asyncio.run(main(port, open_page=open_page, web=web))
     except SystemExit as e:   # noqa: PERF203 - three separate reports, not one
         # The refusals — a lock somebody holds, a port in use — are SystemExit with a sentence. The
         # person who typed the command is on the other end of that pipe and has nothing else to read.
@@ -4213,6 +4292,9 @@ def cli() -> None:
     # passes --no-browser and loads the address itself.
     ap.add_argument("--no-browser", action="store_true",
                     help="print the address only, open no browser (what the app uses)")
+    # The window comes first when there is one (2026-09-15) — this asks for a browser instead.
+    ap.add_argument("--web", action="store_true",
+                    help="open a browser even when palmar's own window is installed")
     # Closing a window does not stop the daemon — it holds live shells, and that is the point. So
     # there has to be a way to say stop, and it is this one (asked for 2026-09-11).
     ap.add_argument("--stop", action="store_true",
@@ -4228,9 +4310,9 @@ def cli() -> None:
     if args.doctor:
         raise SystemExit(doctor(args.port))
     if args.foreground:
-        asyncio.run(main(args.port, open_page=not args.no_browser))
+        asyncio.run(main(args.port, open_page=not args.no_browser, web=args.web))
     elif hasattr(os, "fork"):
-        raise SystemExit(detached(args.port, open_page=not args.no_browser))
+        raise SystemExit(detached(args.port, open_page=not args.no_browser, web=args.web))
     else:
-        raise SystemExit(detached_no_fork(args.port, open_page=not args.no_browser))
+        raise SystemExit(detached_no_fork(args.port, open_page=not args.no_browser, web=args.web))
 
