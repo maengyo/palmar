@@ -12,7 +12,7 @@
 
   The one-liner, from any PowerShell:
 
-      irm https://raw.githubusercontent.com/maengyo/palmar/main/install.ps1 | iex
+      powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/maengyo/palmar/main/install.ps1 -OutFile install.ps1; .\install.ps1"
 
   Deliberately like install.sh: no administrator, the user PATH only and only after asking, nothing
   downloaded when run from a checkout, and it never starts anything.
@@ -66,7 +66,8 @@ if (-not $Prefix) {
 }
 
 # -- where palmar is ----------------------------------------------------------
-# Run from a checkout, that checkout. Run any other way -- the one-liner `irm ... | iex`, where this
+# Run from a checkout, that checkout. Run any other way -- the one-liner (fetched to a file and run under
+# -ExecutionPolicy Bypass, or `irm ... | iex`), where this
 # script has no path of its own -- the tree is downloaded from GitHub into $Prefix\src and the launcher
 # runs it from there. PALMAR_ZIP overrides the source: a URL, or a local .zip (tests). PALMAR_YES=1
 # stands in for -Yes, which a piped script cannot be given.

@@ -40,18 +40,15 @@ macOS · Linux:
 curl -fsSL https://raw.githubusercontent.com/maengyo/palmar/main/install.sh | sh
 ```
 
-윈도우, PowerShell 에서:
+윈도우, PowerShell 이나 cmd 에서 — 스크립트를 지금 폴더에 받아 `-ExecutionPolicy Bypass` 로 돌린다.
+정책은 바뀌지 않고, 파일은 남아 있어 나중에 읽어 볼 수 있다:
 
 ```
-irm https://raw.githubusercontent.com/maengyo/palmar/main/install.ps1 | iex
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/maengyo/palmar/main/install.ps1 -OutFile install.ps1; .\install.ps1"
 ```
 
-먼저 읽어 보고 돌리려면(그리고 `-Check` / `-Prefix` 를 주려면):
-
-```
-irm https://raw.githubusercontent.com/maengyo/palmar/main/install.ps1 -OutFile install.ps1
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
+먼저 읽어 보고 돌리거나 `-Check` / `-Prefix` / `-Yes` 를 주려면 둘로 나눈다: `irm … -OutFile` 까지, 그다음
+`powershell -ExecutionPolicy Bypass -File .\install.ps1`.
 
 트리를 받아 두고, `palmar` 실행기를 놓고(`~/.local/bin`, 윈도우는 `%LOCALAPPDATA%\palmar\bin`),
 PATH 에 한 번 올리고, 아무것도 시작하지 않는다. root 도 빌드도 없다. 먼저 읽어 보고 싶으면

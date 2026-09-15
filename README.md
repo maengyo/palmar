@@ -45,18 +45,15 @@ macOS · Linux:
 curl -fsSL https://raw.githubusercontent.com/maengyo/palmar/main/install.sh | sh
 ```
 
-Windows, in PowerShell:
+Windows, in PowerShell or cmd — it fetches the script to the current folder and runs it under
+`-ExecutionPolicy Bypass`, so no policy is changed and the file is there to read afterwards:
 
 ```
-irm https://raw.githubusercontent.com/maengyo/palmar/main/install.ps1 | iex
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/maengyo/palmar/main/install.ps1 -OutFile install.ps1; .\install.ps1"
 ```
 
-or, to read it before it runs (and to pass `-Check` / `-Prefix`):
-
-```
-irm https://raw.githubusercontent.com/maengyo/palmar/main/install.ps1 -OutFile install.ps1
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
+To read it before it runs, or to pass `-Check` / `-Prefix` / `-Yes`, split that in two: the `irm … -OutFile`
+half, then `powershell -ExecutionPolicy Bypass -File .\install.ps1`.
 
 It downloads the tree, drops a `palmar` launcher (`~/.local/bin`, or `%LOCALAPPDATA%\palmar\bin`),
 puts that on your PATH once, and starts nothing. No root, no build. Prefer to read first?
