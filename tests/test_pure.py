@@ -721,41 +721,75 @@ class AWindowWithoutAnExe(unittest.TestCase):
     `--app=` is a window with no tabs and no address bar, and every Windows has an Edge. Where it is
     looked for, per platform, and that the URL rides on --app=."""
 
-    def test_windows_takes_edge_first_then_chrome(self):
-        env = {"ProgramFiles": r"C:\Program Files", "ProgramFiles(x86)": r"C:\Program Files (x86)", "LOCALAPPDATA": r"C:\Users\me\AppData\Local"}
-        edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-        chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-        both = lambda p: p in (edge, chrome)   # noqa: E731
-        self.assertEqual(D.app_mode_argv(URL, platform="win32", env=env, which=lambda n: None, exists=both),
-                         [edge, "--app=" + URL])
-        self.assertEqual(D.app_mode_argv(URL, platform="win32", env=env, which=lambda n: None, exists=lambda p: p == chrome),
-                         [chrome, "--app=" + URL])
-        self.assertIsNone(D.app_mode_argv(URL, platform="win32", env=env, which=lambda n: "/x", exists=lambda p: False),
+    ENV = {"ProgramFiles": r"C:\Program Files", "ProgramFiles(x86)": r"C:\Program Files (x86)", "LOCALAPPDATA": r"C:\Users\me\AppData\Local"}
+    EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+    CHROME = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+
+    def test_windows_takes_the_default_browser_first(self):
+        """Edge opened on a machine whose browser is Chrome (user, 2026-09-15)."""
+        both = lambda p: p in (self.EDGE, self.CHROME)   # noqa: E731
+        self.assertEqual(D.app_mode_argv(URL, platform="win32", env=self.ENV, which=lambda n: None, exists=both, prefer="edge"),
+                         [self.EDGE, "--app=" + URL])
+        self.assertEqual(D.app_mode_argv(URL, platform="win32", env=self.ENV, which=lambda n: None, exists=both, prefer="chrome"),
+                         [self.CHROME, "--app=" + URL])
+        self.assertEqual(D.app_mode_argv(URL, platform="win32", env=self.ENV, which=lambda n: None, exists=both, prefer="firefox")[0],
+                         self.CHROME, "a default that has no app mode: Chrome before Edge, since installing it was a choice")
+        self.assertEqual(D.app_mode_argv(URL, platform="win32", env=self.ENV, which=lambda n: None, exists=both, prefer="")[0],
+                         self.CHROME, "and the same when the default cannot be read")
+        self.assertEqual(D.app_mode_argv(URL, platform="win32", env=self.ENV, which=lambda n: None,
+                                         exists=lambda p: p == self.EDGE, prefer="chrome"), [self.EDGE, "--app=" + URL],
+                         "a default that is not installed here is not an option")
+        self.assertIsNone(D.app_mode_argv(URL, platform="win32", env=self.ENV, which=lambda n: "/x", exists=lambda p: False, prefer=""),
                           "on Windows a PATH name is not tried — the .exe paths are the whole search")
+
+    def test_the_default_browser_is_read_by_its_name_on_each_platform(self):
+        self.assertEqual(D.browser_from_progid("ChromeHTML"), "chrome")
+        self.assertEqual(D.browser_from_progid("MSEdgeHTM"), "edge")
+        self.assertEqual(D.browser_from_progid("FirefoxURL-308046B0AF4A39CB"), "firefox")
+        self.assertEqual(D.browser_from_progid("AppXq0fevzme2pys62n3e0fbqa7peapykr8v"), "", "the old Edge's AppX id is not a browser this knows")
+        reg = ("\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\http\\UserChoice\r\n"
+               "    ProgId    REG_SZ    ChromeHTML\r\n    Hash    REG_SZ    abc=\r\n\r\n")
+        self.assertEqual(D.progid_from_reg_output(reg), "ChromeHTML")
+        self.assertEqual(D.progid_from_reg_output("ERROR: The system was unable to find the specified registry key or value."), "")
+        self.assertEqual(D.browser_from_bundle("com.google.Chrome"), "chrome")
+        self.assertEqual(D.browser_from_bundle("com.apple.Safari"), "safari")
+        self.assertEqual(D.browser_from_desktop("google-chrome.desktop"), "chrome")
+        self.assertEqual(D.browser_from_desktop("firefox_firefox.desktop"), "firefox")
+        self.assertEqual(D.chromium_names("edge")[0], "microsoft-edge")
+        self.assertEqual(D.chromium_names("")[0], "google-chrome")
 
     def test_wsl_reaches_the_windows_edge_through_the_c_mount(self):
         edge = "/mnt/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
         argv = D.app_mode_argv(URL, platform="linux", kind="wsl", env={}, which=lambda n: None,
-                               exists=lambda p: p == edge, cdrive="/mnt/c")
+                               exists=lambda p: p == edge, cdrive="/mnt/c", prefer="")
         self.assertEqual(argv, [edge, "--app=" + URL])
         argv = D.app_mode_argv(URL, platform="linux", kind="wslg", env={}, which=lambda n: None,
-                               exists=lambda p: p == edge, cdrive="/mnt/c")
+                               exists=lambda p: p == edge, cdrive="/mnt/c", prefer="")
         self.assertEqual(argv[0], edge, "under WSLg too — a Windows window is the one the person sees")
+        chrome = "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe"
+        argv = D.app_mode_argv(URL, platform="linux", kind="wsl", env={}, which=lambda n: None,
+                               exists=lambda p: p in (edge, chrome), cdrive="/mnt/c", prefer="chrome")
+        self.assertEqual(argv[0], chrome, "the Windows default browser, read with reg.exe, goes first from WSL too")
 
     def test_a_mac_and_a_linux(self):
         chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        self.assertEqual(D.app_mode_argv(URL, platform="darwin", env={}, which=lambda n: None, exists=lambda p: p == chrome),
+        self.assertEqual(D.app_mode_argv(URL, platform="darwin", env={}, which=lambda n: None, exists=lambda p: p == chrome, prefer=""),
                          [chrome, "--app=" + URL])
-        self.assertEqual(D.app_mode_argv(URL, platform="linux", kind="", env={}, which=having("chromium"), exists=lambda p: False),
+        edge = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+        self.assertEqual(D.app_mode_argv(URL, platform="darwin", env={}, which=lambda n: None, exists=lambda p: p in (chrome, edge),
+                                         prefer="edge")[0], edge)
+        self.assertEqual(D.app_mode_argv(URL, platform="linux", kind="", env={}, which=having("chromium"), exists=lambda p: False, prefer=""),
                          ["chromium", "--app=" + URL])
-        self.assertIsNone(D.app_mode_argv(URL, platform="linux", kind="", env={}, which=having("firefox"), exists=lambda p: False),
+        self.assertEqual(D.app_mode_argv(URL, platform="linux", kind="", env={}, which=having("chromium", "microsoft-edge"),
+                                         exists=lambda p: False, prefer="edge"), ["microsoft-edge", "--app=" + URL])
+        self.assertIsNone(D.app_mode_argv(URL, platform="linux", kind="", env={}, which=having("firefox"), exists=lambda p: False, prefer=""),
                           "Firefox has no app mode")
 
     def test_palmar_chromium_names_it_or_turns_it_off(self):
         self.assertEqual(D.app_mode_argv(URL, platform="darwin", env={"PALMAR_CHROMIUM": "/opt/b/chrome"}, which=lambda n: None,
-                                         exists=lambda p: p == "/opt/b/chrome"), ["/opt/b/chrome", "--app=" + URL])
+                                         exists=lambda p: p == "/opt/b/chrome", prefer=""), ["/opt/b/chrome", "--app=" + URL])
         self.assertIsNone(D.app_mode_argv(URL, platform="darwin", env={"PALMAR_CHROMIUM": "0"}, which=having("chromium"),
-                                          exists=lambda p: True))
+                                          exists=lambda p: True, prefer=""))
 
 
 class TheInstalledApp(unittest.TestCase):

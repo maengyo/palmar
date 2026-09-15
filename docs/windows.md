@@ -256,8 +256,9 @@ WSL 과 배포판 · **파이썬 3.9 이상** · 체크아웃인지.
 
 ## 창 — exe 없이 (2026-09-15)
 
-윈도우 창은 우리 exe 가 없어도 된다: `palmar` 는 `palmar-app` 이 없으면 **Edge 를 `--app=` 모드**로
-연다(`Program Files (x86)\Microsoft\Edge\Application\msedge.exe`, 없으면 Chrome). 탭도 주소창도 없는
+윈도우 창은 우리 exe 가 없어도 된다: `palmar` 는 `palmar-app` 이 없으면 **기본 브라우저를 `--app=`
+모드**로 연다 — 레지스트리 UserChoice 의 ProgId 로 읽고, 그것이 Chrome 이면 Chrome, Edge 면 Edge
+(Firefox 면 앱 모드가 없어 Chrome → Edge). 실측 2026-09-15: Edge 앱 모드 창이 떴다. 탭도 주소창도 없는
 창이고, 회사 PC 처럼 exe 를 못 받는 곳에서 바로 되는 길이다. WSL 의 데몬도 같은 Edge 를 C: 마운트
 너머로 연다. 탭이 필요하면 창 안의 web 버튼이나 `palmar --web`. 러너로는 못 잰다 — 경로 선택은
 `tests/test_pure.py` 의 순수 함수로, 실제 열림은 그 기계에서 확인해야 한다.

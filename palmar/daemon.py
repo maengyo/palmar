@@ -3563,38 +3563,149 @@ def find_app(env=None, which=None, exists=None, kind=None, platform=None) -> str
 #: webkit library dies within a few hundred ms and says so on stderr; a live one is still up.
 APP_GRACE_S = 0.8
 
-#: Chromium-family browsers, by name, that take `--app=`: the page in a window with no tabs and no
-#: address bar. That is a window without a binary of ours — "does Windows really need an exe?"
-#: (user, 2026-09-15). No: Windows always has an Edge. Firefox has no such mode, so it is not here.
-CHROMIUM_NAMES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
-                  "microsoft-edge", "microsoft-edge-stable")
+#: Chromium-family browsers take `--app=`: the page in a window with no tabs and no address bar. That
+#: is a window without a binary of ours — "does Windows really need an exe?" (user, 2026-09-15). No:
+#: Windows always has an Edge. Firefox has no such mode, so it is not here.
 
 
-def chromium_candidates(platform, env, kind="", cdrive=""):
-    """Where a Chromium-family browser sits when it is not on PATH — Edge first on Windows, since
-    every Windows has one; from WSL the same Windows programs through the C: mount, because a window
-    on the Windows side is the one a person at that machine can see."""
+#: The Chromium-family browsers app mode can use, by short name, and where each one lives.
+#: `names` is what they are called on a Linux PATH; `win` is the path under a Program Files (or
+#: LOCALAPPDATA) root; `mac` the bundle's executable. Order is the fallback order when the person's
+#: default browser is not one of them: Chrome first because installing it was a choice, Edge last
+#: because every Windows has one.
+CHROMIUMS = (
+    ("chrome",   ("google-chrome", "google-chrome-stable"),   r"Google\Chrome\Application\chrome.exe",
+                 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    ("chromium", ("chromium", "chromium-browser"),            r"Chromium\Application\chrome.exe",
+                 "/Applications/Chromium.app/Contents/MacOS/Chromium"),
+    ("brave",    ("brave-browser", "brave"),                  r"BraveSoftware\Brave-Browser\Application\brave.exe",
+                 "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
+    ("edge",     ("microsoft-edge", "microsoft-edge-stable"), r"Microsoft\Edge\Application\msedge.exe",
+                 "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+)
+
+
+def chromiums_in_order(prefer: str = ""):
+    """CHROMIUMS with the person's default browser first, when it is one of them. Edge opened on a
+    machine whose browser is Chrome, and the person asked where Chrome's app mode was (2026-09-15)."""
+    rows = list(CHROMIUMS)
+    rows.sort(key=lambda r: 0 if r[0] == prefer else 1)
+    return rows
+
+
+def chromium_candidates(platform, env, kind="", cdrive="", prefer=""):
+    """Where a Chromium-family browser sits when it is not on PATH; from WSL the same Windows programs
+    through the C: mount, because a window on the Windows side is the one a person at that machine
+    can see. `prefer` is the default browser's short name, and it goes first."""
+    rows = chromiums_in_order(prefer)
     if platform == "win32":
         pf = env.get("ProgramFiles") or r"C:\Program Files"
         pf86 = env.get("ProgramFiles(x86)") or r"C:\Program Files (x86)"
         la = env.get("LOCALAPPDATA") or ""
         out = []
-        for rel in (r"Microsoft\Edge\Application\msedge.exe", r"Google\Chrome\Application\chrome.exe"):
-            for base in (pf86, pf, la):
+        for _, _, win, _ in rows:
+            for base in (pf, pf86, la):
                 if base:
-                    out.append(base.rstrip("\\") + "\\" + rel)
+                    out.append(base.rstrip("\\") + "\\" + win)
         return out
     if kind:
         c = (cdrive or "/mnt/c").rstrip("/")
-        return [c + "/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
-                c + "/Program Files/Microsoft/Edge/Application/msedge.exe",
-                c + "/Program Files/Google/Chrome/Application/chrome.exe",
-                c + "/Program Files (x86)/Google/Chrome/Application/chrome.exe"]
+        out = []
+        for _, _, win, _ in rows:
+            rel = win.replace("\\", "/")
+            out += [c + "/Program Files/" + rel, c + "/Program Files (x86)/" + rel]
+        return out
     if platform == "darwin":
-        return ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                "/Applications/Chromium.app/Contents/MacOS/Chromium",
-                "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"]
+        return [mac for _, _, _, mac in rows]
     return []
+
+
+def chromium_names(prefer: str = ""):
+    """The PATH names, default browser first."""
+    return [n for _, names, _, _ in chromiums_in_order(prefer) for n in names]
+
+
+def browser_from_progid(progid: str) -> str:
+    """Windows names the default browser by a ProgId: ChromeHTML, MSEdgeHTM, BraveHTML, ChromiumHTM,
+    FirefoxURL-…. Short name, or '' for one this does not know."""
+    p = (progid or "").lower()
+    for key, name in (("chrome", "chrome"), ("msedge", "edge"), ("brave", "brave"),
+                      ("chromium", "chromium"), ("firefox", "firefox"), ("opera", "opera")):
+        if key in p:
+            return name
+    return ""
+
+
+def browser_from_bundle(bundle_id: str) -> str:
+    """macOS names it by bundle id: com.google.chrome, com.microsoft.edgemac, com.apple.safari…"""
+    b = (bundle_id or "").lower()
+    for key, name in (("com.google.chrome", "chrome"), ("com.microsoft.edgemac", "edge"),
+                      ("com.brave.browser", "brave"), ("org.chromium.chromium", "chromium"),
+                      ("com.apple.safari", "safari"), ("org.mozilla.firefox", "firefox")):
+        if b.startswith(key):
+            return name
+    return ""
+
+
+def browser_from_desktop(desktop: str) -> str:
+    """Linux names it by a .desktop file: google-chrome.desktop, microsoft-edge.desktop, firefox.desktop…"""
+    d = (desktop or "").lower()
+    for key, name in (("google-chrome", "chrome"), ("chromium", "chromium"), ("microsoft-edge", "edge"),
+                      ("brave", "brave"), ("firefox", "firefox")):
+        if key in d:
+            return name
+    return ""
+
+
+def progid_from_reg_output(text: str) -> str:
+    """The ProgId out of `reg.exe query … /v ProgId` — the one line whose first word is ProgId,
+    last word. The headings around it are localised; that line's shape is not."""
+    for line in (text or "").splitlines():
+        f = line.split()
+        if len(f) >= 3 and f[0] == "ProgId":
+            return f[-1]
+    return ""
+
+
+def default_browser(platform=None, kind=None) -> str:
+    """The person's default browser, by short name (chrome, edge, brave, chromium, safari, firefox…),
+    or '' when it cannot be read cheaply. Never raises.
+
+    Windows keeps it in the registry (HKCU …\\UrlAssociations\\http\\UserChoice ProgId); from WSL the
+    same key is read with reg.exe through interop. macOS keeps it in LaunchServices' handler list;
+    Linux answers `xdg-settings get default-web-browser`."""
+    platform = sys.platform if platform is None else platform
+    try:
+        if platform == "win32":
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice") as k:
+                return browser_from_progid(winreg.QueryValueEx(k, "ProgId")[0])
+        if platform.startswith("linux"):
+            kind = wsl_kind() if kind is None else kind
+            if kind:
+                s32 = windows_system32()
+                exe = shutil.which("reg.exe") or (s32 and str(Path(s32) / "reg.exe"))
+                if exe and Path(exe).is_file():
+                    r = subprocess.run([exe, "query", r"HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice",
+                                        "/v", "ProgId"], capture_output=True, timeout=6, stdin=subprocess.DEVNULL)
+                    return browser_from_progid(progid_from_reg_output(r.stdout.decode("utf-8", "replace")))
+                return ""
+            if shutil.which("xdg-settings"):
+                r = subprocess.run(["xdg-settings", "get", "default-web-browser"], capture_output=True,
+                                   timeout=4, stdin=subprocess.DEVNULL)
+                return browser_from_desktop(r.stdout.decode("utf-8", "replace").strip())
+        if platform == "darwin":
+            import plistlib
+            f = Path.home() / "Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist"
+            with open(f, "rb") as fh:
+                for h in plistlib.load(fh).get("LSHandlers", []):
+                    if h.get("LSHandlerURLScheme") == "http":
+                        return browser_from_bundle(h.get("LSHandlerRoleAll") or h.get("LSHandlerRoleViewer") or "")
+            return "safari"                     # no http handler set means the one that ships
+    except Exception:
+        pass
+    return ""
 
 
 def installed_pwa(env=None, exists=None, platform=None) -> str:
@@ -3631,11 +3742,13 @@ def pwa_argv(path: str, platform=None):
     return ["open", path]
 
 
-def app_mode_argv(url: str, *, platform=None, kind=None, env=None, which=None, exists=None, cdrive=None):
+def app_mode_argv(url: str, *, platform=None, kind=None, env=None, which=None, exists=None, cdrive=None,
+                  prefer=None):
     """The command that opens `url` as a window in a Chromium-family browser (`--app=`), or None.
 
-    `$PALMAR_CHROMIUM` names the browser to use (a path), or says `0` for none. Pure, like
-    browser_argv: every input is injectable (tests/test_pure.py)."""
+    The person's default browser goes first when it is one of them — Edge opened on a machine whose
+    browser is Chrome (user, 2026-09-15). `$PALMAR_CHROMIUM` names the browser to use (a path), or
+    says `0` for none. Pure, like browser_argv: every input is injectable (tests/test_pure.py)."""
     platform = sys.platform if platform is None else platform
     env = os.environ if env is None else env
     which = shutil.which if which is None else which
@@ -3653,11 +3766,13 @@ def app_mode_argv(url: str, *, platform=None, kind=None, env=None, which=None, e
     if kind and cdrive is None:
         s32 = windows_system32()
         cdrive = str(Path(s32).parent.parent) if s32 else ""
-    for p in chromium_candidates(platform, env, kind, cdrive or ""):
+    if prefer is None:
+        prefer = default_browser(platform=platform, kind=kind)
+    for p in chromium_candidates(platform, env, kind, cdrive or "", prefer):
         if exists(p):
             return [p, "--app=" + url]
     if platform != "win32":
-        for n in CHROMIUM_NAMES:
+        for n in chromium_names(prefer):
             if which(n):
                 return [n, "--app=" + url]
     return None
@@ -4075,9 +4190,11 @@ def doctor(port: int) -> int:
     # palmar's own, a Chromium-family browser in app mode, or none (a tab, then).
     app = find_app() or installed_pwa()
     mode = None if app else app_mode_argv("http://127.0.0.1:%d/" % port)
+    dflt = default_browser()
     out("  window    %s" % (app if app else
                             (Path(mode[0]).name + " in app mode (--app=)") if mode else
                             "(none — `palmar` opens a browser tab; a Chromium-family browser or app/README.md gives it a window)"))
+    out("  default   %s" % (dflt or "(could not read which browser is the default)"))
     # The pane's character encoding. If it is not UTF-8, Korean, Japanese and Chinese input breaks — on screen it looks like "it will not type".
     loc = " ".join("%s=%s" % (k, os.environ[k]) for k in ("LC_ALL", "LC_CTYPE", "LANG") if os.environ.get(k))
     utf8 = has_utf8(os.environ)

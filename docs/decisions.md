@@ -531,9 +531,13 @@ stdout 의 마지막 줄이 주소라는 계약(protocol.md)은 그대로다.
 
 **exe 없이도 창이다 (2026-09-15, "windows 는 꼭 exe 가 필요한가?").** 필요 없다. 크로미엄 계열의 `--app=`
 은 탭도 주소창도 없는 창이고, 윈도우에는 Edge 가 늘 있다. 그래서 여는 순서는 셋이다: palmar 의 창
-(`palmar-app`) → 크로미엄 계열 브라우저의 앱 모드(윈도우는 Edge → Chrome, 맥은 /Applications 의
-Chrome·Chromium·Edge, 리눅스는 PATH 이름, WSL 은 C: 마운트 너머 윈도우의 Edge) → 브라우저 탭. web
-버튼과 `--web` 은 언제나 탭이다. `$PALMAR_CHROMIUM` 이 경로를 정하거나 `0` 으로 이 단계를 끈다.
+(`palmar-app`) → 크로미엄 계열 브라우저의 앱 모드 → 브라우저 탭. web 버튼과 `--web` 은 언제나 탭이다.
+**어느 크로미엄이냐는 기본 브라우저를 따른다** ("크롬 앱모드는 없어?", 사용자, 같은 날 — Chrome 을
+쓰는 기계에서 Edge 가 떴다): 윈도우는 레지스트리 `UrlAssociations\http\UserChoice` 의 ProgId(WSL 에서는
+interop 으로 `reg.exe`), 맥은 LaunchServices 의 http 핸들러, 리눅스는 `xdg-settings`. 기본이 Firefox
+나 Safari 처럼 앱 모드가 없는 것이거나 읽을 수 없으면 Chrome → Chromium → Brave → Edge — Chrome 은
+깔았다는 것이 선택이고 Edge 는 늘 있으니. 찾는 자리는 윈도우의 Program Files(WSL 은 C: 마운트 너머),
+맥의 /Applications, 리눅스의 PATH. `$PALMAR_CHROMIUM` 이 경로를 정하거나 `0` 으로 이 단계를 끈다.
 Firefox 에는 앱 모드가 없어 여기 없다. 회사 PC 에서 exe 를 못 받는 경우가 바로 이 길이다.
 
 **"그게 browser 아니야?" (사용자, 같은 날).** 맞다 — 그리고 윈도우용 `palmar-app.exe` 도 속은 WebView2,
