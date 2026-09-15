@@ -92,6 +92,12 @@ it for real needs an OS boundary per pane, which would make palmar a different p
 **The key lives in the URL**, which is what lets a bookmark survive a restart. The full cost, and
 the rest of what is not built yet, is in [`docs/decisions.md`](docs/decisions.md).
 
+## The name
+
+*Palmar* means "of the palm of the hand" — every terminal in the palm of your hand. It was *palmer*
+for a week, which is a surname, a letter off from what it meant, and taken on PyPI; *palmar* was
+free everywhere.
+
 ## The rest
 
 - [`AGENTS.md`](AGENTS.md) — the working agreement: how a claim gets checked before it is written down.
