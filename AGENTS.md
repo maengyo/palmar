@@ -193,6 +193,11 @@ docs/      조사 기록, 날짜별 스파이크 스크립트
   들고 와야 한다.
 - **테스트 서버·에이전트는 깨끗한 환경에서 띄워라.** Claude Code 세션 안에서 띄우면 자식이
   `CLAUDE_CODE_*` 를 물려받아 auto mode 로 뜬다(실측).
+  **pane 안은 예외다** (2026-09-17 에 확인). 데몬이 `CLAUDECODE`·`CLAUDE_`·`CODEX_`·`AI_AGENT` 로
+  시작하는 것을 pane 환경에서 전부 걷어낸다(`daemon.py` 의 `STRIP_ENV_PREFIXES`, `CLAUDE_CONFIG_DIR`
+  만 남긴다). 그래서 **pane 안에서 띄우는 것은 이미 깨끗하다** — 이 규칙은 pane 밖에서 직접 띄우는
+  쪽에 대한 것이다. 녹화기(`dev/record.py`)가 pane 에서 에이전트를 몰 수 있는지 물었을 때 이 차이가
+  나왔다.
 
 ## 이 기계의 제약
 

@@ -9,6 +9,11 @@ __pycache__/
 # 로고 시안 — 다른 세션이 만들고 있다. `git add -A` 에 쓸려 들어가지 않게 여기 적어 둔다.
 /docs/img/brand/
 
+# 녹화기(dev/record.py)가 GIF 옆에 같이 내는 h264. 화질은 더 좋지만 GitHub 은 저장소 안의
+# .mp4 를 README 에서 재생하지 않으므로, 보여지는 것은 GIF 뿐이다. 안 쓰이는 300KB 를 저장소에
+# 두지 않는다 — 릴리스에 붙이고 싶으면 그때 꺼내면 된다.
+/docs/img/palmar.mp4
+
 # probe-agent 가 남기는 보고 (dev/probe-agent.py)
 palmar-probe-*.txt
 
