@@ -115,27 +115,27 @@ class Take:
                         dict(type=kind, x=x, y=y, button="left", **kw))
 
     def drag(self, x0, y0, x1, y1, steps=14, alt=False, pause=0.0):
-        """Press, travel, let go — filming every step. **No two steps alike.** A hand does not move in
-        equal increments (AGENTS.md, and the repo's own rule about browser tests), so the path is eased
-        and jittered rather than divided into equal parts."""
+        """Press, travel, let go — filming every step.
+
+        **The path is smooth.** An earlier take jittered every step by a few pixels, borrowing the rule
+        that a browser *test* must not send the same coordinates twice; that rule is about tests, and
+        here it only made the windows shiver — worst of all during the hold, where the picture is meant
+        to be still while the gauge fills. Easing already makes every step a different number."""
         mods = 1 if alt else 0
         self.mouse("mousePressed", x0, y0, clickCount=1, buttons=1, modifiers=mods)
         self.frame()
         for i in range(1, steps + 1):
             t = i / steps
             e = t * t * (3 - 2 * t)                       # ease in and out
-            jx = ((i * 37) % 7) - 3                       # a hand is never straight
-            jy = ((i * 23) % 5) - 2
-            self.mouse("mouseMoved", x0 + (x1 - x0) * e + jx, y0 + (y1 - y0) * e + jy,
+            self.mouse("mouseMoved", x0 + (x1 - x0) * e, y0 + (y1 - y0) * e,
                        buttons=1, modifiers=mods)
             self.frame()
         if pause:
-            # Holding one window over another is a gesture with a length — the gauge fills for 1.1s.
+            # **Hold completely still.** The page's hold runs on its own 16ms timer and reads where the
+            # window is, not where the pointer went (app.js `hold`), so the gauge fills with the hand
+            # resting — which is what holding a window over another actually looks like.
             end = time.time() + pause
-            k = 0
             while time.time() < end:
-                k += 1
-                self.mouse("mouseMoved", x1 + (k % 3) - 1, y1 + (k % 2), buttons=1, modifiers=mods)
                 self.frame()
                 time.sleep(1.0 / FPS_CAP)
         self.mouse("mouseReleased", x1, y1, clickCount=1, buttons=0, modifiers=mods)
