@@ -358,18 +358,36 @@ fn wants_bare_window() -> bool {
 #[cfg(target_os = "macos")]
 fn set_dock_icon() {
     use cocoa::base::{id, nil};
+    use cocoa::foundation::{NSPoint, NSRect, NSSize};
     use objc::{class, msg_send, sel, sel_impl};
     const ICON: &[u8] = include_bytes!("../../palmar/web/icon-512.png");
+    // **Dock icons are drawn inside their tile, not up to its edge.** The image here is the web
+    // app's, which is full-bleed because that is what a browser wants, so beside its neighbours it
+    // looked a size too big ("아이콘이 다른 아이콘에 비해 너무 커", 2026-09-17). macOS's own icon grid
+    // leaves about a tenth of the canvas clear on each side; the picture is drawn into that inset
+    // rather than kept as a second file, so there is still one image to keep in step.
+    const SIDE: f64 = 512.0;
+    const MARGIN: f64 = SIDE * 0.10;
     unsafe {
         let data: id = msg_send![class!(NSData),
             dataWithBytes: ICON.as_ptr() as *const std::ffi::c_void
             length: ICON.len() as u64];
-        let img: id = msg_send![class!(NSImage), alloc];
-        let img: id = msg_send![img, initWithData: data];
-        if img != nil {
-            let app: id = msg_send![class!(NSApplication), sharedApplication];
-            let _: () = msg_send![app, setApplicationIconImage: img];
+        let src: id = msg_send![class!(NSImage), alloc];
+        let src: id = msg_send![src, initWithData: data];
+        if src == nil {
+            return;
         }
+        let out: id = msg_send![class!(NSImage), alloc];
+        let out: id = msg_send![out, initWithSize: NSSize::new(SIDE, SIDE)];
+        let _: () = msg_send![out, lockFocus];
+        let into = NSRect::new(NSPoint::new(MARGIN, MARGIN),
+                               NSSize::new(SIDE - MARGIN * 2.0, SIDE - MARGIN * 2.0));
+        let whole = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));   // all of the source
+        let _: () = msg_send![src, drawInRect: into fromRect: whole
+                                   operation: 2u64 fraction: 1.0f64];             // 2 = source over
+        let _: () = msg_send![out, unlockFocus];
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![app, setApplicationIconImage: out];
     }
 }
 
