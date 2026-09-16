@@ -58,6 +58,18 @@ class Install(unittest.TestCase):
         self.assertNotIn("SHADOW", r.stdout + r.stderr, "a json.py in the cwd was imported over the standard library")
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_launch_py_finds_the_tree_under_safe_path_on_this_python(self):
+        """The launchers set PYTHONSAFEPATH=1 and run launch.py by path. On 3.11+ safe path drops the
+        script's own directory from sys.path too, and `palmar` on a Windows with 3.13 died with
+        ModuleNotFoundError (user, 2026-09-16); the Mac's 3.9 ignores the variable, which is why
+        every other test here passed. Run with *this* interpreter, from somewhere else."""
+        elsewhere = tempfile.mkdtemp(prefix="palmar-elsewhere-")
+        self.addCleanup(shutil.rmtree, elsewhere, ignore_errors=True)
+        r = subprocess.run([sys.executable, os.path.join(REPO, "launch.py"), "--version"], cwd=elsewhere,
+                           env=dict(os.environ, PYTHONSAFEPATH="1"), capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("palmar ", r.stdout)
+
     def test_piped_in_it_does_not_take_the_cwd_for_a_checkout(self):
         """Under `curl … | sh` $0 is `sh`, and `dirname sh` is `.`: the one-liner run inside a
         repository holding a palmar/ package used to install that repository (review, 2026-09-15)."""
