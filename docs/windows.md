@@ -254,6 +254,16 @@ WSL 과 배포판 · **파이썬 3.9 이상** · 체크아웃인지.
 - **윈도우 쪽 판이 WSL 데몬에 나타남.** 브라우저의 `localStorage` 가 origin 단위라 한 포트의 두
   데몬이 한 저장소를 썼고, 판 복사본이 빈 데몬에 넘어갔다. 복사본을 없앴다 (decisions ③).
 
+## 잰 것 — 2026-09-16, 사용자 기계
+
+- `icacls %USERPROFILE%\.palmar` → `NT AUTHORITY\SYSTEM`, `BUILTIN\Administrators`, `OWNER RIGHTS` 모두
+  `(OI)(CI)(F)`, 그 외 없음. **기본 ACL 로 충분하다** — 다른 표준 계정은 키·토큰을 못 읽는다. 별도 권한 관리는
+  넣지 않고, `--doctor` 가 `Everyone`/`Users`/`Authenticated Users` 를 보면 한 줄 경고한다(코덱스 제안 3).
+- `--doctor`: `default chrome`, `window chrome.exe in app mode` — 레지스트리 UserChoice 읽기가 맞다. "앱 설치"
+  뒤에는 `window …\palmar.lnk`. Chrome 은 `--app=` 주소를 설치된 앱 창으로 옮기며 **두 번** 받는다(일회용 →
+  30초 주소로 바꾼 이유).
+- 새 런처(`launch.py`)가 3.13 에서 `ModuleNotFoundError` — PYTHONSAFEPATH 가 스크립트 디렉터리도 뺀다. 고쳤다.
+
 ## 창 — exe 없이 (2026-09-15)
 
 윈도우 창은 우리 exe 가 없어도 된다: `palmar` 는 `palmar-app` 이 없으면 **기본 브라우저를 `--app=`

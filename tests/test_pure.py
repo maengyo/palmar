@@ -924,5 +924,22 @@ class TheKeyStaysOffTheCommandLine(unittest.TestCase):
         self.assertNotIn(n, D.ONCE, "an expired nonce is forgotten, not kept")
 
 
+class WhoElseCanRead(unittest.TestCase):
+    """What --doctor says about ~/.palmar's ACL on Windows, from icacls text measured on the real
+    machine (2026-09-16): the default is the person, SYSTEM and Administrators, nothing else."""
+
+    GOOD = ("C:\\Users\\me\\.palmar NT AUTHORITY\\SYSTEM:(OI)(CI)(F)\n"
+            "                    BUILTIN\\Administrators:(OI)(CI)(F)\n"
+            "                    OWNER RIGHTS:(OI)(CI)(F)\n\nSuccessfully processed 1 files; Failed processing 0 files\n")
+
+    def test_the_measured_default_is_clean(self):
+        self.assertEqual(D.acl_strangers(self.GOOD), [])
+
+    def test_everyone_and_users_are_named(self):
+        text = self.GOOD.replace("OWNER RIGHTS:(OI)(CI)(F)", "OWNER RIGHTS:(OI)(CI)(F)\n                    Everyone:(OI)(CI)(RX)\n                    BUILTIN\\Users:(RX)")
+        self.assertEqual(D.acl_strangers(text), ["BUILTIN\\Users", "Everyone"])
+        self.assertEqual(D.acl_strangers(""), [])
+
+
 if __name__ == "__main__":
     unittest.main()

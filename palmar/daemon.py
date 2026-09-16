@@ -4504,6 +4504,27 @@ def _restored_cwd(name, fallback):
     return None
 
 
+#: Principals that mean "other accounts on this machine" in a Windows ACL. Any of them on ~/.palmar
+#: and the key, the token and the shells' hooks are readable by somebody who is not this person.
+ACL_STRANGERS = ("everyone", "builtin\\users", "authenticated users", "interactive", "network")
+
+
+def acl_strangers(icacls_text: str) -> list:
+    """The principals in `icacls <dir>` output that are not this person, SYSTEM or Administrators.
+
+    Measured on a real Windows (user, 2026-09-16): the profile's default ACL gives ~/.palmar to
+    `NT AUTHORITY\\SYSTEM`, `BUILTIN\\Administrators` and `OWNER RIGHTS` (the owner, whoever that is),
+    all `(OI)(CI)(F)`, and nothing else — so the default is enough and no permission management
+    is added. This only says when a machine's default is not that (Codex review, item 3)."""
+    found = []
+    for line in (icacls_text or "").splitlines():
+        low = line.lower()
+        for who in ACL_STRANGERS:
+            if who in low and ":(" in low:
+                found.append(line.strip().split(":(")[0].strip())
+    return sorted(set(found))
+
+
 def doctor(port: int) -> int:
     """`palmar --doctor` — puts **this code**, **the running daemon** and **each pane's status** on one screen.
 
@@ -4562,6 +4583,17 @@ def doctor(port: int) -> int:
         out("  ! the rail would fail here — %s: %s" % (type(e).__name__, e))
     out("  browser   %s%s" % (Path(tab[0]).name if tab else "(found no way to open one — open the address yourself)",
                               "   <- $BROWSER" if (os.environ.get("BROWSER") or "").strip() else ""))
+    if sys.platform == "win32":
+        # Who else can read ~/.palmar. The default profile ACL is the person, SYSTEM and Administrators;
+        # anything wider is worth a line, because the key and the token live here.
+        try:
+            r = subprocess.run(["icacls", str(PALMAR_DIR)], capture_output=True, text=True, timeout=10)
+            bad = acl_strangers(r.stdout)
+            out("  acl       %s" % ("SYSTEM, Administrators and you — as it should be" if not bad else
+                                    "! readable by %s — the key and the token are in here. Remove them: "
+                                    "icacls \"%s\" /remove:g %s" % (", ".join(bad), PALMAR_DIR, " ".join('"%s"' % b for b in bad))))
+        except (OSError, subprocess.SubprocessError) as e:
+            out("  acl       (icacls did not answer — %s)" % e)
     # The window comes before the browser when `palmar` opens the page — say which one it would be:
     # palmar's own, a Chromium-family browser in app mode, or none (a tab, then).
     app = find_app() or installed_pwa()
