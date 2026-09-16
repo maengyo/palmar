@@ -410,8 +410,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // path and accepts nothing but `RawWindowHandle::Xlib`. Under WSLg the session is Wayland, so
     // that is `UnsupportedWindowHandle` and no window ever appears (reported 2026-09-11). The GTK
     // widget is the portable answer there — it works under X11 and Wayland alike.
+    // **The page has to be able to reach the window, on every platform.** These two — the flag that
+    // tells the page what kind of window it is in, and the channel it answers on — used to be built
+    // only on the Linux path, because that is where the missing title bar first needed them. So on a
+    // Mac `window.PALMAR_NATIVE` was never defined and there was no `window.ipc` at all: `palmar`
+    // typed a second time told the page to come forward, the page fell back to `window.focus()`, and
+    // WKWebView ignores that — the window stayed where it was and another one opened (user,
+    // 2026-09-16; the cause found 2026-09-17, after a rebuild did not help).
+    let init = if bare {
+        "window.PALMAR_NATIVE={titlebar:false};"
+    } else {
+        "window.PALMAR_NATIVE={titlebar:true};"
+    };
+    // Only the daemon's own page gets to move, close or raise the window: the request carries the
+    // sender's URL, and anything else that ends up in this webview (a navigation away, a page on a
+    // squatted port) is not it (review, 2026-09-15).
+    let ours = addr_of(&url).map(|a| a.to_string());
+    let ipc = {
+        let w = std::rc::Rc::clone(&window);
+        move |req: wry::http::Request<String>| {
+            let from = req.uri().authority().map(|a| a.as_str().to_string());
+            if from.is_none() || from != ours {
+                return;
+            }
+            match req.body().as_str() {
+            // `palmar` typed while this window is open: the daemon told the page, the page tells
+            // us. Whatever the title bar — this one is not about the bar.
+            "focus" => { w.set_minimized(false); w.set_focus(); }
+            // The rest exist only without the system title bar, which is what they replace.
+            // Dragging has to be handed to the window manager at the moment the button goes down;
+            // there is no way to do it from the page alone.
+            "drag" if bare => { let _ = w.drag_window(); }
+            "maximize" if bare => w.set_maximized(!w.is_maximized()),
+            "minimize" if bare => w.set_minimized(true),
+            // Exiting here rather than routing a user event back through the event loop: there is
+            // nothing to unwind. The daemon is a separate process and is meant to outlive this one —
+            // the same as pressing the title bar's X, which is what this replaces.
+            "close" if bare => std::process::exit(0),
+            _ => {}
+            }
+        }
+    };
+
     #[cfg(not(target_os = "linux"))]
-    let _webview = WebViewBuilder::new(&window).with_url(&url).build()?;
+    let _webview = WebViewBuilder::new(&window)
+        .with_url(&url)
+        .with_initialization_script(init)
+        .with_ipc_handler(ipc)
+        .build()?;
 
     #[cfg(target_os = "linux")]
     let webview = {
@@ -424,42 +470,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("this window has no GTK container to put a webview in")?;
         // The page cannot see whether it has a title bar, and without one it has to provide the
         // things a title bar does. It is told, and given a way to ask.
-        let mut b = WebViewBuilder::new_gtk(vbox).with_url(&url);
-        b = b.with_initialization_script(if bare {
-            "window.PALMAR_NATIVE={titlebar:false};"
-        } else {
-            "window.PALMAR_NATIVE={titlebar:true};"
-        });
-        {
-            let w = std::rc::Rc::clone(&window);
-            // Only the daemon's own page gets to move, close or raise the window: the request carries
-            // the sender's URL, and anything else that ends up in this webview (a navigation away, a
-            // page on a squatted port) is not it (review, 2026-09-15).
-            let ours = addr_of(&url).map(|a| a.to_string());
-            b = b.with_ipc_handler(move |req| {
-                let from = req.uri().authority().map(|a| a.as_str().to_string());
-                if from.is_none() || from != ours {
-                    return;
-                }
-                match req.body().as_str() {
-                // `palmar` typed while this window is open: the daemon told the page, the page tells
-                // us. Whatever the title bar — this one is not about the bar.
-                "focus" => { w.set_minimized(false); w.set_focus(); }
-                // The rest exist only without the system title bar, which is what they replace.
-                // Dragging has to be handed to the window manager at the moment the button goes
-                // down; there is no way to do it from the page alone.
-                "drag" if bare => { let _ = w.drag_window(); }
-                "maximize" if bare => w.set_maximized(!w.is_maximized()),
-                "minimize" if bare => w.set_minimized(true),
-                // Exiting here rather than routing a user event back through the event loop: there
-                // is nothing to unwind. The daemon is a separate process and is meant to outlive
-                // this one — the same as pressing the title bar's X, which is what this replaces.
-                "close" if bare => std::process::exit(0),
-                _ => {}
-                }
-            });
-        }
-        b.build()?
+        WebViewBuilder::new_gtk(vbox)
+            .with_url(&url)
+            .with_initialization_script(init)
+            .with_ipc_handler(ipc)
+            .build()?
     };
 
     // **Put the composing syllable back on screen.** wry turns the IME preedit off for every
