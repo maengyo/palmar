@@ -404,10 +404,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             "window.PALMAR_NATIVE={titlebar:true};"
         });
-        if bare {
+        {
             let w = std::rc::Rc::clone(&window);
-            // Only the daemon's own page gets to move or close the window: the request carries the
-            // sender's URL, and anything else that ends up in this webview (a navigation away, a
+            // Only the daemon's own page gets to move, close or raise the window: the request carries
+            // the sender's URL, and anything else that ends up in this webview (a navigation away, a
             // page on a squatted port) is not it (review, 2026-09-15).
             let ours = addr_of(&url).map(|a| a.to_string());
             b = b.with_ipc_handler(move |req| {
@@ -416,15 +416,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 }
                 match req.body().as_str() {
+                // `palmar` typed while this window is open: the daemon told the page, the page tells
+                // us. Whatever the title bar — this one is not about the bar.
+                "focus" => { w.set_minimized(false); w.set_focus(); }
+                // The rest exist only without the system title bar, which is what they replace.
                 // Dragging has to be handed to the window manager at the moment the button goes
                 // down; there is no way to do it from the page alone.
-                "drag" => { let _ = w.drag_window(); }
-                "maximize" => w.set_maximized(!w.is_maximized()),
-                "minimize" => w.set_minimized(true),
+                "drag" if bare => { let _ = w.drag_window(); }
+                "maximize" if bare => w.set_maximized(!w.is_maximized()),
+                "minimize" if bare => w.set_minimized(true),
                 // Exiting here rather than routing a user event back through the event loop: there
                 // is nothing to unwind. The daemon is a separate process and is meant to outlive
                 // this one — the same as pressing the title bar's X, which is what this replaces.
-                "close" => std::process::exit(0),
+                "close" if bare => std::process::exit(0),
                 _ => {}
                 }
             });

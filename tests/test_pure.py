@@ -955,5 +955,18 @@ class WhoElseCanRead(unittest.TestCase):
         self.assertEqual(D.acl_strangers(""), [])
 
 
+class TheWindowInFront(unittest.TestCase):
+    """`palmar` while palmar is open brings that window forward. On Windows the window is found by
+    class and title — the class every Chromium window has, and the page's title with or without the
+    badge; the terminal that ran `palmar` is titled palmar too, and is not it."""
+
+    def test_which_window_is_palmars(self):
+        self.assertTrue(D.is_palmar_window("palmar", "Chrome_WidgetWin_1"))
+        self.assertTrue(D.is_palmar_window("(2) palmar", "Chrome_WidgetWin_1"))
+        self.assertFalse(D.is_palmar_window("palmar", "CASCADIA_HOSTING_WINDOW_CLASS"), "Windows Terminal running `palmar`")
+        self.assertFalse(D.is_palmar_window("GitHub - Google Chrome", "Chrome_WidgetWin_1"))
+        self.assertFalse(D.is_palmar_window("", "Chrome_WidgetWin_1"))
+
+
 if __name__ == "__main__":
     unittest.main()

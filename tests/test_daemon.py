@@ -607,6 +607,49 @@ class TwoWaysIn(unittest.TestCase):
             self.assertEqual(resp.status, 302, "the daemon did not honour the address the second start handed out")
             self.assertEqual(resp.getheader("Location"), "/?k=" + d.url.split("k=", 1)[1])
 
+    def test_a_second_start_brings_the_open_window_forward_instead_of_opening_another(self):
+        """Every `palmar` used to open one more window on the same daemon (user, 2026-09-16: "is that
+        right?"). With a page open, the second start asks the daemon to bring it forward — the page
+        gets a focus event — and opens nothing; the address is still printed. --new opens another."""
+        opener, note = self.recorder()
+        with Daemon() as d:
+            w = WS(d, "/events?token=" + d.token)          # a page, as far as the daemon can tell
+            w.recv()                                         # hello
+            r = self.second_palmar(d.home, {"BROWSER": opener})
+            self.assertEqual(r.returncode, 0, r.stderr[-400:])
+            self.assertEqual(r.stdout.strip().splitlines()[-1], d.url, "the address is still the last line")
+            self.assertIn("forward", r.stderr, "the printout should say the window was brought forward: " + r.stderr[-300:])
+            got = None
+            for _ in range(5):
+                _, payload = w.recv()
+                try:
+                    m = json.loads(payload)
+                except ValueError:
+                    continue
+                if isinstance(m, dict) and m.get("t") == "focus":
+                    got = m
+                    break
+            self.assertIsNotNone(got, "the open page was never told to come forward")
+            time.sleep(0.5)
+            self.assertFalse(os.path.exists(note), "a second window was opened although one was open")
+            r = self.second_palmar(d.home, {"BROWSER": opener}, args=["--new"])
+            self.assertEqual(r.returncode, 0, r.stderr[-400:])
+            end = time.time() + 5
+            while time.time() < end and not os.path.exists(note):
+                time.sleep(0.1)
+            self.assertTrue(os.path.exists(note), "--new did not open another window")
+
+    def test_focus_says_how_many_pages_there_are(self):
+        with Daemon() as d:
+            code, body = d.raw("POST", "/api/focus")
+            self.assertEqual(code, 200)
+            self.assertEqual(json.loads(body)["clients"], 0, "no page is open yet")
+            w = WS(d, "/events?token=" + d.token)
+            w.recv()
+            code, body = d.raw("POST", "/api/focus")
+            self.assertEqual(json.loads(body)["clients"], 1)
+            self.assertEqual(d.raw("GET", "/api/focus")[0], 405)
+
     def test_it_leaves_the_running_daemon_alone(self):
         """The refusal existed because a second start rotates the token and deletes run/*.json,
         silently dropping the first daemon's pane hooks. Attaching must touch neither."""

@@ -72,8 +72,8 @@ when it is installed; elsewhere it is a Chromium-family browser in app mode (you
 it is one; Windows always has Edge), and palmar's own window is for a Linux without one. A browser tab
 is the last resort. To make
 it an app of its own with no exe, install it once from Edge or Chrome (menu → Apps → Install palmar):
-it gets its own icon, window and Start Menu entry, and `palmar` opens that from then on — the daemon detaches, so closing the terminal does not take your shells with it. Run `palmar` again and you get the same address
-rather than a second daemon; `palmar --stop` ends it. Lost the address: `cat ~/.palmar/run/url`.
+it gets its own icon, window and Start Menu entry, and `palmar` opens that from then on — the daemon detaches, so closing the terminal does not take your shells with it. Run `palmar` again and the open window comes to the
+front — same daemon, same address; `palmar --new` opens another window, `palmar --stop` ends it. Lost the address: `cat ~/.palmar/run/url`.
 If 8801 is busy — a palmar on Windows beside one in WSL, say — it takes the next free port and says so.
 
 The window is a **741 KB** program that shows the same thing without a browser

@@ -3643,6 +3643,15 @@ let notifyAt = 0;              // when it actually rang last
 let daemonNotify = false;
 const hasNotificationAPI = () => 'Notification' in window;
 const canRing = () => hasNotificationAPI() ? Notification.permission === 'granted' : daemonNotify;
+// `palmar` typed while palmar is open asks the daemon, and the daemon asks every page, to come to the
+// front. palmar's own window does it over IPC (tao's set_focus); a browser gets window.focus(), which
+// it may or may not honour — the daemon also asks the OS where it can (focus_existing).
+function comeForward() {
+  try {
+    if (window.PALMAR_NATIVE && window.ipc && typeof window.ipc.postMessage === 'function') window.ipc.postMessage('focus');
+    else window.focus();
+  } catch (e) {}
+}
 function notifyViaDaemon(title, body) {
   return api('POST', '/api/notify', { title, body });
 }
@@ -4013,6 +4022,7 @@ function connectEvents() {
     else if (m.t === 'canvases' && m.cs) setCanvases(m.cs);     // the order changed — all of them, in order
     else if (m.t === 'canvas_gone' && m.id) dropCanvas(m.id);   // canvases follows right behind
     else if (m.t === 'layout') layoutArrived(m);                 // another browser moved something
+    else if (m.t === 'focus') comeForward();                     // `palmar` typed while this is open
   };
   ws.onclose = () => {
     if (eventsWs !== ws) return;

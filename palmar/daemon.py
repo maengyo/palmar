@@ -3058,6 +3058,19 @@ async def handle_request(reader, writer) -> None:
             return
         writer.write(http(405))
         return
+    if path == "/api/focus":
+        # `palmar` typed while palmar is open: every page is told to come forward, and the caller is
+        # told how many there are — none means it should open one (focus_existing).
+        if not token_ok:
+            writer.write(http(403))
+            return
+        if method != "POST":
+            writer.write(http(405))
+            return
+        live = [w for w in registry.event_clients if not w.is_closing()]
+        registry.broadcast({"t": "focus"})
+        writer.write(http_json(200, {"clients": len(live)}))
+        return
     if path == "/api/once":
         # A short-lived address of this daemon's own minting, for a process that is not this daemon —
         # the second `palmar` that opens a running one on Windows or from WSL (launch_target).
@@ -3511,6 +3524,7 @@ async def handle_request(reader, writer) -> None:
             "name": "palmar", "short_name": "palmar",
             "description": "Many terminals, one place, and each one keeps where you put it.",
             "start_url": f"/?k={KEY[0]}", "scope": "/", "display": "standalone",
+            "launch_handler": {"client_mode": "focus-existing"},   # launched again: the open window, forward
             "background_color": "#f6f3ec", "theme_color": "#1f2329",
             "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
                       {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"}],
@@ -4215,6 +4229,111 @@ def once_from_daemon(url: str) -> str:
         return ""
 
 
+def is_palmar_window(title: str, cls: str) -> bool:
+    """A top-level window that is palmar's page in a Chromium (app mode, an installed app, a tab):
+    the class every Chromium window has, and the page's title — "palmar", or with the badge in
+    front of it. The terminal that ran `palmar` may be titled palmar too; its class is not this."""
+    return cls == "Chrome_WidgetWin_1" and "palmar" in (title or "").lower()
+
+
+def raise_windows_window() -> bool:
+    """Windows: bring palmar's window to the front. Runs in the process the person typed into — the
+    one with foreground rights; a detached child has none, which is why it is not the daemon."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32          # type: ignore[attr-defined]
+    except (ImportError, AttributeError, OSError):
+        return False
+    found = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    def each(hwnd, _):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        n = user32.GetWindowTextLengthW(hwnd)
+        if n <= 0:
+            return True
+        title = ctypes.create_unicode_buffer(n + 1)
+        user32.GetWindowTextW(hwnd, title, n + 1)
+        cls = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(hwnd, cls, 64)
+        if is_palmar_window(title.value, cls.value):
+            found.append(hwnd)
+        return True
+
+    user32.EnumWindows(each, 0)
+    if not found:
+        return False
+    user32.ShowWindow(found[0], 9)             # SW_RESTORE — un-minimise if it was
+    user32.SetForegroundWindow(found[0])
+    return True
+
+
+def ask_focus(url: str) -> int:
+    """`POST /api/focus` on the running daemon: it tells every open page to come forward and says how
+    many there are. -1 when there is no daemon to ask."""
+    try:
+        token = TOKEN_FILE.read_text("utf-8").strip()
+    except OSError:
+        return -1
+    base = url.split("/?")[0]
+    req = urllib.request.Request(base + "/api/focus?token=" + token, data=b"",
+                                 headers={"Origin": base}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            got = json.loads(r.read().decode("utf-8", "replace") or "{}")
+            return int(got.get("clients", 0))
+    except Exception:
+        return -1
+
+
+def focus_existing(url: str) -> str:
+    """`palmar` while palmar is already on screen: bring that window forward instead of opening one
+    more. One line for the printout, or '' when there is no open window to bring (then a window is
+    opened as usual). `--new` skips this.
+
+    Every `palmar` used to open another window on the same daemon — the habit of a second tab, and
+    not what a desktop program does (user, 2026-09-16). The daemon is asked to tell its pages to come
+    forward (the page calls window.focus(); palmar's own window is told over IPC to focus); browsers
+    mostly ignore a page asking for the front, so the OS is asked too where it can be: Windows by the
+    window's class and title from the process that has foreground rights, a Mac by activating the
+    app that holds the window, Linux with wmctrl when it is there, WSL through the Windows shell."""
+    n = ask_focus(url)
+    if n <= 0:
+        return ""
+    raised = False
+    try:
+        if sys.platform == "win32":
+            raised = raise_windows_window()
+        elif sys.platform == "darwin":
+            pwa = installed_pwa()
+            argv = None if find_app() else app_mode_argv("about:blank")
+            target = pwa or (str(Path(argv[0]).parents[2]) if argv and "/Contents/MacOS/" in argv[0] else "")
+            if target:
+                subprocess.Popen(["open", target], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+                raised = True
+            else:
+                raised = bool(find_app())           # palmar's own window focuses itself over IPC
+        elif wsl_kind():
+            s32 = windows_system32()
+            ps = shutil.which("powershell.exe") or (s32 and str(Path(s32) / "WindowsPowerShell/v1.0/powershell.exe"))
+            if ps and Path(ps).is_file():
+                subprocess.Popen([ps, "-NoProfile", "-NonInteractive", "-Command",
+                                  "(New-Object -ComObject WScript.Shell).AppActivate('palmar')"],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                raised = True
+        elif shutil.which("wmctrl"):
+            subprocess.Popen(["wmctrl", "-a", "palmar"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+            raised = True
+    except OSError as e:
+        log(f"could not bring the window forward ({e})")
+    return ("brought the open window to the front (--new opens another)" if raised
+            else "already open — asked the %d open page%s to come forward (--new opens another)" % (n, "" if n == 1 else "s"))
+
+
 def launch_target(url: str, platform=None, kind=None) -> str:
     """What a browser is handed in place of the keyed address — never the address itself.
 
@@ -4423,7 +4542,7 @@ def start_notes(browser_note: str = "", port_note: str = "", running: bool = Fal
     return out
 
 
-async def main(port: int, open_page: bool = True, web: bool = False) -> None:
+async def main(port: int, open_page: bool = True, web: bool = False, new: bool = False) -> None:
     PORT[0] = port
     UTF8_CTYPE[0] = pick_utf8_locale()
     try:
@@ -4439,7 +4558,11 @@ async def main(port: int, open_page: bool = True, web: bool = False) -> None:
         # **announce, not print.** Detached, stdout is a log file and the only thing the person who
         # typed the command can still see is the pipe. This path is the ordinary one for a second
         # `palmar`, so sending its address down the log was the first thing detaching broke.
-        how = show_page(e.url, web) if open_page else ""
+        how = ""
+        if open_page and not new:
+            how = focus_existing(e.url)         # the window already on screen, forward
+        if open_page and not how:
+            how = show_page(e.url, web)
         announce(e.url, start_notes(how, "", running=True))
         return
     # **Canvases come back on their own; terminals are offered.** A canvas is data — restoring it
@@ -4865,7 +4988,26 @@ def announce(line: str, notes=()) -> None:
     ANNOUNCE[0] = None
 
 
-def detached_no_fork(port: int, open_page: bool, web: bool = False) -> int:
+def focus_from_here():
+    """In the process the person typed into: if a daemon is up and has a page open, bring that page
+    forward, print its address and the notes, and say so with 0. None when there is nothing to bring
+    — no daemon, or a daemon with no page — and the ordinary start should go ahead."""
+    try:
+        url = URL_FILE.read_text("utf-8").strip()
+    except OSError:
+        return None
+    if not url.startswith("http://") or not daemon_answers(url):
+        return None
+    how = focus_existing(url)
+    if not how:
+        return None
+    print(url, flush=True)
+    for n in start_notes(how, "", running=True):
+        print("  " + n, file=sys.stderr, flush=True)
+    return 0
+
+
+def detached_no_fork(port: int, open_page: bool, web: bool = False, new: bool = False) -> int:
     """The same promise where there is no `fork` — Windows.
 
     **Start a second copy of ourselves, detached, and wait for it to answer.** `DETACHED_PROCESS`
@@ -4882,6 +5024,12 @@ def detached_no_fork(port: int, open_page: bool, web: bool = False) -> int:
     the same answer, and this one costs a poll."""
     DETACHED_PROCESS = 0x00000008
     CREATE_NEW_PROCESS_GROUP = 0x00000200
+    if open_page and not new:
+        # From here, not the child: this process was started by the terminal in front, so Windows
+        # lets it set the foreground window; the detached child could not.
+        done = focus_from_here()
+        if done is not None:
+            return done
     try:
         ensure_private_dir(PALMAR_DIR)
         logf = open(str(PALMAR_DIR / "log"), "ab")
@@ -4898,6 +5046,8 @@ def detached_no_fork(port: int, open_page: bool, web: bool = False) -> int:
         argv.append("--no-browser")
     if web:
         argv.append("--web")
+    if new:
+        argv.append("--new")
     try:
         child = subprocess.Popen(
             argv, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, close_fds=True,
@@ -4939,7 +5089,7 @@ def detached_no_fork(port: int, open_page: bool, web: bool = False) -> int:
     return 1
 
 
-def detached(port: int, open_page: bool, web: bool = False) -> int:
+def detached(port: int, open_page: bool, web: bool = False, new: bool = False) -> int:
     """Start the daemon in its own session and come straight back.
 
     **The terminal was killing it.** The daemon caught SIGINT and SIGTERM but not SIGHUP, and closing
@@ -4955,6 +5105,10 @@ def detached(port: int, open_page: bool, web: bool = False) -> int:
     The address comes back over a pipe rather than by watching run/url, because a start that **fails**
     has to come back the same way. With stderr going to a log file, the pipe is the only thing the
     person who typed the command can still see."""
+    if open_page and not new:
+        done = focus_from_here()
+        if done is not None:
+            return done
     r, w = os.pipe()
     pid = os.fork()
     if pid:                                     # the process the person ran
@@ -4995,7 +5149,7 @@ def detached(port: int, open_page: bool, web: bool = False) -> int:
         if fd > 2:
             os.close(fd)
     try:
-        asyncio.run(main(port, open_page=open_page, web=web))
+        asyncio.run(main(port, open_page=open_page, web=web, new=new))
     except SystemExit as e:   # noqa: PERF203 - three separate reports, not one
         # The refusals — a lock somebody holds, a port in use — are SystemExit with a sentence. The
         # person who typed the command is on the other end of that pipe and has nothing else to read.
@@ -5021,6 +5175,9 @@ def cli() -> None:
     # The window comes first when there is one (2026-09-15) — this asks for a browser instead.
     ap.add_argument("--web", action="store_true",
                     help="open a browser even when palmar's own window is installed")
+    # `palmar` while palmar is open brings that window forward (2026-09-16); this opens one more.
+    ap.add_argument("--new", action="store_true",
+                    help="open another window even when one is already open")
     # Closing a window does not stop the daemon — it holds live shells, and that is the point. So
     # there has to be a way to say stop, and it is this one (asked for 2026-09-11).
     ap.add_argument("--stop", action="store_true",
@@ -5036,9 +5193,9 @@ def cli() -> None:
     if args.doctor:
         raise SystemExit(doctor(args.port))
     if args.foreground:
-        asyncio.run(main(args.port, open_page=not args.no_browser, web=args.web))
+        asyncio.run(main(args.port, open_page=not args.no_browser, web=args.web, new=args.new))
     elif hasattr(os, "fork"):
-        raise SystemExit(detached(args.port, open_page=not args.no_browser, web=args.web))
+        raise SystemExit(detached(args.port, open_page=not args.no_browser, web=args.web, new=args.new))
     else:
-        raise SystemExit(detached_no_fork(args.port, open_page=not args.no_browser, web=args.web))
+        raise SystemExit(detached_no_fork(args.port, open_page=not args.no_browser, web=args.web, new=args.new))
 

@@ -3154,3 +3154,28 @@ class AWindowWithoutTheNotificationAPI(unittest.TestCase):
         with open(note) as fh:
             self.assertEqual(fh.read().split("\n")[0], "palmar notifications are on")
         self.assertEqual(b.ev("document.getElementById('bell').dataset.on"), "1", "the bell did not turn on")
+
+
+class ComingForward(unittest.TestCase):
+    """The daemon's focus event: a browser page calls window.focus(); palmar's own window is told over
+    IPC, since a webview cannot raise itself from the page."""
+
+    def test_the_page_asks_for_the_front_the_way_its_window_allows(self):
+        d = Daemon().start()
+        self.addCleanup(d.stop)
+        b = Browser().start()
+        self.addCleanup(b.stop)
+        b.open(d.url, script="window.__focused=0; window.focus=()=>{window.__focused++};")
+        time.sleep(0.8)
+        d.raw("POST", "/api/focus")
+        end = time.time() + 5
+        while time.time() < end and not b.ev("window.__focused"):
+            time.sleep(0.1)
+        self.assertEqual(b.ev("window.__focused"), 1, "the page did not call window.focus()")
+        b.ev("window.PALMAR_NATIVE={titlebar:true}; window.ipc={postMessage:(m)=>{window.__ipc=m}}; 1")
+        d.raw("POST", "/api/focus")
+        end = time.time() + 5
+        while time.time() < end and not b.ev("window.__ipc"):
+            time.sleep(0.1)
+        self.assertEqual(b.ev("window.__ipc"), "focus", "palmar's own window must be told over IPC")
+        self.assertEqual(b.ev("window.__focused"), 1, "and not window.focus() as well")
