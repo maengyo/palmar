@@ -769,7 +769,25 @@ body.ui-mono { --ui: var(--mono); }
 .cv-scroll { cursor: grab; }
 .cv-scroll.panning { cursor: grabbing; user-select: none; }
 .cv-scroll > * { cursor: auto; }
+/* ── the world ──────────────────────────────────────────────
+   **palmar owns how far the canvas scrolls; the browser used to.** Until now `.cv-scroll` was an
+   `overflow:auto` box holding absolutely positioned tiles, so the scrollable area was whatever the
+   browser computed from their boxes — `max(viewport, the windows' bounding box)` and not a pixel
+   more. Two things came out of that (both measured 2026-09-16): a window could never be brought to
+   the middle of the screen, because at full scroll its far edge sits flush against the viewport's
+   and it lands `(viewport - window) / 2` short every time; and dragging the window that alone
+   defined that area shrank the area under the pointer, so the browser clamped the scroll by exactly
+   as much as the window had moved and **the window did not move on screen at all** — 888px of hand,
+   zero pixels of window, over 24 samples.
+   `.cv-pad` is the floor: an empty box that says how far there is to scroll. `.cv-world` is the
+   origin the windows are placed from, so there is room on the left and above too — scrollLeft
+   cannot go below zero, so slack up there has to come from moving the origin, not the scroll.
+   Neither takes a pointer: pressing empty space must still reach `.cv-scroll` and pan. */
+.cv-pad, .cv-world { position: absolute; left: 0; top: 0; pointer-events: none; }
+.cv-pad { z-index: 0; }
+.cv-world { width: 0; height: 0; }
 .tile {
+  pointer-events: auto;              /* .cv-world takes none; its windows still do */
   position: absolute; display: flex; flex-direction: column;
   background: var(--tile); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
   box-shadow: var(--shadow);

@@ -678,7 +678,7 @@ function buildFrame(t, s) {
     if (saved && saved.f) layout[s.id].f = saved.f;
     if (saved && saved.g) layout[s.id].g = saved.g;   // groups survive a reload, like the position
     saveLayout();
-    cvScroll.appendChild(e);
+    cvWorld.appendChild(e);
     // The frame is painted by upsert, **after** this tile is in `tiles` — painted from here it cannot
     // see itself, so the second member of a restored pair drew nothing and the group came back
     // unframed in every browser but the one that made it (measured 2026-09-14).
@@ -1666,8 +1666,9 @@ cvScroll.addEventListener('drop', (ev) => {
   if (!path) return;
   ev.preventDefault();
   const box = cvScroll.getBoundingClientRect();
-  const at = { x: Math.max(0, Math.round(ev.clientX - box.left + cvScroll.scrollLeft - 60)),
-               y: Math.max(0, Math.round(ev.clientY - box.top + cvScroll.scrollTop - 15)) };
+  // The board's coordinates start at the world's origin, not the scroller's (see "the world").
+  const at = { x: Math.max(0, Math.round(ev.clientX - box.left + cvScroll.scrollLeft - originX - 60)),
+               y: Math.max(0, Math.round(ev.clientY - box.top + cvScroll.scrollTop - originY - 15)) };
   openViewer(path, current, at);
   dragFile = null;
 });
@@ -2042,7 +2043,7 @@ let ghostEl = null;
 // the target — and `pct` how much of it is filled. 100 is armed, and the box says so by going solid.
 function showGhost(box, side, pct) {
   if (!box) { if (ghostEl) { ghostEl.remove(); ghostEl = null; } return; }
-  if (!ghostEl) { ghostEl = el('div', 'ghost'); cvScroll.appendChild(ghostEl); }
+  if (!ghostEl) { ghostEl = el('div', 'ghost'); cvWorld.appendChild(ghostEl); }
   ghostEl.style.left = box.x + 'px';
   ghostEl.style.top = box.y + 'px';
   ghostEl.style.width = box.w + 'px';
@@ -2280,7 +2281,7 @@ function paintGroups() {
     let box = groupBoxes.get(g);
     if (!box) {
       box = el('div', 'gbox');
-      cvScroll.appendChild(box);
+      cvWorld.appendChild(box);
       groupBoxes.set(g, box);
     }
     box.style.setProperty('--group', 'hsl(' + groupHue(g) + ' 70% 55%)');
@@ -2769,7 +2770,8 @@ function isOff(t, sl, st, vw, vh) {
   return r.x + r.w <= sl || r.y + r.h <= st || r.x >= sl + vw || r.y >= st + vh;
 }
 let offTimer = null;
-function refreshOff() {
+function refreshOff(fromScroll) {
+  if (!fromScroll) sizeWorld();          // the board moved; the world may have grown. Never on scroll.
   if (offTimer) return;
   offTimer = setTimeout(() => {
     offTimer = null;
@@ -2788,7 +2790,68 @@ function refreshOff() {
     }
   }, 80);
 }
-cvScroll.addEventListener('scroll', refreshOff, { passive: true });
+cvScroll.addEventListener('scroll', () => refreshOff(true), { passive: true });
+
+// ── the world ───────────────────────────────────────────
+//: **How far the canvas scrolls is ours to say.** The rule the user chose (2026-09-17): take the
+//: room the windows actually occupy, call that the middle square, and lay nine of them out three by
+//: three — one square of slack on every side and corner. So any window can be brought to the middle
+//: of the screen, which is where a person puts the one they are looking at.
+//:
+//: **It never shrinks while you are working.** Slack you panned into does not vanish under you; it
+//: goes when the page is reloaded or the daemon restarts, and you pull it out again. That one rule
+//: also fixes the drag: the area cannot shrink mid-drag, so the browser never clamps the scroll, so
+//: the window follows the hand. Freezing it for the length of a gesture — which was the other way to
+//: fix that — would have snapped the view 888px sideways on release (measured).
+const WORLD_SQUARES = 3;                  // three by three: the content, and one square each side
+const worldSeen = new Map();              // canvas id → the largest extent that canvas has had this session
+let worldCanvas = null;
+let cvPad = null, cvWorld = null;
+let originX = 0, originY = 0;
+
+// Built once, before anything is put on the canvas. The floor first so it stays under the windows.
+cvPad = el('div', 'cv-pad');
+cvWorld = el('div', 'cv-world');
+cvScroll.appendChild(cvPad);
+cvScroll.appendChild(cvWorld);
+
+//: The room the windows occupy, floored at the viewport — the same number the minimap scales to.
+function contentExtent() {
+  let w = cvScroll.clientWidth, h = cvScroll.clientHeight;
+  for (const t of tiles.values()) {
+    const r = t.visible() && layout[t.id];
+    if (!r) continue;
+    w = Math.max(w, r.x + r.w + GAP);
+    h = Math.max(h, r.y + r.h + GAP);
+  }
+  return { w, h };
+}
+
+function sizeWorld() {
+  if (!cvPad) return;
+  const c = contentExtent();
+  const seen = worldSeen.get(current) || { w: 0, h: 0 };
+  const w = Math.max(seen.w, c.w), h = Math.max(seen.h, c.h);
+  worldSeen.set(current, { w, h });
+  const dx = w - originX, dy = h - originY;
+  const same = worldCanvas === current;
+  worldCanvas = current;
+  originX = w; originY = h;
+  cvWorld.style.left = w + 'px';
+  cvWorld.style.top = h + 'px';
+  cvPad.style.width = (w * WORLD_SQUARES) + 'px';
+  cvPad.style.height = (h * WORLD_SQUARES) + 'px';
+  // **Moving the origin must not slide the canvas under the hand.** Everything inside .cv-world
+  // shifts by the same amount, so the scroll goes with it and the screen does not change.
+  if (same) {
+    if (dx) cvScroll.scrollLeft += dx;
+    if (dy) cvScroll.scrollTop += dy;
+  } else {
+    // A different canvas: start at its top-left corner rather than wherever the last one was left.
+    cvScroll.scrollLeft = w;
+    cvScroll.scrollTop = h;
+  }
+}
 
 // ── grab and drag the canvas ──────────────────────────────
 // Press on empty space and drag and the view follows the hand (like a map). The scrollbars and the wheel stay;
@@ -3204,8 +3267,12 @@ function renderMinimap() {
 }
 // The whole of the scroll handler. It reads scrollLeft/scrollTop and writes a transform. It never reads layout.
 function mmMove() {
+  // **The minimap keeps drawing the windows' own room, not the slack around it** (user, 2026-09-17) —
+  // otherwise exploring empty space would shrink the scale and push the windows into a corner. The
+  // price is that panning into the slack takes this rectangle off the edge, which is the truth.
   mmVpEl.style.transform =
-    'translate(' + (mmOx + cvScroll.scrollLeft * mmK) + 'px, ' + (mmOy + cvScroll.scrollTop * mmK) + 'px)';
+    'translate(' + (mmOx + (cvScroll.scrollLeft - originX) * mmK) + 'px, ' +
+                   (mmOy + (cvScroll.scrollTop - originY) * mmK) + 'px)';
 }
 cvScroll.addEventListener('scroll', mmMove, { passive: true });
 
@@ -3214,8 +3281,9 @@ cvScroll.addEventListener('scroll', mmMove, { passive: true });
   let box = null;
   const seek = (ev) => {
     if (!box || !mmK) return;
-    cvScroll.scrollLeft = Math.max(0, (ev.clientX - box.left - mmOx) / mmK - cvW / 2);
-    cvScroll.scrollTop = Math.max(0, (ev.clientY - box.top - mmOy) / mmK - cvH / 2);
+    // The minimap draws the windows' own room, so what comes out of it is a board coordinate.
+    cvScroll.scrollLeft = Math.max(0, originX + (ev.clientX - box.left - mmOx) / mmK - cvW / 2);
+    cvScroll.scrollTop = Math.max(0, originY + (ev.clientY - box.top - mmOy) / mmK - cvH / 2);
   };
   const up = () => {
     box = null;
@@ -4427,6 +4495,9 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // can also be asked directly — the cascade and the round limit need more windows than a
                   // hand can comfortably drag into place one at a time.
                   pushAside, applyPush, hits, firstFree,
+                  // The world: how far the canvas scrolls and where the board's origin sits. A test
+                  // has to be able to ask both, because the bug they fix was arithmetic nobody could see.
+                  sizeWorld, contentExtent, origin: () => ({ x: originX, y: originY }),
                   // Groups: the model is testable without a hand, the gesture needs one.
                   groupOf, groupRect, joinGroups, leaveGroup, paneOver, joinPreview, setGauge, compactGroup, dropInto, settle, paintGroups,
                   // Undo: one way back for everything that moves a window.

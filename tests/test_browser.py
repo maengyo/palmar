@@ -697,6 +697,136 @@ class NoTitleBar(unittest.TestCase):
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class TheWorldAroundTheWindows(unittest.TestCase):
+    """How far the canvas scrolls, and that a drag does not fight it.
+
+    What was wrong, both measured on 2026-09-16. `.cv-scroll` was an `overflow:auto` box holding
+    absolutely positioned windows, so how far it scrolled was whatever the browser worked out from
+    their boxes — `max(viewport, their bounding box)` and not a pixel more.
+
+    (A) **A window could never be put in the middle of the screen.** At full scroll the furthest
+    window's far edge sits flush against the viewport's, so its centre lands `(viewport - window)/2`
+    short — a constant, whatever the window's position. Measured 189px across and 168.5px down.
+
+    (B) **Dragging the window that alone defined that area moved it nowhere.** Every pointermove
+    wrote the window's left/top, the browser shrank the area in the same frame, and the scroll was
+    clamped by exactly as much — so screen position = left - scrollLeft did not change. Over 24
+    samples the hand travelled 888x556px and the window's screen x stayed 634 the whole way.
+
+    Both are one rule now (user, 2026-09-17): take the room the windows occupy, call it the middle
+    square, and lay nine of them out three by three. And **it never shrinks while the page is open**,
+    which is what stops the drag fighting the scroll — no shrink, no clamp."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        # Scrollbars on: hiding them makes clientWidth 14px wider than a person ever sees, and these
+        # tests are all about scroll arithmetic.
+        cls.b = Browser(scrollbars=True).start()
+        cls.b.open(cls.d.url)
+        cls.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          await fetch('/api/sessions?token='+T,{method:'POST',
+            headers:{'content-type':'application/json'},
+            body:JSON.stringify({cwd:%s,name:'far'})});})()""" % json.dumps(cls.d.home))
+        time.sleep(5)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    PUT = """
+      const P = window.palmar, L = P.layout(), S = document.getElementById('cv-scroll');
+      const by = (n) => [...P.tiles.values()].find((t) => t.s.name === n);
+      const put = (n, x, y, w, h) => { const t = by(n);
+        L[t.id] = Object.assign({}, L[t.id], {x:x, y:y, w:w, h:h});
+        t.el.style.transition='none';
+        t.el.style.left=x+'px'; t.el.style.top=y+'px'; t.el.style.width=w+'px'; t.el.style.height=h+'px';
+        void t.el.offsetWidth; t.el.style.transition='';
+        P.sizeWorld();
+        return t.id; };
+    """
+
+    def js(self, body):
+        return self.b.ev("(()=>{" + self.PUT + "\n" + body + "})()")
+
+    def test_the_world_is_three_squares_by_three_with_the_windows_in_the_middle(self):
+        r = self.js("""
+          put('far', 1600, 1100, 520, 360);
+          const pad = document.querySelector('.cv-pad'), w = document.querySelector('.cv-world');
+          return {padW: pad.offsetWidth, padH: pad.offsetHeight,
+                  ox: parseFloat(w.style.left), oy: parseFloat(w.style.top),
+                  content: P.contentExtent()};
+        """)
+        c = r["content"]
+        self.assertEqual(r["padW"], c["w"] * 3, "the world is not three squares across")
+        self.assertEqual(r["padH"], c["h"] * 3, "the world is not three squares down")
+        self.assertEqual(r["ox"], c["w"], "the windows do not start one square in")
+        self.assertEqual(r["oy"], c["h"], "the windows do not start one square down")
+
+    def test_a_window_at_the_far_corner_can_be_brought_to_the_middle_of_the_screen(self):
+        """(A). Before the slack existed this was short by (viewport - window)/2 every time."""
+        r = self.js("""
+          const id = put('far', 1600, 1100, 520, 360);
+          // Ask for the scroll that would centre it, then report where it actually landed.
+          const L2 = P.layout()[id], W = document.querySelector('.cv-world');
+          const ox = parseFloat(W.style.left), oy = parseFloat(W.style.top);
+          S.scrollLeft = ox + L2.x + L2.w / 2 - S.clientWidth / 2;
+          S.scrollTop  = oy + L2.y + L2.h / 2 - S.clientHeight / 2;
+          const r2 = by('far').el.getBoundingClientRect(), box = S.getBoundingClientRect();
+          return {cx: r2.left + r2.width / 2 - box.left, cy: r2.top + r2.height / 2 - box.top,
+                  vx: S.clientWidth / 2, vy: S.clientHeight / 2};
+        """)
+        self.assertLess(abs(r["cx"] - r["vx"]), 2, "it could not be centred across: " + repr(r))
+        self.assertLess(abs(r["cy"] - r["vy"]), 2, "it could not be centred down: " + repr(r))
+
+    def test_the_world_does_not_shrink_while_the_page_is_open(self):
+        """The slack you panned into does not vanish under you. It goes on a reload, not before."""
+        r = self.js("""
+          put('far', 1600, 1100, 520, 360);
+          const big = document.querySelector('.cv-pad').offsetWidth;
+          put('far', 40, 40, 520, 360);              // back into the corner
+          return {big: big, after: document.querySelector('.cv-pad').offsetWidth};
+        """)
+        self.assertEqual(r["after"], r["big"], "the world shrank under the user: " + repr(r))
+
+    def test_dragging_the_window_that_defines_the_world_moves_it_on_screen(self):
+        """(B), with a real hand. The window used to stay put on screen however far the hand went."""
+        # Scroll to where the old code's maximum was — the far edge of the windows' own room. Going
+        # to the real maximum now lands in the slack, with the window off screen and nothing to grab.
+        self.js("""
+          put('far', 1600, 1100, 520, 360);
+          const c = P.contentExtent(), o = P.origin();
+          S.scrollLeft = o.x + c.w - S.clientWidth;
+          S.scrollTop  = o.y + c.h - S.clientHeight;
+          return 1;""")
+        before = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name==='far');
+          const r=t.el.getBoundingClientRect(); return {x:r.left, y:r.top};})()""")
+        box = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name==='far');
+          const r = t.el.querySelector('.tb').getBoundingClientRect();
+          return {x: r.left + r.width/2, y: r.top + r.height/2};})()""")
+        x, y = box["x"], box["y"]
+        send = lambda **kw: self.b.ws.call("Input.dispatchMouseEvent", dict(button="left", **kw))
+        send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        # **No two steps alike.** A hand does not move in equal increments (AGENTS.md; and an earlier
+        # test that did exactly that hid a bug), so the offsets are uneven and never repeat.
+        steps = [(-37 * i - (i % 3), -23 * i - (i % 5)) for i in range(1, 13)]
+        for dx, dy in steps:
+            send(type="mouseMoved", x=x + dx, y=y + dy, buttons=1)
+        last = steps[-1]
+        send(type="mouseReleased", x=x + last[0], y=y + last[1], clickCount=1, buttons=0)
+        time.sleep(0.6)
+        after = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name==='far');
+          const r=t.el.getBoundingClientRect(); return {x:r.left, y:r.top};})()""")
+        moved = (after["x"] - before["x"], after["y"] - before["y"])
+        # The hand went `last`; the window should have gone with it, give or take the drop settling.
+        self.assertLess(abs(moved[0] - last[0]), 12,
+                        "the window did not follow the hand across: hand %r, window %r" % (last, moved))
+        self.assertLess(abs(moved[1] - last[1]), 12,
+                        "the window did not follow the hand down: hand %r, window %r" % (last, moved))
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
 class PushAside(unittest.TestCase):
     """Windows do not overlap. Drop one on another and the one that was there gets out of the way.
 
