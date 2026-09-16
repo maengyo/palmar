@@ -790,6 +790,67 @@ class TheWorldAroundTheWindows(unittest.TestCase):
         """)
         self.assertEqual(r["after"], r["big"], "the world shrank under the user: " + repr(r))
 
+    def test_the_world_is_sized_without_being_told(self):
+        """The other tests here call sizeWorld through the bench, which proves the arithmetic and not
+        that anything runs it. This one touches nothing and reads what the page did on its own — the
+        gap that let "the slack is there" and "the slack appears" be two different things."""
+        r = self.b.ev("""(()=>{const S=document.getElementById('cv-scroll');
+          const pad=document.querySelector('.cv-pad'), w=document.querySelector('.cv-world');
+          return {pad: !!pad, world: !!w, padW: pad?pad.offsetWidth:0, padH: pad?pad.offsetHeight:0,
+                  ox: w?parseFloat(w.style.left):0, oy: w?parseFloat(w.style.top):0,
+                  cw: S.clientWidth, ch: S.clientHeight};})()""")
+        self.assertTrue(r["pad"] and r["world"], "the world was never built: " + repr(r))
+        self.assertGreaterEqual(r["padW"], r["cw"] * 3 - 2, "no slack across: " + repr(r))
+        self.assertGreaterEqual(r["padH"], r["ch"] * 3 - 2, "no slack down: " + repr(r))
+        self.assertGreater(r["ox"], 0, "the board does not start one square in: " + repr(r))
+        self.assertGreater(r["oy"], 0, "the board does not start one square down: " + repr(r))
+
+    def test_a_window_can_be_carried_past_the_origin(self):
+        """The slack was somewhere you could look but not put anything: the drag clamped every window
+        at board zero, so panning into the empty space above and to the left and dragging a window
+        there stopped it dead at the edge of the ones already placed (user, 2026-09-17). And because
+        a window was always pinned to the corner, tidy had nothing to close up and its button sat
+        disabled — one cause, two complaints."""
+        # **Scroll to it first.** The world is three screens wide, so a window placed by the bench is
+        # very often nowhere near the view — and a title bar that is off screen cannot be grabbed.
+        self.js("""
+          const id = put('far', 60, 50, 300, 200);
+          const o = P.origin(), q = P.layout()[id];
+          S.scrollLeft = o.x + q.x - 420;      // room on screen to carry it past the origin
+          S.scrollTop  = o.y + q.y - 300;
+          return 1;""")
+        time.sleep(0.3)
+        box = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name==='far');
+          const r = t.el.querySelector('.tb').getBoundingClientRect();
+          return {x: r.left + r.width/2, y: r.top + r.height/2};})()""")
+        send = lambda **kw: self.b.ws.call("Input.dispatchMouseEvent", dict(button="left", **kw))
+        send(type="mousePressed", x=box["x"], y=box["y"], clickCount=1, buttons=1)
+        for i in range(1, 11):
+            send(type="mouseMoved", x=box["x"] - 30 * i - (i % 3), y=box["y"] - 22 * i - (i % 5), buttons=1)
+        send(type="mouseReleased", x=box["x"] - 300, y=box["y"] - 220, clickCount=1, buttons=0)
+        time.sleep(0.8)
+        r = self.b.ev("""(()=>{const P=window.palmar, L=P.layout(), o=P.origin();
+          const t=[...P.tiles.values()].find(t=>t.s.name==='far'); const q=L[t.id];
+          const pad=document.querySelector('.cv-pad');
+          const mm=document.getElementById('mm'), mb=mm.getBoundingClientRect();
+          const inside=[...mm.querySelectorAll('.mm-t')].every(e=>{const b=e.getBoundingClientRect();
+            return b.left>=mb.left-1&&b.top>=mb.top-1&&b.right<=mb.right+1&&b.bottom<=mb.bottom+1;});
+          return {x:q.x, y:q.y, onPad:[o.x+q.x, o.y+q.y], padW:pad.offsetWidth, padH:pad.offsetHeight,
+                  mmInside:inside, tidyOff:document.getElementById('tidy').disabled};})()""")
+        self.assertLess(r["x"], 0, "the window was still stopped at the origin: " + repr(r))
+        self.assertLess(r["y"], 0, "the window was still stopped at the origin: " + repr(r))
+        # **The pad has to have grown to hold it.** A board coordinate may be negative; a place on the
+        # scrolled canvas may not, or the window would sit where nothing can scroll to.
+        self.assertGreaterEqual(r["onPad"][0], 0, "it landed off the front of the canvas: " + repr(r))
+        self.assertGreaterEqual(r["onPad"][1], 0, "it landed off the top of the canvas: " + repr(r))
+        self.assertTrue(r["mmInside"], "the minimap drew a window outside its own box: " + repr(r))
+        self.assertFalse(r["tidyOff"], "tidy still says there is nothing to close up: " + repr(r))
+        back = self.b.ev("""(()=>{const P=window.palmar, L=P.layout();
+          const t=[...P.tiles.values()].find(t=>t.s.name==='far');
+          document.getElementById('tidy').click();
+          return [L[t.id].x, L[t.id].y];})()""")
+        self.assertEqual(back, [12, 12], "tidy did not pull it back to the corner: " + repr(back))
+
     def test_dragging_the_window_that_defines_the_world_moves_it_on_screen(self):
         """(B), with a real hand. The window used to stay put on screen however far the hand went."""
         # Scroll to where the old code's maximum was — the far edge of the windows' own room. Going

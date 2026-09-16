@@ -1200,13 +1200,12 @@ class Tile {
       const dx = ev.clientX - sx, dy = ev.clientY - sy;
       // Move the minimap rectangle along using **the value just computed** — do not ask the DOM again
       if (mode === 'move') {
-        // Everyone in the party moves by the same amount, clamped so no member crosses the origin.
-        let mdx = dx, mdy = dy;
-        for (const id of party) {
-          const st = starts.get(id);
-          mdx = Math.max(mdx, -st.x);
-          mdy = Math.max(mdy, -st.y);
-        }
+        // **A window may be carried past the origin.** It used to be clamped there, which made the
+        // room around the canvas somewhere you could look but not put anything — pan into the empty
+        // space above and to the left, try to drag a window there, and it stopped dead at the edge of
+        // the windows already placed (user, 2026-09-17). Board coordinates go negative now; the world
+        // holds the origin far enough in that the pad still starts at zero.
+        const mdx = dx, mdy = dy;
         for (const id of party) {
           const t = tiles.get(id), st = starts.get(id), r = layout[id];
           if (!t || !r) continue;
@@ -1667,8 +1666,8 @@ cvScroll.addEventListener('drop', (ev) => {
   ev.preventDefault();
   const box = cvScroll.getBoundingClientRect();
   // The board's coordinates start at the world's origin, not the scroller's (see "the world").
-  const at = { x: Math.max(0, Math.round(ev.clientX - box.left + cvScroll.scrollLeft - originX - 60)),
-               y: Math.max(0, Math.round(ev.clientY - box.top + cvScroll.scrollTop - originY - 15)) };
+  const at = { x: Math.round(ev.clientX - box.left + cvScroll.scrollLeft - originX - 60),
+               y: Math.round(ev.clientY - box.top + cvScroll.scrollTop - originY - 15) };
   openViewer(path, current, at);
   dragFile = null;
 });
@@ -1734,8 +1733,11 @@ function lastLine(term) {
 function tidySlack(canvasId) {
   const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
   if (!mine.length) return 0;
-  return Math.max(0, Math.min(...mine.map((t) => layout[t.id].x)) - GAP)
-       + Math.max(0, Math.min(...mine.map((t) => layout[t.id].y)) - GAP);
+  // **Either way.** A window carried into the slack sits at a negative coordinate, and pulling the
+  // canvas back to its corner from out there is closing up just as much as pulling it in from below
+  // and to the right.
+  return Math.abs(Math.min(...mine.map((t) => layout[t.id].x)) - GAP)
+       + Math.abs(Math.min(...mine.map((t) => layout[t.id].y)) - GAP);
 }
 
 function paintTidy() {
@@ -1753,8 +1755,8 @@ function tidyCanvas(canvasId) {
   if (!mine.length) return false;
   const dx = Math.min(...mine.map((t) => layout[t.id].x)) - GAP;
   const dy = Math.min(...mine.map((t) => layout[t.id].y)) - GAP;
-  if (dx <= 0 && dy <= 0) return false;
-  const sx = Math.max(0, dx), sy = Math.max(0, dy);
+  if (dx === 0 && dy === 0) return false;
+  const sx = dx, sy = dy;                    // signed: the corner may be above and to the left
   const l0 = cvScroll.scrollLeft, t0 = cvScroll.scrollTop;
   // **Write the intended value instead of reading it back.** `persist()` reads `offsetLeft`, but the position has
   // a transition on it, so that value is a **mid-move** one — save it as-is and the old position goes back in and
@@ -2017,9 +2019,9 @@ function joinPreview(overId, side, meId) {
   const r = layout[overId], me = layout[meId];
   if (!r || !me) return null;
   if (side === 'right') return { x: r.x + r.w + GAP, y: r.y, w: me.w, h: me.h };
-  if (side === 'left') return { x: Math.max(0, r.x - GAP - me.w), y: r.y, w: me.w, h: me.h };
+  if (side === 'left') return { x: r.x - GAP - me.w, y: r.y, w: me.w, h: me.h };
   if (side === 'below') return { x: r.x, y: r.y + r.h + GAP, w: me.w, h: me.h };
-  return { x: r.x, y: Math.max(0, r.y - GAP - me.h), w: me.w, h: me.h };
+  return { x: r.x, y: r.y - GAP - me.h, w: me.w, h: me.h };
 }
 
 //: **Two ways of showing the hold, and the person picks.** `ring` runs a line round the border of the
@@ -2817,39 +2819,48 @@ cvScroll.appendChild(cvWorld);
 
 //: The room the windows occupy, floored at the viewport — the same number the minimap scales to.
 function contentExtent() {
-  let w = cvScroll.clientWidth, h = cvScroll.clientHeight;
+  // `lx`/`ly` are at most 0 and `hx`/`hy` at least the viewport, so the span is never smaller than
+  // one screen — and a window carried into the slack pulls the near edge negative rather than
+  // being stopped at it.
+  let lx = 0, ly = 0, hx = cvScroll.clientWidth, hy = cvScroll.clientHeight;
   for (const t of tiles.values()) {
     const r = t.visible() && layout[t.id];
     if (!r) continue;
-    w = Math.max(w, r.x + r.w + GAP);
-    h = Math.max(h, r.y + r.h + GAP);
+    lx = Math.min(lx, r.x - GAP);
+    ly = Math.min(ly, r.y - GAP);
+    hx = Math.max(hx, r.x + r.w + GAP);
+    hy = Math.max(hy, r.y + r.h + GAP);
   }
-  return { w, h };
+  return { lx, ly, hx, hy, w: hx - lx, h: hy - ly };
 }
 
 function sizeWorld() {
   if (!cvPad) return;
   const c = contentExtent();
-  const seen = worldSeen.get(current) || { w: 0, h: 0 };
-  const w = Math.max(seen.w, c.w), h = Math.max(seen.h, c.h);
-  worldSeen.set(current, { w, h });
-  const dx = w - originX, dy = h - originY;
+  const seen = worldSeen.get(current) || { ox: 0, oy: 0, w: 0, h: 0 };
+  // Where board zero sits inside the pad: one square of slack, plus however far the windows have
+  // gone the other side of zero. `c.lx` is negative or zero, so this only ever adds.
+  const ox = Math.max(seen.ox, c.w - c.lx), oy = Math.max(seen.oy, c.h - c.ly);
+  // And the pad runs one more square past the far edge.
+  const w = Math.max(seen.w, ox + c.hx + c.w), h = Math.max(seen.h, oy + c.hy + c.h);
+  worldSeen.set(current, { ox, oy, w, h });
+  const dx = ox - originX, dy = oy - originY;
   const same = worldCanvas === current;
   worldCanvas = current;
-  originX = w; originY = h;
-  cvWorld.style.left = w + 'px';
-  cvWorld.style.top = h + 'px';
-  cvPad.style.width = (w * WORLD_SQUARES) + 'px';
-  cvPad.style.height = (h * WORLD_SQUARES) + 'px';
+  originX = ox; originY = oy;
+  cvWorld.style.left = ox + 'px';
+  cvWorld.style.top = oy + 'px';
+  cvPad.style.width = w + 'px';
+  cvPad.style.height = h + 'px';
   // **Moving the origin must not slide the canvas under the hand.** Everything inside .cv-world
   // shifts by the same amount, so the scroll goes with it and the screen does not change.
   if (same) {
     if (dx) cvScroll.scrollLeft += dx;
     if (dy) cvScroll.scrollTop += dy;
   } else {
-    // A different canvas: start at its top-left corner rather than wherever the last one was left.
-    cvScroll.scrollLeft = w;
-    cvScroll.scrollTop = h;
+    // A different canvas: start where its windows start rather than wherever the last one was left.
+    cvScroll.scrollLeft = ox + c.lx;
+    cvScroll.scrollTop = oy + c.ly;
   }
 }
 
@@ -3213,13 +3224,14 @@ function tabDrag(tabEl) {
 // the rule, not performance (AGENTS.md "창마다 값을 내리지 말고 스토어에서 직접 읽어라").
 const mmRects = new Map();          // id → minimap rectangle DOM
 let mmK = 1, mmOx = 0, mmOy = 0;    // scale and the centring margins
+let mmLx = 0, mmLy = 0;             // the near edge of what the windows reach — it can be negative
 let cvW = 0, cvH = 0;               // canvas viewport size — held so it is not re-measured during a scroll
 
 function mmSet(id, x, y, w, h) {    // place a rectangle using only values we already know
   const e = mmRects.get(id);
   if (!e) return;
-  e.style.left = (mmOx + x * mmK) + 'px';
-  e.style.top = (mmOy + y * mmK) + 'px';
+  e.style.left = (mmOx + (x - mmLx) * mmK) + 'px';
+  e.style.top = (mmOy + (y - mmLy) * mmK) + 'px';
   e.style.width = Math.max(2, w * mmK) + 'px';
   e.style.height = Math.max(2, h * mmK) + 'px';
 }
@@ -3242,13 +3254,11 @@ function renderMinimap() {
   mmEl.hidden = false;
   cvW = cvScroll.clientWidth; cvH = cvScroll.clientHeight;
   const bw = mmEl.clientWidth - MM_PAD * 2, bh = mmEl.clientHeight - MM_PAD * 2;
-  // The world is as big as the canvas has grown (⑩: no limit) — it never gets smaller than the viewport
-  let worldW = cvW, worldH = cvH;
-  for (const t of list) {
-    const r = layout[t.id];
-    worldW = Math.max(worldW, r.x + r.w + GAP);
-    worldH = Math.max(worldH, r.y + r.h + GAP);
-  }
+  // **What the windows reach, near edge included** — the same span sizeWorld uses, so the two cannot
+  // disagree. It never gets smaller than the viewport (⑩: no limit the other way).
+  const ext = contentExtent();
+  const worldW = ext.w, worldH = ext.h;
+  mmLx = ext.lx; mmLy = ext.ly;
   mmK = Math.min(bw / worldW, bh / worldH);   // one scale for both axes. Stretch them apart and the shapes lie
   mmOx = MM_PAD + (bw - worldW * mmK) / 2;
   mmOy = MM_PAD + (bh - worldH * mmK) / 2;
@@ -3271,8 +3281,8 @@ function mmMove() {
   // otherwise exploring empty space would shrink the scale and push the windows into a corner. The
   // price is that panning into the slack takes this rectangle off the edge, which is the truth.
   mmVpEl.style.transform =
-    'translate(' + (mmOx + (cvScroll.scrollLeft - originX) * mmK) + 'px, ' +
-                   (mmOy + (cvScroll.scrollTop - originY) * mmK) + 'px)';
+    'translate(' + (mmOx + (cvScroll.scrollLeft - originX - mmLx) * mmK) + 'px, ' +
+                   (mmOy + (cvScroll.scrollTop - originY - mmLy) * mmK) + 'px)';
 }
 cvScroll.addEventListener('scroll', mmMove, { passive: true });
 
@@ -3282,8 +3292,8 @@ cvScroll.addEventListener('scroll', mmMove, { passive: true });
   const seek = (ev) => {
     if (!box || !mmK) return;
     // The minimap draws the windows' own room, so what comes out of it is a board coordinate.
-    cvScroll.scrollLeft = Math.max(0, originX + (ev.clientX - box.left - mmOx) / mmK - cvW / 2);
-    cvScroll.scrollTop = Math.max(0, originY + (ev.clientY - box.top - mmOy) / mmK - cvH / 2);
+    cvScroll.scrollLeft = Math.max(0, originX + mmLx + (ev.clientX - box.left - mmOx) / mmK - cvW / 2);
+    cvScroll.scrollTop = Math.max(0, originY + mmLy + (ev.clientY - box.top - mmOy) / mmK - cvH / 2);
   };
   const up = () => {
     box = null;
