@@ -3477,14 +3477,14 @@ async def handle_request(reader, writer) -> None:
         writer.write(http(405))
         return
     if path.startswith("/once/"):
-        # The one-time address a command line carried (launch_target): spent on first use, dead
-        # after a minute. Anything else gets a page, not the key.
+        # The short-lived address a command line carried (launch_target): good for its seconds,
+        # dead after. Anything else gets a page, not the key.
         if take_once(path[len("/once/"):]):
             writer.write(http(302, b"", extra=f"Location: /?k={KEY[0]}\r\n"))
             return
         writer.write(http(404, b"<!doctype html><meta charset=\"utf-8\"><title>palmar</title>"
                           b"<p style=\"font:15px system-ui;margin:12vh auto;max-width:34rem\">"
-                          b"This link opened palmar once and is spent. Run <code>palmar</code> again.</p>",
+                          b"This link to palmar has expired. Run <code>palmar</code> again.</p>",
                           "text/html; charset=utf-8", head_only=(method == "HEAD")))
         return
     if path == "/manifest.webmanifest":
@@ -3910,6 +3910,15 @@ def installed_pwa(env=None, exists=None, platform=None, kind=None, appdata=None,
             for rel in rels:
                 if exists(base + "\\" + rel):
                     return base + "\\" + rel
+            # Browsers move the shortcut about (Chrome: "Chrome Apps", Edge: Programs itself, both
+            # sometimes a folder of their own) — walk the Start Menu two levels down for it, and look
+            # on the Desktop, where the install dialog also offers to put one.
+            hit = shortcut_under(base + r"\Microsoft\Windows\Start Menu\Programs")
+            if hit:
+                return hit
+            desk = (env.get("USERPROFILE") or "").rstrip("\\")
+            if desk and exists(desk + r"\Desktop\palmar.lnk"):
+                return desk + r"\Desktop\palmar.lnk"
     elif platform.startswith("linux"):
         kind = wsl_kind(env=env) if kind is None else kind
         if kind:
@@ -3928,6 +3937,21 @@ def installed_pwa(env=None, exists=None, platform=None, kind=None, appdata=None,
                         "Applications/Chromium Apps.localized/palmar.app"):
                 if exists(home + "/" + rel):
                     return home + "/" + rel
+    return ""
+
+
+def shortcut_under(root: str, depth: int = 2) -> str:
+    """`palmar.lnk` anywhere up to `depth` levels under `root`, case-insensitively, or ''."""
+    root = os.path.normpath(root)
+    try:
+        for cur, dirs, files in os.walk(root):
+            if cur[len(root):].count(os.sep) >= depth:
+                dirs[:] = []
+            for f in files:
+                if f.lower() == "palmar.lnk":
+                    return os.path.join(cur, f)
+    except OSError:
+        pass
     return ""
 
 
@@ -4126,10 +4150,15 @@ def show_page(url: str, web: bool = False) -> str:
     return lead + note
 
 
-#: One opening each: a nonce that `GET /once/<nonce>` turns into the keyed address once, within a
-#: minute. What goes on a command line where the keyed address cannot be replaced by a file.
+#: A short-lived address: a nonce that `GET /once/<nonce>` turns into the keyed address for thirty
+#: seconds. What goes on a command line where the keyed address cannot be replaced by a file.
+#: **Not spent on first use** — it was, and Chrome fetched it twice: handed `--app=URL` for an origin
+#: whose app is installed, it loads the URL and then moves it into the installed app's window, and
+#: the second load met "this link is spent" (user, 2026-09-16, Windows). Where this address is used
+#: — Windows, and WSL whose distro belongs to one Windows user — argv is not readable across
+#: accounts, so the seconds are the guard, not the count.
 ONCE: dict = {}
-ONCE_TTL_S = 60
+ONCE_TTL_S = 30
 OPEN_FILE = RUN_DIR / "open.html"
 
 
@@ -4143,8 +4172,14 @@ def mint_once() -> str:
 
 
 def take_once(n: str) -> bool:
-    exp = ONCE.pop(n, None)
-    return exp is not None and exp >= time.time()
+    """Is this nonce still good? Any number of times inside its seconds; nothing after."""
+    exp = ONCE.get(n)
+    if exp is None:
+        return False
+    if exp < time.time():
+        ONCE.pop(n, None)
+        return False
+    return True
 
 
 def launch_target(url: str, platform=None, kind=None) -> str:
@@ -4159,7 +4194,7 @@ def launch_target(url: str, platform=None, kind=None) -> str:
     On a Mac or a Linux the browser gets a **file**: `~/.palmar/run/open.html`, 0600, a refresh to
     the keyed address. argv shows a path only this uid can read. Where a file cannot cross — from
     WSL to the Windows browser, or on Windows itself — it gets a **one-time address**,
-    `/once/<nonce>`, that the daemon turns into the keyed one exactly once, within a minute."""
+    `/once/<nonce>`, that the daemon turns into the keyed one for thirty seconds."""
     platform = sys.platform if platform is None else platform
     kind = wsl_kind() if kind is None else kind      # from the environment, so a test can say "WSL" anywhere
     if platform == "win32" or kind:

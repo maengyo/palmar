@@ -1665,7 +1665,9 @@ class TheAddressDiesWithTheDaemon(unittest.TestCase):
 
 class OnWslTheAddressOpensOnce(unittest.TestCase):
     """From WSL the browser is on the Windows side and a Linux file cannot cross, so the command
-    line carries a one-time address: /once/<nonce> turns into the keyed address exactly once."""
+    line carries a short-lived address: /once/<nonce> turns into the keyed address for thirty
+    seconds — any number of times inside them, since Chrome fetches --app= twice when the app is
+    installed (user, 2026-09-16), and never after."""
 
     def test_the_nonce_opens_once(self):
         box = tempfile.mkdtemp(prefix="palmar-once-")
@@ -1692,7 +1694,8 @@ class OnWslTheAddressOpensOnce(unittest.TestCase):
             self.assertEqual(code, 302)
             self.assertEqual(headers.get("Location"), "/?k=" + d.url.split("k=", 1)[1])
             code, _ = self.head(base + path)
-            self.assertEqual(code, 404, "the one-time address opened twice")
+            self.assertEqual(code, 302, "a second fetch inside the seconds must work — Chrome fetches --app= twice when the app is installed")
+            self.assertEqual(self.head(base + "/once/never-minted")[0], 404)
 
     def head(self, url):
         import http.client

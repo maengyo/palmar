@@ -797,6 +797,24 @@ class TheInstalledApp(unittest.TestCase):
     Windows, the .app they made on a Mac. Nothing of this can run on the machine the test runs on, so
     the lookup is pure and measured here."""
 
+    def test_a_shortcut_anywhere_under_the_start_menu_is_found(self):
+        """Chrome puts it under "Chrome Apps", Edge under Programs, either sometimes in a folder of
+        its own — the fixed two paths missed on a real Windows (user, 2026-09-16)."""
+        root = tempfile.mkdtemp(prefix="palmar-startmenu-")
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        deep = os.path.join(root, "Some Browser", "Apps")
+        os.makedirs(deep)
+        with open(os.path.join(deep, "Palmar.lnk"), "wb") as fh:
+            fh.write(b"lnk")
+        self.assertEqual(D.shortcut_under(root), os.path.join(deep, "Palmar.lnk"))
+        self.assertEqual(D.shortcut_under(os.path.join(root, "nowhere")), "")
+        too_deep = os.path.join(root, "a", "b", "c")
+        os.makedirs(too_deep)
+        with open(os.path.join(too_deep, "palmar.lnk"), "wb") as fh:
+            fh.write(b"lnk")
+        os.remove(os.path.join(deep, "Palmar.lnk"))
+        self.assertEqual(D.shortcut_under(root), "", "three levels down is not the Start Menu any more")
+
     def test_windows_finds_the_start_menu_shortcut(self):
         env = {"APPDATA": r"C:\Users\me\AppData\Roaming"}
         edge = r"C:\Users\me\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\palmar.lnk"
@@ -891,8 +909,10 @@ class TheKeyStaysOffTheCommandLine(unittest.TestCase):
         self.assertTrue(t.startswith("http://127.0.0.1:8801/once/"), t)
         self.assertNotIn("SECRET", t)
         n = t.rsplit("/", 1)[1]
-        self.assertTrue(D.take_once(n), "the nonce did not open once")
-        self.assertFalse(D.take_once(n), "the nonce opened twice")
+        self.assertTrue(D.take_once(n), "the nonce did not open")
+        self.assertTrue(D.take_once(n), "a second fetch inside the seconds must work — Chrome fetches --app= twice when the app is installed")
+        D.ONCE[n] = 0                                # the seconds ran out
+        self.assertFalse(D.take_once(n), "an expired nonce opened")
         t = D.launch_target("http://127.0.0.1:8801/?k=SECRET", platform="linux", kind="wsl")
         self.assertTrue(t.startswith("http://127.0.0.1:8801/once/"))
 
@@ -901,6 +921,7 @@ class TheKeyStaysOffTheCommandLine(unittest.TestCase):
         n = D.mint_once()
         D.ONCE[n] = 0                                # expired
         self.assertFalse(D.take_once(n))
+        self.assertNotIn(n, D.ONCE, "an expired nonce is forgotten, not kept")
 
 
 if __name__ == "__main__":
