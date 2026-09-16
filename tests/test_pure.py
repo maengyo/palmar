@@ -905,6 +905,8 @@ class TheKeyStaysOffTheCommandLine(unittest.TestCase):
 
     def test_windows_and_wsl_get_a_one_time_address(self):
         D.PORT[0] = 8801
+        D.SERVING[0] = True                          # the daemon itself mints; see the test below for the other case
+        self.addCleanup(lambda: D.SERVING.__setitem__(0, False))
         t = D.launch_target("http://127.0.0.1:8801/?k=SECRET", platform="win32")
         self.assertTrue(t.startswith("http://127.0.0.1:8801/once/"), t)
         self.assertNotIn("SECRET", t)
@@ -915,6 +917,18 @@ class TheKeyStaysOffTheCommandLine(unittest.TestCase):
         self.assertFalse(D.take_once(n), "an expired nonce opened")
         t = D.launch_target("http://127.0.0.1:8801/?k=SECRET", platform="linux", kind="wsl")
         self.assertTrue(t.startswith("http://127.0.0.1:8801/once/"))
+
+    def test_a_process_that_is_not_the_daemon_does_not_mint(self):
+        """A second `palmar` minting in its own memory gave the browser an address the daemon had
+        never seen — "expired" (user, 2026-09-16). It asks the daemon; with none to ask (here), the
+        keyed address itself goes, which on these platforms is the boundary it had anyway."""
+        D.SERVING[0] = False
+        with mock.patch.object(D, "once_from_daemon", return_value=""):
+            self.assertEqual(D.launch_target("http://127.0.0.1:8801/?k=SECRET", platform="win32"),
+                             "http://127.0.0.1:8801/?k=SECRET")
+        with mock.patch.object(D, "once_from_daemon", return_value="http://127.0.0.1:8801/once/abc"):
+            self.assertEqual(D.launch_target("http://127.0.0.1:8801/?k=SECRET", platform="linux", kind="wsl"),
+                             "http://127.0.0.1:8801/once/abc")
 
     def test_a_spent_or_unknown_nonce_is_nothing(self):
         self.assertFalse(D.take_once("never-minted"))

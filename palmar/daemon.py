@@ -3058,6 +3058,17 @@ async def handle_request(reader, writer) -> None:
             return
         writer.write(http(405))
         return
+    if path == "/api/once":
+        # A short-lived address of this daemon's own minting, for a process that is not this daemon —
+        # the second `palmar` that opens a running one on Windows or from WSL (launch_target).
+        if not token_ok:
+            writer.write(http(403))
+            return
+        if method != "POST":
+            writer.write(http(405))
+            return
+        writer.write(http_json(200, {"url": f"http://127.0.0.1:{PORT[0]}/once/{mint_once()}"}))
+        return
     if path == "/api/notify":
         # **The OS says it when the page cannot.** palmar's own window on a Mac (WKWebView) has no
         # Notification API; the page sends the title and body here and the daemon hands them to the
@@ -4160,6 +4171,10 @@ def show_page(url: str, web: bool = False) -> str:
 ONCE: dict = {}
 ONCE_TTL_S = 30
 OPEN_FILE = RUN_DIR / "open.html"
+#: True in the process that serves. A second `palmar` — the one that finds a daemon already up and
+#: opens it — is not that process, and a nonce minted in its memory is unknown to the daemon that
+#: gets the request: the browser met "this link has expired" on Windows (user, 2026-09-16).
+SERVING = [False]
 
 
 def mint_once() -> str:
@@ -4182,6 +4197,24 @@ def take_once(n: str) -> bool:
     return True
 
 
+def once_from_daemon(url: str) -> str:
+    """Ask the running daemon at `url` for a short-lived address of its own minting (POST /api/once),
+    the way _ask_to_stop asks it to stop: with the token from run/token. '' when it will not say."""
+    try:
+        token = TOKEN_FILE.read_text("utf-8").strip()
+    except OSError:
+        return ""
+    base = url.split("/?")[0]
+    req = urllib.request.Request(base + "/api/once?token=" + token, data=b"",
+                                 headers={"Origin": base}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            got = json.loads(r.read().decode("utf-8", "replace") or "{}").get("url")
+            return got if isinstance(got, str) and "/once/" in got else ""
+    except Exception:
+        return ""
+
+
 def launch_target(url: str, platform=None, kind=None) -> str:
     """What a browser is handed in place of the keyed address — never the address itself.
 
@@ -4198,7 +4231,15 @@ def launch_target(url: str, platform=None, kind=None) -> str:
     platform = sys.platform if platform is None else platform
     kind = wsl_kind() if kind is None else kind      # from the environment, so a test can say "WSL" anywhere
     if platform == "win32" or kind:
-        return f"http://127.0.0.1:{PORT[0]}/once/{mint_once()}"
+        if SERVING[0]:
+            return f"http://127.0.0.1:{PORT[0]}/once/{mint_once()}"
+        # Not the server: only the daemon can mint an address it will honour. Ask it; if it will not
+        # answer (older daemon), the keyed address itself goes — on Windows argv is not readable across
+        # accounts and a WSL distro belongs to one person, so that is the boundary it had anyway.
+        got = once_from_daemon(url)
+        if not got:
+            log("the running daemon gave no short-lived address — handing the browser the address itself")
+        return got or url
     page = ('<!doctype html><meta charset="utf-8"><title>palmar</title>'
             f'<meta http-equiv="refresh" content="0;url={url}">'
             f'<script>location.replace({json.dumps(url)})</script>'
@@ -4431,6 +4472,7 @@ async def main(port: int, open_page: bool = True, web: bool = False) -> None:
     reaper.install(loop)
     server, port_note = await bind_somewhere(handle, port)
     port = PORT[0]
+    SERVING[0] = True
     stop = loop.create_future()
     # Handed to the one HTTP route that can ask for a shutdown, so it goes out the same door as Ctrl-C.
     STOP_NOW[0] = lambda: None if stop.done() else stop.set_result(None)

@@ -585,6 +585,28 @@ class TwoWaysIn(unittest.TestCase):
             self.assertNotIn("k=", got, "the key went onto the command line")
             self.assertIn("file://", got, "the browser was not handed the opening file: %r" % got)
 
+    def test_from_wsl_a_second_start_gets_an_address_the_daemon_honours(self):
+        """On Windows and WSL the command line carries a short-lived address. A second `palmar` used to
+        mint it in its own memory, so the running daemon answered "expired" (user, 2026-09-16, after
+        uninstalling the app). It asks the daemon for one now."""
+        opener, note = self.recorder()
+        with Daemon() as d:
+            r = self.second_palmar(d.home, {"BROWSER": opener, "WSL_DISTRO_NAME": "Ubuntu"})
+            self.assertEqual(r.returncode, 0, r.stderr[-400:])
+            time.sleep(0.4)
+            with open(note) as fh:
+                argv = fh.read().split("\n")
+            once = [a for a in argv if "/once/" in a]
+            self.assertTrue(once, "no short-lived address on the command line: %r" % argv)
+            self.assertNotIn("k=", " ".join(argv), "the key went onto the command line")
+            import http.client
+            u = urllib.parse.urlsplit(once[0])
+            c = http.client.HTTPConnection(u.hostname, u.port, timeout=5)
+            c.request("GET", u.path)
+            resp = c.getresponse(); resp.read()
+            self.assertEqual(resp.status, 302, "the daemon did not honour the address the second start handed out")
+            self.assertEqual(resp.getheader("Location"), "/?k=" + d.url.split("k=", 1)[1])
+
     def test_it_leaves_the_running_daemon_alone(self):
         """The refusal existed because a second start rotates the token and deletes run/*.json,
         silently dropping the first daemon's pane hooks. Attaching must touch neither."""
