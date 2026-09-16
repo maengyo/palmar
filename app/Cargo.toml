@@ -32,6 +32,16 @@ wry = "0.45"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# macOS only, and only to put an icon in the Dock. This binary is **not a .app bundle** — it is one
+# Mach-O file — so macOS has no Info.plist to read an icon out of and shows the generic executable
+# icon instead ("mac에서는 palmar app 로고가 제대로 적용이 안되어있고", 2026-09-16). tao cannot help:
+# its set_window_icon is an empty function on macOS ("macOS doesn't have window icons"). The Dock
+# tile is set through AppKit at start-up instead. **No new dependency tree** — cargo already builds
+# both of these for tao; naming them here only makes the call ours to write.
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+objc = "0.2"
+
 # Linux only, and only to undo one line inside wry: it disables the IME preedit unconditionally
 # (webkitgtk/mod.rs:360, "fcitx input editor can anchor at edit cursor position"), which leaves ibus
 # users with no composing syllable on screen. Reaching the setting needs wry's own WebView type, so

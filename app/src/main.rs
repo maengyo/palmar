@@ -347,6 +347,32 @@ fn wants_bare_window() -> bool {
     std::env::args().any(|a| a == "--no-titlebar")
 }
 
+/// **The Dock tile.** This binary is not a `.app` bundle — it is one Mach-O file — so macOS has no
+/// `Info.plist` to read an icon out of and shows the generic executable instead ("mac에서는 palmar app
+/// 로고가 제대로 적용이 안되어있고", 2026-09-16). tao cannot help: its `set_window_icon` is an empty
+/// function here, its own comment being "macOS doesn't have window icons". So the tile goes straight
+/// to AppKit, with the same `p` the installed web app uses, compiled in — one file to keep in step.
+///
+/// This buys the icon and nothing else: the process is still called `palmar-app` in the Dock and
+/// still cannot be double-clicked in Finder. Both need a real bundle, which is the rest of #12.
+#[cfg(target_os = "macos")]
+fn set_dock_icon() {
+    use cocoa::base::{id, nil};
+    use objc::{class, msg_send, sel, sel_impl};
+    const ICON: &[u8] = include_bytes!("../../palmar/web/icon-512.png");
+    unsafe {
+        let data: id = msg_send![class!(NSData),
+            dataWithBytes: ICON.as_ptr() as *const std::ffi::c_void
+            length: ICON.len() as u64];
+        let img: id = msg_send![class!(NSImage), alloc];
+        let img: id = msg_send![img, initWithData: data];
+        if img != nil {
+            let app: id = msg_send![class!(NSApplication), sharedApplication];
+            let _: () = msg_send![app, setApplicationIconImage: img];
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "linux")]
     tune_for_wslg();
@@ -460,8 +486,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    let mut dock_icon_set = false;
+
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
+        // **Once, and only after the loop is running.** Setting it before `run` did nothing: the Dock
+        // tile is made when the application is first activated, and anything set earlier is replaced
+        // by the default for a binary with no bundle (measured 2026-09-17 — the Dock still read
+        // `exec`).
+        #[cfg(target_os = "macos")]
+        if !dock_icon_set {
+            dock_icon_set = true;
+            set_dock_icon();
+        }
         if let Event::WindowEvent {
             event: WindowEvent::CloseRequested,
             ..
