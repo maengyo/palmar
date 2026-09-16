@@ -32,7 +32,8 @@ and text can be edited and saved in place. If something else wrote the file mean
 so instead of winning.
 
 **Nothing to install but Python.** The standard library and a vendored copy of xterm.js. No build
-step, no packages, no network at runtime.
+step, no packages, and no network at runtime — palmar opens no connection of its own unless you turn
+on **Tell me about new versions** in the options list, which is off to begin with.
 
 ## Install
 

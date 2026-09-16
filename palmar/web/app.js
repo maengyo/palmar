@@ -3758,6 +3758,62 @@ if (bellEl) {
   });
 }
 
+// ── new versions ────────────────────────────────────────
+//: **The only thing palmar would send off this machine, and it is off until somebody asks.** The
+//: daemon does the asking and the daemon keeps the switch (`~/.palmar/settings.json`) — a switch in
+//: `localStorage` would mean Chrome knew and Edge did not, and would say nothing at all while no page
+//: was open. ③ moved the board out of `localStorage` on 2026-09-14 for exactly that reason.
+//:
+//: `hello` brings the state, and an `update` frame brings a change another browser made or an answer
+//: that just came back. **The daemon decides what `on` means, not this checkbox** — `$PALMAR_UPDATE_CHECK`
+//: can overrule the file, and a switch that shows the opposite of the truth is worse than no switch.
+const updateBox = document.getElementById('updatecheck');
+let updateTold = null;              // the version already said, so a second frame does not repeat it
+function applyUpdate(u) {
+  if (!u) return;
+  if (updateBox) updateBox.checked = !!u.on;
+  if (!u.latest || u.latest === updateTold) return;
+  updateTold = u.latest;
+  toast([{ b: 'palmar ' + u.latest + ' is out' }, '— update whenever it suits you;',
+          { a: 'what changed', on: () => window.open(u.url, '_blank', 'noopener,noreferrer') }]);
+}
+if (updateBox) {
+  updateBox.addEventListener('change', async () => {
+    const want = updateBox.checked;
+    try {
+      applyUpdate(await api('POST', '/api/settings', { update_check: want }));
+    } catch (e) {
+      updateBox.checked = !want;    // it did not take — do not leave it looking as though it had
+      toast(['could not change that:', { d: String(e.message || e) }]);
+    }
+  });
+}
+
+// ── the window's first size ─────────────────────────────
+//: **Chromium's default app window is nearly square, and this page does not fit in it.** An --app or
+//: installed-PWA window with no saved bounds has its width cut to 1050 DIP while it keeps almost the
+//: whole work-area height (Chromium's WindowSizer). Measured on the user's Windows machine
+//: 2026-09-16: a 1536x912 work area gave 1050x892 — 1.18:1, and `.win` has a min-width of 1120, so
+//: the right rail was cut off and the page scrolled sideways. Dragging it wider did not stick.
+//:
+//: So the page widens itself. **Once**, because doing it every load would undo the size somebody
+//: chose. **Never narrower and never shorter**, because taking room away from a window that has
+//: plenty is not ours to do. **Only in an app window** — a tab ignores resizeTo and then reports the
+//: size it refused to take, so running it there would change nothing and lie about it afterwards.
+const LS_SIZED = 'palmar.sized';
+const FIRST_W = 1280;        // what palmar's own window opens at (app/src/main.rs)
+function sizeWindowOnce() {
+  try {
+    if (localStorage.getItem(LS_SIZED) === '1') return;
+    localStorage.setItem(LS_SIZED, '1');
+  } catch (e) { return; }    // cannot remember having done it, so do not do it at all
+  try {
+    if (!matchMedia('(display-mode: standalone)').matches) return;
+    const want = Math.min(FIRST_W, screen.availWidth - 40);
+    if (want > outerWidth) resizeTo(want, outerHeight);
+  } catch (e) {}
+}
+
 // ── protocol version ────────────────────────────────────
 // The version this page speaks. It pairs with PROTOCOL in the daemon's palmar/__init__.py.
 // **While it is cloned and run from one place they cannot drift** — daemon and page are the same commit.
@@ -4010,6 +4066,7 @@ function connectEvents() {
       // would overwrite the first in the same strip.
       if (!checkProtocol(m)) checkVersion(m);
       daemonNotify = !!m.notify;
+      applyUpdate(m.update);
       if (!hasNotificationAPI() && !daemonNotify && notifyOn) setNotify(false);   // nothing here can ring
       takeLayout(m);                       // before the sessions are placed, so they land where the daemon says
       setCanvases(m.canvases || []); reconcile(m.sessions || []);
@@ -4023,6 +4080,7 @@ function connectEvents() {
     else if (m.t === 'canvas_gone' && m.id) dropCanvas(m.id);   // canvases follows right behind
     else if (m.t === 'layout') layoutArrived(m);                 // another browser moved something
     else if (m.t === 'focus') comeForward();                     // `palmar` typed while this is open
+    else if (m.t === 'update') applyUpdate(m);                   // the switch moved, or an answer came back
   };
   ws.onclose = () => {
     if (eventsWs !== ws) return;
@@ -4518,6 +4576,7 @@ function watchInput(secs) {
 
 // ── start ───────────────────────────────────────────────
 function boot() {
+  sizeWindowOnce();
   if (!window.Terminal || !window.FitAddon) {
     toast(['xterm.js is missing under palmar/web/vendor/ — see palmar/web/vendor/VERSIONS']);
     return;

@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.parse
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -907,16 +908,16 @@ class TheKeyStaysOffTheCommandLine(unittest.TestCase):
         D.PORT[0] = 8801
         D.SERVING[0] = True                          # the daemon itself mints; see the test below for the other case
         self.addCleanup(lambda: D.SERVING.__setitem__(0, False))
-        t = D.launch_target("http://127.0.0.1:8801/?k=SECRET", platform="win32")
-        self.assertTrue(t.startswith("http://127.0.0.1:8801/once/"), t)
+        t = D.launch_target("http://127.0.0.1:8801/?k=SECRET", platform="win32", host="localhost")
+        self.assertTrue(t.startswith("http://localhost:8801/once?n="), t)
         self.assertNotIn("SECRET", t)
-        n = t.rsplit("/", 1)[1]
+        n = t.split("n=", 1)[1]
         self.assertTrue(D.take_once(n), "the nonce did not open")
         self.assertTrue(D.take_once(n), "a second fetch inside the seconds must work — Chrome fetches --app= twice when the app is installed")
         D.ONCE[n] = 0                                # the seconds ran out
         self.assertFalse(D.take_once(n), "an expired nonce opened")
-        t = D.launch_target("http://127.0.0.1:8801/?k=SECRET", platform="linux", kind="wsl")
-        self.assertTrue(t.startswith("http://127.0.0.1:8801/once/"))
+        t = D.launch_target("http://127.0.0.1:8801/?k=SECRET", platform="linux", kind="wsl", host="localhost")
+        self.assertTrue(t.startswith("http://localhost:8801/once?n="))
 
     def test_a_process_that_is_not_the_daemon_does_not_mint(self):
         """A second `palmar` minting in its own memory gave the browser an address the daemon had
@@ -936,6 +937,152 @@ class TheKeyStaysOffTheCommandLine(unittest.TestCase):
         D.ONCE[n] = 0                                # expired
         self.assertFalse(D.take_once(n))
         self.assertNotIn(n, D.ONCE, "an expired nonce is forgotten, not kept")
+
+
+class TheReleaseCheckIsOffUntilAsked(unittest.TestCase):
+    """palmar opens no connection of its own. The release check is the one exception, and the user
+    chose that it stay **off until somebody turns it on** (2026-09-16) — "no network at runtime" is a
+    promise both READMEs make, and it has to keep being true for anybody who never touches it."""
+
+    def test_off_by_default(self):
+        self.assertFalse(D.update_check_on(env={}, settings={}))
+
+    def test_only_a_real_true_in_the_file_turns_it_on(self):
+        self.assertTrue(D.update_check_on(env={}, settings={"update_check": True}))
+        self.assertFalse(D.update_check_on(env={}, settings={"update_check": "yes"}))
+        self.assertFalse(D.update_check_on(env={}, settings={"update_check": 1}))
+
+    def test_the_environment_overrules_the_file_either_way(self):
+        """A locked-down machine needs a way that does not go through a screen, and a scripted one
+        needs a way that does not need a click."""
+        on = {"update_check": True}
+        for off in ("0", "no", "off", "", "  "):
+            self.assertFalse(D.update_check_on(env={"PALMAR_UPDATE_CHECK": off}, settings=on), repr(off))
+        self.assertTrue(D.update_check_on(env={"PALMAR_UPDATE_CHECK": "1"}, settings={}))
+
+
+class WhichVersionIsNewer(unittest.TestCase):
+    def test_a_plain_release_reads(self):
+        self.assertEqual(D.version_tuple("v0.1.2"), (0, 1, 2))
+        self.assertEqual(D.version_tuple(" 0.1.2 "), (0, 1, 2))
+
+    def test_anything_else_is_nothing(self):
+        for bad in ("", "v1.2", "1.2.3.4", "v0.1.2-rc1", "latest", None):
+            self.assertIsNone(D.version_tuple(bad), repr(bad))
+
+    def test_newer_only_when_both_read_and_it_really_is(self):
+        self.assertTrue(D.is_newer("0.1.2", "0.1.1"))
+        self.assertTrue(D.is_newer("0.2.0", "0.1.9"))
+        self.assertTrue(D.is_newer("1.0.0", "0.9.9"))
+        self.assertFalse(D.is_newer("0.1.1", "0.1.1"))
+        self.assertFalse(D.is_newer("0.1.0", "0.1.1"))
+        self.assertFalse(D.is_newer("nightly", "0.1.1"), "a tag we cannot read must not read as newer")
+        self.assertFalse(D.is_newer("0.1.2", "what"))
+
+    def test_ten_comes_after_nine(self):
+        self.assertTrue(D.is_newer("0.10.0", "0.9.0"), "compared as numbers, not as text")
+
+
+class TheReleaseCheckAsksOnce(unittest.TestCase):
+    """One HEAD, and the version is read off the address the redirect landed on — no page comes down
+    and nothing but the tag is learned."""
+
+    class Answer:
+        def __init__(self, url):
+            self.url = url
+
+        def geturl(self):
+            return self.url
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def opener_for(self, landed):
+        seen = []
+
+        def opener(req, timeout=None):
+            seen.append((req.get_method(), req.full_url))
+            return self.Answer(landed)
+        return opener, seen
+
+    def test_the_tag_comes_from_where_the_redirect_landed(self):
+        opener, seen = self.opener_for("https://github.com/maengyo/palmar/releases/tag/v9.9.9")
+        self.assertEqual(D.fetch_latest(url="https://example.invalid/x", opener=opener), "9.9.9")
+        self.assertEqual(seen[0][0], "HEAD", "it must not pull the page down")
+
+    def test_an_address_that_is_not_a_release_tag_says_nothing(self):
+        for landed in ("https://github.com/login?return_to=x",
+                       "https://github.com/maengyo/palmar/releases",
+                       "https://github.com/maengyo/palmar/releases/tag/",
+                       "https://elsewhere.example/a/b/releases/tag/v9.9.9/and/more",
+                       "not a url", ""):
+            opener, _ = self.opener_for(landed)
+            self.assertEqual(D.fetch_latest(url="https://example.invalid/x", opener=opener), "", landed)
+
+    def test_no_network_is_quiet(self):
+        def opener(req, timeout=None):
+            raise OSError("nothing out there")
+        self.assertEqual(D.fetch_latest(url="https://example.invalid/x", opener=opener), "")
+
+
+class WhatTheDaemonHandsBackIsChecked(unittest.TestCase):
+    """`/api/once`'s answer goes onto a command line and into a browser. The check used to be the
+    substring `/once/`, which moving the nonce into the query broke — and which a URL pointing
+    somewhere else entirely satisfied anyway (found while moving it, 2026-09-16)."""
+
+    BASE = "http://127.0.0.1:8801"
+
+    def test_both_spellings_of_our_own_address_pass(self):
+        self.assertTrue(D.is_once_url("http://127.0.0.1:8801/once?n=abc", self.BASE))
+        self.assertTrue(D.is_once_url("http://localhost:8801/once?n=abc", self.BASE))
+        self.assertTrue(D.is_once_url("http://127.0.0.1:8801/once/abc", self.BASE), "the old spelling still opens")
+
+    def test_anywhere_else_is_refused(self):
+        for bad in ("http://elsewhere.example/x/once/y",      # the substring check let this through
+                    "https://127.0.0.1:8801/once?n=abc",      # not the scheme we serve
+                    "http://127.0.0.1:9999/once?n=abc",       # another port — another daemon
+                    "http://127.0.0.1:8801/?k=SECRET",        # the keyed address is what we are avoiding
+                    "http://127.0.0.1:8801/oncearoo?n=abc",
+                    "javascript:alert(1)", "", "not a url"):
+            self.assertFalse(D.is_once_url(bad, self.BASE), bad)
+
+
+class TheAppWindowKeepsItsSize(unittest.TestCase):
+    """What the browser is handed decides whether the window comes back the size it was left.
+
+    Chromium saves an `--app` window's bounds under a key made of the host and the path. A nonce in
+    the **path** made a new key on every launch, and a dot in the **host** made a key Chromium writes
+    by dotted path and reads back flat. Both had to go. On the user's Windows machine the window came
+    up 1050x892 — 1.18:1 — every time, however wide it had been dragged (2026-09-16)."""
+
+    def setUp(self):
+        D.SERVING[0] = True                          # the daemon itself mints
+        self.addCleanup(lambda: D.SERVING.__setitem__(0, False))
+
+    def test_only_the_query_changes_between_launches(self):
+        a = D.launch_target("http://127.0.0.1:8801/?k=SECRET", platform="win32", host="localhost")
+        b = D.launch_target("http://127.0.0.1:8801/?k=SECRET", platform="win32", host="localhost")
+        pa, pb = urllib.parse.urlsplit(a), urllib.parse.urlsplit(b)
+        self.assertEqual((pa.scheme, pa.netloc, pa.path), (pb.scheme, pb.netloc, pb.path),
+                         "anything but the query differing is a new window to Chromium")
+        self.assertEqual(pa.path, "/once")
+        self.assertNotEqual(pa.query, pb.query, "the nonce has to be fresh each launch")
+
+    def test_the_host_has_no_dot_when_localhost_reaches_us(self):
+        class Sock:
+            def close(self):
+                pass
+        self.assertEqual(D.loopback_name(8801, connect=lambda addr, t: Sock()), "localhost")
+
+    def test_it_falls_back_to_the_numeric_host_when_localhost_does_not_reach_us(self):
+        """The daemon binds 127.0.0.1 alone. A machine whose localhost is ::1 and nothing else would
+        be handed an address that goes nowhere, and a window with no size is better than no window."""
+        def refuse(addr, t):
+            raise OSError("localhost is ::1 here")
+        self.assertEqual(D.loopback_name(8801, connect=refuse), "127.0.0.1")
 
 
 class WhoElseCanRead(unittest.TestCase):

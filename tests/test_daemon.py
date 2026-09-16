@@ -596,13 +596,14 @@ class TwoWaysIn(unittest.TestCase):
             time.sleep(0.4)
             with open(note) as fh:
                 argv = fh.read().split("\n")
-            once = [a for a in argv if "/once/" in a]
+            once = [a for a in argv if "/once" in a]
             self.assertTrue(once, "no short-lived address on the command line: %r" % argv)
             self.assertNotIn("k=", " ".join(argv), "the key went onto the command line")
             import http.client
             u = urllib.parse.urlsplit(once[0])
+            self.assertEqual(u.path, "/once", "the nonce went back into the path — Chromium keys the window's size on it")
             c = http.client.HTTPConnection(u.hostname, u.port, timeout=5)
-            c.request("GET", u.path)
+            c.request("GET", u.path + "?" + u.query)
             resp = c.getresponse(); resp.read()
             self.assertEqual(resp.status, 302, "the daemon did not honour the address the second start handed out")
             self.assertEqual(resp.getheader("Location"), "/?k=" + d.url.split("k=", 1)[1])
@@ -1750,26 +1751,130 @@ class OnWslTheAddressOpensOnce(unittest.TestCase):
                 time.sleep(0.1)
             with open(note) as fh:
                 argv = fh.read().split("\n")
-            once = [a for a in argv if "/once/" in a]
+            once = [a for a in argv if "/once" in a]
             self.assertTrue(once, "no one-time address on the command line: %r" % argv)
             self.assertFalse(any("k=" in a for a in argv), "the key went onto the command line: %r" % argv)
             base = d.url.split("/?", 1)[0]
-            path = "/once/" + once[0].rsplit("/once/", 1)[1]
+            u = urllib.parse.urlsplit(once[0])
+            # **The nonce is in the query.** Chromium keys an --app window's saved bounds on host and
+            # path, so a nonce in the path threw the size away on every launch (2026-09-16).
+            self.assertEqual(u.path, "/once", "the nonce went back into the path")
+            path = "/once?" + u.query
             code, headers = self.head(base + path)
             self.assertEqual(code, 302)
             self.assertEqual(headers.get("Location"), "/?k=" + d.url.split("k=", 1)[1])
             code, _ = self.head(base + path)
             self.assertEqual(code, 302, "a second fetch inside the seconds must work — Chrome fetches --app= twice when the app is installed")
-            self.assertEqual(self.head(base + "/once/never-minted")[0], 404)
+            self.assertEqual(self.head(base + "/once?n=never-minted")[0], 404)
+            # The old spelling still opens — an address an older daemon minted, or one already sitting
+            # in a browser, must not go dead because we moved the nonce.
+            n = urllib.parse.parse_qs(u.query)["n"][0]
+            self.assertEqual(self.head(base + "/once/" + n)[0], 302, "/once/<nonce> stopped working")
 
     def head(self, url):
         import http.client
         u = urllib.parse.urlsplit(url)
         c = http.client.HTTPConnection(u.hostname, u.port, timeout=5)
-        c.request("GET", u.path)
+        c.request("GET", u.path + (("?" + u.query) if u.query else ""))
         r = c.getresponse()
         r.read()
         return r.status, dict(r.getheaders())
+
+
+class TheReleaseCheckIsASwitch(unittest.TestCase):
+    """**Off until somebody asks** (2026-09-16, user). The daemon keeps the switch rather than the
+    browser, so every open page agrees on it and a daemon with no page open still knows — the same
+    reason ③ moved the board out of localStorage on 2026-09-14.
+
+    No test here reaches the network. `$PALMAR_LATEST_URL` points the daemon at a stand-in that
+    answers the way GitHub's `/releases/latest` does: one redirect to a tag address."""
+
+    def redirector(self, tag):
+        import http.server
+        import threading
+        hits = []
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_HEAD(self):
+                hits.append(self.path)
+                if self.path.endswith("/releases/latest"):
+                    self.send_response(302)
+                    self.send_header("Location", "/maengyo/palmar/releases/tag/" + tag)
+                else:
+                    self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            do_GET = do_HEAD
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        return "http://127.0.0.1:%d/releases/latest" % srv.server_port, hits
+
+    def settings_file(self, d):
+        return os.path.join(d.home, ".palmar", "settings.json")
+
+    def test_off_by_default_then_on_and_it_says_what_came_back(self):
+        url, hits = self.redirector("v9.9.9")
+        with Daemon(env={"PALMAR_LATEST_URL": url}) as d:
+            w = WS(d, "/events?token=" + d.token)
+            hello = w.recv_json()
+            self.assertEqual(hello["t"], "hello")
+            self.assertFalse(hello["update"]["on"], "the release check must be off until it is asked for")
+            self.assertIsNone(hello["update"]["latest"])
+            self.assertFalse(os.path.exists(self.settings_file(d)),
+                             "nothing is written to disk until something is turned on")
+            self.assertEqual(hits, [], "it asked before anybody said it could")
+
+            code, body = d.raw("POST", "/api/settings", {"update_check": True})
+            self.assertEqual(code, 200, body)
+            self.assertTrue(json.loads(body)["on"])
+
+            latest = None
+            end = time.time() + 15
+            while time.time() < end and latest is None:
+                m = w.recv_json()
+                if m.get("t") == "update":
+                    latest = m.get("latest")
+            self.assertEqual(latest, "9.9.9", "the open page was never told what came back")
+            self.assertTrue(any(h.endswith("/releases/latest") for h in hits), hits)
+
+            saved = json.loads(open(self.settings_file(d)).read())
+            self.assertIs(saved["update_check"], True)
+            self.assertEqual(saved["latest"], "9.9.9")
+            self.assertIn("checked_at", saved, "without this a restart asks again straight away")
+
+            code, body = d.raw("POST", "/api/settings", {"update_check": False})
+            self.assertEqual(code, 200, body)
+            self.assertFalse(json.loads(body)["on"])
+            self.assertIs(json.loads(open(self.settings_file(d)).read())["update_check"], False)
+
+    def test_the_environment_wins_over_the_switch(self):
+        """`$PALMAR_UPDATE_CHECK=0` is the way to be sure on a machine somebody else administers. The
+        switch may be pressed; what comes back has to say what is actually true."""
+        url, hits = self.redirector("v9.9.9")
+        with Daemon(env={"PALMAR_LATEST_URL": url, "PALMAR_UPDATE_CHECK": "0"}) as d:
+            code, body = d.raw("POST", "/api/settings", {"update_check": True})
+            self.assertEqual(code, 200, body)
+            self.assertFalse(json.loads(body)["on"], "it reported on while the environment holds it off")
+            time.sleep(2.0)
+            self.assertEqual(hits, [], "it asked with the environment saying not to")
+
+    def test_a_body_that_is_not_the_switch_is_refused(self):
+        with Daemon() as d:
+            for bad in ({}, {"update_check": "yes"}, {"update_check": 1}, [], {"other": True}):
+                code, _ = d.raw("POST", "/api/settings", bad)
+                self.assertEqual(code, 400, repr(bad))
+
+    def test_it_needs_the_token(self):
+        with Daemon() as d:
+            self.assertEqual(d.raw("POST", "/api/settings", {"update_check": True}, token=False)[0], 403)
+            self.assertEqual(d.raw("GET", "/api/settings")[0], 200)
 
 
 class NothingRunsFromTheViewer(unittest.TestCase):

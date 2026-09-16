@@ -248,6 +248,19 @@ RESTORE_FILE = PALMAR_DIR / "restore.json"
 #: 0600 for the same reason as the rest of this directory. Nothing in it is a secret; it is habit.
 LAYOUT_FILE = PALMAR_DIR / "layout.json"
 LAYOUT_MAX_ENTRIES = 2000     # keyed by session id, and ids are never reused — a cap, not a budget
+#: **What the person turned on.** Today that is one thing: the release check, the only moment palmar
+#: opens a connection that leaves the machine. **Off unless asked** (2026-09-16, user) — "no network
+#: at runtime" is a promise both READMEs make, and it stays true for anybody who never turns it on.
+#: The switch lives with the daemon rather than in the browser because the daemon is what does the
+#: asking: a `localStorage` switch would mean Chrome knew and Edge did not, and would say nothing at
+#: all while no page is open. ③ moved the board out of `localStorage` on 2026-09-14 for that reason.
+#: Outside `run/`, like layout.json and restore.json, because it outlives a daemon. 0600.
+SETTINGS_FILE = PALMAR_DIR / "settings.json"
+LATEST_URL = "https://github.com/maengyo/palmar/releases/latest"
+UPDATE_FIRST_S = 60.0                 # not at start-up — the first minute belongs to the first pane
+UPDATE_EVERY_S = 24 * 60 * 60.0
+SETTINGS = [{}]                       # the file, read once at start-up
+UPDATE_TIMER = [None]
 RESTORE_EVERY_S = 10.0
 RESTORE = [None]          # what the previous daemon left, read once at start-up
 #: old canvas id → the id of the canvas restored in its place. **A restored canvas is a new canvas** —
@@ -1881,6 +1894,117 @@ def clean_layout(obj):
     return out
 
 
+def read_settings() -> dict:
+    """What the person turned on, or nothing. A file that cannot be read is worth less than none."""
+    try:
+        d = json.loads(SETTINGS_FILE.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def save_settings() -> None:
+    try:
+        write_private(SETTINGS_FILE, json.dumps(SETTINGS[0]).encode() + b"\n", 0o600)
+    except OSError as e:
+        log(f"could not write {SETTINGS_FILE.name} — {e}")
+
+
+def update_check_on(env=None, settings=None) -> bool:
+    """Is the release check on? The file says, and `$PALMAR_UPDATE_CHECK` overrides it either way —
+    `0` off, anything else on. A locked-down machine needs a way that does not go through a screen,
+    and a scripted one needs a way that does not need a click."""
+    env = os.environ if env is None else env
+    settings = SETTINGS[0] if settings is None else settings
+    chosen = env.get("PALMAR_UPDATE_CHECK")
+    if chosen is not None:
+        return chosen.strip() not in ("", "0", "no", "off")
+    return settings.get("update_check") is True
+
+
+def version_tuple(v: str):
+    """`v0.1.2` or `0.1.2` → `(0, 1, 2)`. None for anything else — a tag we do not understand must
+    not come out looking newer than what is installed."""
+    m = re.match(r"^v?(\d+)\.(\d+)\.(\d+)$", (v or "").strip())
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
+def is_newer(latest: str, mine: str) -> bool:
+    a, b = version_tuple(latest), version_tuple(mine)
+    return bool(a and b and a > b)
+
+
+def tag_from_latest_url(final: str) -> str:
+    """The tag `…/releases/latest` redirected to, or ''. Matched rather than trusted: what comes back
+    decides what a page is told, and an address that is not a release tag says nothing."""
+    m = re.match(r"^https?://[\w.:-]{1,80}/[\w.-]{1,64}/[\w.-]{1,64}/releases/tag/([\w.+-]{1,64})$",
+                 (final or "").strip())
+    return m.group(1) if m else ""
+
+
+def fetch_latest(url: str = None, timeout: float = 10.0, opener=None) -> str:
+    """The newest released version, or ''. **One HEAD**, following the redirect, and the version is
+    read off the address it lands on — no page is downloaded and nothing but the tag is learned.
+
+    Blocking on purpose: it is called through an executor so the loop never waits on the network."""
+    url = url or os.environ.get("PALMAR_LATEST_URL") or LATEST_URL
+    opener = urllib.request.urlopen if opener is None else opener
+    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "palmar/" + __version__})
+    try:
+        with opener(req, timeout=timeout) as r:
+            final = r.geturl()
+    except Exception as e:
+        log(f"the release check did not get through ({e})")
+        return ""
+    return tag_from_latest_url(final).lstrip("v")
+
+
+def update_state() -> dict:
+    """What a page is told about the release check: whether it is on, and the newest version seen
+    when that is newer than this one. `latest` is null when there is nothing to say."""
+    latest = SETTINGS[0].get("latest")
+    newer = isinstance(latest, str) and is_newer(latest, __version__)
+    return {"on": update_check_on(), "latest": latest if newer else None, "url": LATEST_URL}
+
+
+async def update_tick(loop) -> None:
+    """Ask once and tell the open pages if there is something newer."""
+    if not update_check_on():
+        return
+    latest = await loop.run_in_executor(None, fetch_latest)
+    SETTINGS[0]["checked_at"] = time.time()
+    if latest:
+        SETTINGS[0]["latest"] = latest
+    save_settings()
+    if latest and is_newer(latest, __version__):
+        log(f"palmar {latest} is out — this is {__version__} ({LATEST_URL})")
+    registry.broadcast(dict(update_state(), t="update"))
+
+
+def arm_update_check(loop, first: float = None) -> None:
+    """(Re)arm the release check, or take it down. **Off means no timer at all** — a daemon nobody
+    asked opens nothing and wakes for nothing. Called at start-up and whenever the switch moves."""
+    if UPDATE_TIMER[0] is not None:
+        UPDATE_TIMER[0].cancel()
+        UPDATE_TIMER[0] = None
+    if not update_check_on():
+        return
+
+    def tick():
+        loop.create_task(update_tick(loop))
+        UPDATE_TIMER[0] = loop.call_later(UPDATE_EVERY_S, tick)
+
+    due = UPDATE_FIRST_S if first is None else first
+    # A daemon that came back inside the day does not ask again just because it came back.
+    try:
+        since = time.time() - float(SETTINGS[0].get("checked_at") or 0)
+    except (TypeError, ValueError):
+        since = UPDATE_EVERY_S
+    if 0 <= since < UPDATE_EVERY_S:
+        due = max(due, UPDATE_EVERY_S - since)
+    UPDATE_TIMER[0] = loop.call_later(due, tick)
+
+
 def read_layout() -> dict:
     """What the last daemon kept, or nothing. A file that cannot be trusted is worth less than none."""
     try:
@@ -2808,6 +2932,9 @@ async def ws_events(reader, writer, headers: dict) -> None:
                              # Whether POST /api/notify can reach the OS here — for a window with no
                              # Notification API of its own (palmar's own window on a Mac).
                              "notify": notifier_argv("", "") is not None,
+                             # Whether the release check is on, and the newest version if it is
+                             # newer than this one. Off by default; the page's switch turns it on.
+                             "update": update_state(),
                              "canvases": [c.to_json() for c in registry.canvas_list()],
                              "sessions": [s.to_json() for s in registry.list()],
                              # ③ the board, so the sessions below land where they were left
@@ -3080,7 +3207,9 @@ async def handle_request(reader, writer) -> None:
         if method != "POST":
             writer.write(http(405))
             return
-        writer.write(http_json(200, {"url": f"http://127.0.0.1:{PORT[0]}/once/{mint_once()}"}))
+        # Same spelling launch_target mints: the nonce in the query and a host with no dot, so
+        # Chromium can keep this window's size across launches (loopback_name).
+        writer.write(http_json(200, {"url": f"http://{loopback_name(PORT[0])}:{PORT[0]}/once?n={mint_once()}"}))
         return
     if path == "/api/notify":
         # **The OS says it when the page cannot.** palmar's own window on a Mac (WKWebView) has no
@@ -3149,6 +3278,30 @@ async def handle_request(reader, writer) -> None:
             writer.write(http(405))
         return
 
+    if path == "/api/settings":
+        # The switches the daemon keeps rather than the browser. One today: the release check.
+        if method == "GET":
+            writer.write(http_json(200, update_state()))
+            return
+        if method != "POST":
+            writer.write(http(405))
+            return
+        if not token_ok:
+            writer.write(http(403))
+            return
+        obj = parse_json_body(body)
+        if not isinstance(obj, dict) or not isinstance(obj.get("update_check"), bool):
+            writer.write(http_error(400, "body must be {\"update_check\": true|false}"))
+            return
+        SETTINGS[0]["update_check"] = obj["update_check"]
+        save_settings()
+        # Turned on, ask soon rather than in a minute: somebody just pressed it and is watching.
+        # **The answer is update_state(), not what was asked** — $PALMAR_UPDATE_CHECK can overrule
+        # the file, and a switch that lies about which way it is pointing is worse than no switch.
+        arm_update_check(asyncio.get_running_loop(), first=1.0 if obj["update_check"] else None)
+        registry.broadcast(dict(update_state(), t="update"))
+        writer.write(http_json(200, update_state()))
+        return
     # ③ the board. GET is open like the other reads; PUT replaces it whole — the page owns the object
     # and saves it entire, so a merge would only invent a second author.
     if path == "/api/layout":
@@ -3500,10 +3653,15 @@ async def handle_request(reader, writer) -> None:
     if method not in ("GET", "HEAD"):
         writer.write(http(405))
         return
-    if path.startswith("/once/"):
+    if path == "/once" or path.startswith("/once/"):
         # The short-lived address a command line carried (launch_target): good for its seconds,
         # dead after. Anything else gets a page, not the key.
-        if take_once(path[len("/once/"):]):
+        #
+        # **Two spellings.** `/once?n=…` is what is minted now, so that the path stays the same on
+        # every launch and Chromium can keep the window's size (loopback_name). `/once/<nonce>` is
+        # still honoured: an address minted by an older daemon, or one already sitting in a browser,
+        # has to keep opening.
+        if take_once(qget(q, "n", "") if path == "/once" else path[len("/once/"):]):
             writer.write(http(302, b"", extra=f"Location: /?k={KEY[0]}\r\n"))
             return
         writer.write(http(404, b"<!doctype html><meta charset=\"utf-8\"><title>palmar</title>"
@@ -4211,6 +4369,27 @@ def take_once(n: str) -> bool:
     return True
 
 
+def is_once_url(candidate: str, base: str) -> bool:
+    """Is this what a daemon of ours would hand back from `/api/once`, and nothing else?
+
+    The answer goes onto a command line and into a browser, so it is checked rather than trusted:
+    http, the loopback, the same port we asked, and the `/once` path in either spelling. The check
+    this replaces was `"/once/" in got`, which a URL like `http://elsewhere/x/once/y` satisfies."""
+    try:
+        u = urlparse(candidate)
+        want = urlparse(base)
+    except ValueError:
+        return False
+    if u.scheme != "http" or not (u.path == "/once" or u.path.startswith("/once/")):
+        return False
+    if u.hostname not in ("127.0.0.1", "localhost", "::1"):
+        return False
+    try:
+        return u.port == want.port
+    except ValueError:                  # a port that is not a number
+        return False
+
+
 def once_from_daemon(url: str) -> str:
     """Ask the running daemon at `url` for a short-lived address of its own minting (POST /api/once),
     the way _ask_to_stop asks it to stop: with the token from run/token. '' when it will not say."""
@@ -4224,7 +4403,7 @@ def once_from_daemon(url: str) -> str:
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
             got = json.loads(r.read().decode("utf-8", "replace") or "{}").get("url")
-            return got if isinstance(got, str) and "/once/" in got else ""
+            return got if isinstance(got, str) and is_once_url(got, base) else ""
     except Exception:
         return ""
 
@@ -4334,7 +4513,31 @@ def focus_existing(url: str) -> str:
             else "already open — asked the %d open page%s to come forward (--new opens another)" % (n, "" if n == 1 else "s"))
 
 
-def launch_target(url: str, platform=None, kind=None) -> str:
+def loopback_name(port: int, connect=None) -> str:
+    """The host to put in an address handed to a browser: `localhost` when it reaches this daemon,
+    `127.0.0.1` when it does not.
+
+    **A dot in the host costs the window its size.** Chromium saves an `--app` window's bounds under
+    a key made of the host and the path, and it writes that key by dotted path while reading it back
+    flat — so anything saved under `127.0.0.1_/once` lands three levels deep and is never found again
+    (measured on a Mac, 2026-09-16: Preferences held `{"127":{"0":{"0":{"1_/":…}}}}` and a 700x700
+    window did not come back). `localhost` has no dot, and both allowlists already take it.
+
+    It is **checked, not assumed**. The daemon binds 127.0.0.1 alone, so a machine whose `localhost`
+    is ::1 and nothing else would otherwise be handed an address that goes nowhere."""
+    connect = socket.create_connection if connect is None else connect
+    try:
+        s = connect(("localhost", port), 0.5)
+    except Exception:
+        return "127.0.0.1"
+    try:
+        s.close()
+    except Exception:
+        pass
+    return "localhost"
+
+
+def launch_target(url: str, platform=None, kind=None, host=None) -> str:
     """What a browser is handed in place of the keyed address — never the address itself.
 
     **The key was on the command line.** `open URL`, `chrome --app=URL`, `xdg-open URL` all put the
@@ -4351,7 +4554,12 @@ def launch_target(url: str, platform=None, kind=None) -> str:
     kind = wsl_kind() if kind is None else kind      # from the environment, so a test can say "WSL" anywhere
     if platform == "win32" or kind:
         if SERVING[0]:
-            return f"http://127.0.0.1:{PORT[0]}/once/{mint_once()}"
+            # **The nonce rides in the query, not the path.** Chromium keys an --app window's saved
+            # bounds on host and path, so a nonce in the path minted a new key every launch and the
+            # window came up at Chromium's default size however wide it had been dragged (measured
+            # on the user's Windows machine, 2026-09-16: a 1536x912 work area gave 1050x892, 1.18:1,
+            # every time). A query is not part of that key.
+            return f"http://{host or loopback_name(PORT[0])}:{PORT[0]}/once?n={mint_once()}"
         # Not the server: only the daemon can mint an address it will honour. Ask it; if it will not
         # answer (older daemon), the keyed address itself goes — on Windows argv is not readable across
         # accounts and a WSL distro belongs to one person, so that is the boundary it had anyway.
@@ -4579,6 +4787,7 @@ async def main(port: int, open_page: bool = True, web: bool = False, new: bool =
         log(f"restored {len(named)} canvas(es) from {RESTORE_FILE.name}")
     else:
         registry.new_canvas()
+    SETTINGS[0] = read_settings()
     registry.layout = read_layout()
     # **A viewer's canvas id has to be remapped like a pane's.** Canvases come back with fresh ids, and a
     # board entry naming a dead one leaves that window on no canvas at all: hidden on every tab, unreachable
@@ -4644,6 +4853,7 @@ async def main(port: int, open_page: bool = True, web: bool = False, new: bool =
                 pass
         RESTORE_TIMER[0] = loop.call_later(RESTORE_EVERY_S, tick)
     RESTORE_TIMER[0] = loop.call_later(RESTORE_EVERY_S, tick)
+    arm_update_check(loop)
     await stop
     server.close()
     shutdown()
@@ -4719,6 +4929,15 @@ def doctor(port: int) -> int:
         st = git("status", "--porcelain")
         if st:
             out("  ! %d uncommitted change(s) in the working tree" % len(st.splitlines()))
+    # The only thing that would ever leave this machine, and which way it is pointing.
+    _s = read_settings()
+    if update_check_on(settings=_s):
+        _at = _s.get("checked_at")
+        out("  update    on — asks %s once a day%s" % (
+            LATEST_URL,
+            ("   (last %s)" % time.strftime("%Y-%m-%d %H:%M", time.localtime(_at))) if isinstance(_at, (int, float)) and _at else ""))
+    else:
+        out("  update    off — palmar opens no connection of its own")
     out("")
     out("this machine")
     out("  python    %s  (%s)" % (platform.python_version(), sys.executable))
