@@ -208,7 +208,10 @@ def seed():
     CANVASES.extend([c1, c2, c3])
     renumber()
 
-    proj = HOME / "ddul" / "python" / "palmar"
+    # **The checkout this script is in**, not somebody's own directory. It used to name one
+    # developer's folder layout, which meant it only worked on that machine — and put that layout
+    # in a public repository (2026-09-17).
+    proj = Path(__file__).resolve().parent.parent
     a_cwd = str(proj) if proj.is_dir() else str(HOME)
     a = Sess(a_cwd, status="waiting", agent="claude", last_event="PermissionRequest",
              canvas=c2.id, banner=(

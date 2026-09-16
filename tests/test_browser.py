@@ -2629,9 +2629,9 @@ class TopRow(unittest.TestCase):
     def test_an_unnamed_pane_is_called_by_what_runs_in_it(self):
         """A name a person gave is never overwritten (⑫); an unnamed pane says what is in front."""
         r = self.b.ev("""(()=>{const L=window.palmar.labelOf;
-          return [L({name:null, cwd:'/Users/x/ddul/palmer', fg:'claude'}),
-                  L({name:null, cwd:'/Users/x/ddul/palmer', fg:null}),
-                  L({name:'build', cwd:'/Users/x/ddul/palmer', fg:'claude'})];})()""")
+          return [L({name:null, cwd:'/Users/x/work/palmar', fg:'claude'}),
+                  L({name:null, cwd:'/Users/x/work/palmar', fg:null}),
+                  L({name:'build', cwd:'/Users/x/work/palmar', fg:'claude'})];})()""")
         self.assertTrue(r[0].startswith("claude · "), "an unnamed pane does not lead with the command: %r" % r)
         self.assertNotIn("claude", r[1], "a pane at a prompt is called by a command: %r" % r)
         self.assertEqual(r[2], "build", "a given name was overwritten: %r" % r)

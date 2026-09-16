@@ -2,6 +2,10 @@
 # 셸 pane 은 바이트 재생이 곧 화면이므로, "몇 바이트면 화면 N개를 되살리나" 를 잰다.
 import os, pty, select, time, sys
 
+# A repository with some history to print: this one, four directories up from this script. It used to
+# be one developer's own path, which ran nowhere else and named their folders in public (2026-09-17).
+REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), *[os.pardir] * 4))
+
 def run(cmd, seconds=6.0, cols=100, rows=30):
     pid, fd = pty.fork()
     if pid == 0:
@@ -22,10 +26,10 @@ def run(cmd, seconds=6.0, cols=100, rows=30):
     return bytes(buf)
 
 CASES = [
-    ("git log --oneline -100",        "git -C ~/ddul/python/palmar log --oneline -100"),
+    ("git log --oneline -100",        "git -C %s log --oneline -100" % REPO),
     ("ls -la /usr/bin",               "ls -la /usr/bin"),
     ("색 있는 빌드 로그 흉내",          "for i in $(seq 1 200); do printf '\\033[32m ok \\033[0m module_%s compiled\\n' $i; done"),
-    ("git diff (색 포함)",             "git -C ~/ddul/python/palmar diff HEAD~3 --color=always"),
+    ("git diff (색 포함)",             "git -C %s diff HEAD~3 --color=always" % REPO),
     ("python 역추적 반복",             "for i in $(seq 1 40); do python3 -c 'raise ValueError(\"x\")' 2>&1; done"),
 ]
 print(f"{'무엇':28} {'바이트':>9} {'줄':>6} {'줄당':>6} {'100줄당':>9}")
