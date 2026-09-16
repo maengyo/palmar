@@ -241,12 +241,14 @@ def run(out_dir: str, keep: bool) -> int:
         # Where the windows sit, and **the group's colour planted on one of them**. A group of one
         # draws nothing, so nothing shows yet — and the drag below inherits the id, which is how the
         # recording gets a green group out of a product that picks its own.
-        # The canvas is what is left between the two rails — about 790 by 650 at this size — and the
-        # minimap sits in its bottom-right corner, so nothing is put there.
+        # **The one that gets carried must land on one window and one only.** With the third window
+        # close underneath, the carried one straddled both and the hold kept changing its mind about
+        # which it was joining ("위쪽에 그룹핑 되다가 아래쪽 되다가", 2026-09-17). The two that join sit
+        # side by side at the top; the third is well below, and the minimap owns the bottom-right.
         d.raw("PUT", "/api/layout", {"layout": {
             a["id"]: {"x": 24, "y": 24, "w": 430, "h": 250, "z": 3, "g": GREEN_GROUP},
-            b["id"]: {"x": 474, "y": 24, "w": 296, "h": 250, "z": 2},
-            c["id"]: {"x": 24, "y": 296, "w": 430, "h": 230, "z": 1},
+            b["id"]: {"x": 510, "y": 24, "w": 320, "h": 250, "z": 2},
+            c["id"]: {"x": 24, "y": 350, "w": 430, "h": 210, "z": 1},
         }})
         time.sleep(1.5)
 
@@ -272,19 +274,20 @@ def run(out_dir: str, keep: bool) -> int:
         take.hold(1.8)
 
         # ② carry one window onto another and hold: the gauge fills, and letting go joins them
-        src, dst = centre(br, "sh · router"), centre(br, "sh · api")
-        if src and dst:
-            take.drag(src["x"], src["y"], dst["x"] + 120, dst["y"] + 120, steps=16, pause=1.5)
+        # Straight across, onto the one beside it. Nothing else is anywhere near the path.
+        src = centre(br, "sh · router")
+        if src:
+            take.drag(src["x"], src["y"], src["x"] - 340, src["y"], steps=16, pause=1.6)
         take.hold(1.2)
 
         # ③ a group travels together, and Alt takes one back out of it
         grp = centre(br, "sh · api")
         if grp:
-            take.drag(grp["x"], grp["y"], grp["x"] - 170, grp["y"] + 150, steps=14)
+            take.drag(grp["x"], grp["y"], grp["x"] + 200, grp["y"] + 40, steps=14)
         take.hold(0.9)
         one = centre(br, "sh · router")
         if one:
-            take.drag(one["x"], one["y"], one["x"] - 90, one["y"] - 130, steps=14, alt=True)
+            take.drag(one["x"], one["y"], one["x"] + 30, one["y"] + 300, steps=14, alt=True)
         take.hold(1.4)
 
         # ④ a file opens in a window like any other
