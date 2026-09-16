@@ -30,6 +30,7 @@ README 대로 **JetBrains Mono 웹폰트는 받아두지 않았다.** 로컬에 
 | `p-quiet.svg` | 흐린 점. 조용할 때 |
 | `p-plain.svg` | 점 없는 `p` |
 | `p-square.svg` | 여백을 둔 정사각 `p` — 아이콘 격자에 맞출 때 |
+| `icons.py` → `palmar/web/icon-192.png` · `icon-512.png` | **앱 아이콘**: `p-square` 를 둥근 어두운 판(`#1f2329`) 위에 종이색으로, 점은 앰버. 매니페스트(Edge/Chrome "앱 설치" → 시작 메뉴·작업표시줄·Dock)와 파비콘의 첫 모습. 브라우저 시험이 모는 헤드리스 Chrome 으로 뽑는다 — 여기 SVG 를 그릴 다른 것이 없다 (2026-09-16) |
 | `clearspace.svg` | 문서용 — 곁여백 규칙 |
 | `counters.svg` | 문서용 — 속 셋을 가리키는 그림 |
 | `construction.svg` | 문서용 — 뼈대·기준선·반지름 |
