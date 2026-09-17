@@ -790,6 +790,26 @@ class TheWorldAroundTheWindows(unittest.TestCase):
         """)
         self.assertEqual(r["after"], r["big"], "the world shrank under the user: " + repr(r))
 
+    def test_the_first_window_takes_palmars_own_shape(self):
+        """**Chromium's app window is nearly square and this page does not fit in it.** Every case
+        here is a work area somebody measured, and every one of them was wrong under the first rule,
+        which set the width and handed `outerHeight` straight back: on two of the three it declined
+        to do anything at all, because the window was already wide enough and width was never the
+        thing that was wrong. The shape palmar's own window opens at is 1280x820."""
+        for avail_w, avail_h, outer_w, want in [
+            (1536, 912, 1050, (1280, 820)),    # Windows, no saved bounds — the case that started it
+            (1536, 912, 1302, (1302, 834)),    # Windows, the same machine after Chromium had its way
+            (2560, 1392, 1280, (1280, 820)),   # the shape the user sent on 2026-09-17: 1280x1029
+            (1024, 700, 900, (984, 630)),      # a work area too small for palmar's own size
+        ]:
+            got = self.b.ev("(()=>{const s=window.palmar.firstWindowSize(%d,%d,%d);return [s.w,s.h];})()"
+                            % (avail_w, avail_h, outer_w))
+            self.assertEqual(got, list(want),
+                             "a %dx%d work area holding a %dpx window: %r" % (avail_w, avail_h, outer_w, got))
+            self.assertLessEqual(got[0], avail_w, "wider than the screen it is on")
+            self.assertLessEqual(got[1], avail_h, "taller than the screen it is on")
+            self.assertGreaterEqual(got[0], min(outer_w, avail_w - 40), "it took width away from the window")
+
     def test_the_world_is_sized_without_being_told(self):
         """The other tests here call sizeWorld through the bench, which proves the arithmetic and not
         that anything runs it. This one touches nothing and reads what the page did on its own — the
@@ -850,6 +870,32 @@ class TheWorldAroundTheWindows(unittest.TestCase):
           document.getElementById('tidy').click();
           return [L[t.id].x, L[t.id].y];})()""")
         self.assertEqual(back, [12, 12], "tidy did not pull it back to the corner: " + repr(back))
+
+    def test_tidy_leaves_you_looking_at_the_corner(self):
+        """Pressing it used to do nothing you could see. The view was nudged by exactly what the
+        windows moved so that nothing slid under the eye, and once the canvas had a square of slack
+        that compensation became exact — the windows went to the corner and the view went with them
+        ("tidy 버튼 누르면 보고있는 화면에서 살짝 흔들리기만", user, 2026-09-17). A button whose job is
+        "pull them back to the corner" has to leave you looking at the corner."""
+        self.js("""
+          put('far', 500, 400, 300, 200);
+          const o = P.origin();
+          S.scrollLeft = o.x + 900; S.scrollTop = o.y + 700;   // a long way from the corner
+          P.paintTidy();
+          return 1;""")
+        off = self.b.ev("document.getElementById('tidy').disabled")
+        self.assertFalse(off, "tidy says there is nothing to close up, with a window at 500,400")
+        self.b.ev("document.getElementById('tidy').click()")
+        time.sleep(1.5)
+        r = self.b.ev("""(()=>{const P=window.palmar, L=P.layout(), S=document.getElementById('cv-scroll');
+          const t=[...P.tiles.values()].find(t=>t.s.name==='far');
+          const r=t.el.getBoundingClientRect(), b=S.getBoundingClientRect();
+          return {at:[L[t.id].x, L[t.id].y], onScreen:[Math.round(r.left-b.left), Math.round(r.top-b.top)]};})()""")
+        self.assertEqual(r["at"], [12, 12], "the window was not pulled to the corner: " + repr(r))
+        # And you can see it: near the top-left of the viewport rather than a screen away.
+        self.assertLess(r["onScreen"][0], 80, "the view did not follow to the corner: " + repr(r))
+        self.assertLess(r["onScreen"][1], 80, "the view did not follow to the corner: " + repr(r))
+        self.assertGreaterEqual(r["onScreen"][0], 0, "it went past the corner: " + repr(r))
 
     def test_dragging_the_window_that_defines_the_world_moves_it_on_screen(self):
         """(B), with a real hand. The window used to stay put on screen however far the hand went."""
@@ -2096,6 +2142,55 @@ class Grouping(unittest.TestCase):
         for k in "abc":
             self.assertEqual([after[k][0] - before[k][0], after[k][1] - before[k][1]], [90, 60],
                              "%s did not simply move with the group: %r -> %r" % (k, before, after))
+
+    def test_a_group_joins_as_the_group_you_carried(self):
+        """**The mates come too.** Joining placed the window in the hand at the preview spot and left
+        everyone else at the end of the drag, so carrying a pair onto an outside window put one of
+        them beside the target and dropped the other where the hand happened to stop: a row came down
+        as a stack, still grouped, so it read as the group rearranging itself (user, 2026-09-17:
+        "좌우로 붙어있던게 움직이다보면 상하 배치로 바뀔 때도 있어"). The hand's window still lands
+        exactly where its ghost was; the rest keep the shape they were picked up in."""
+        self.bench("""put('g1',420,420,240,160); put('g2',672,420,240,160); put('g3',60,60,240,160);
+                      P.joinGroups(by('g1').id, by('g2').id); return 1;""")
+        before = self.bench("return {a: at('g1'), b: at('g2')};")
+        x, y = self.press("g1")
+        tx, ty = self.press("g3")
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
+        for _ in range(20):
+            n = self.bench("return P.groupOf(by('g3').id).length;")
+            if n == 3:
+                break
+            time.sleep(0.18)
+            self.send(type="mouseMoved", x=tx + 1, y=ty, buttons=1)
+        self.send(type="mouseReleased", x=tx + 1, y=ty, clickCount=1, buttons=0)
+        time.sleep(0.8)
+        after = self.bench("return {a: at('g1'), b: at('g2'), c: at('g3')};")
+        self.assertEqual(self.bench("return P.groupOf(by('g1').id).length;"), 3,
+                         "the hold did not join the group to the window it was held over")
+        self.assertEqual([after["b"][0] - after["a"][0], after["b"][1] - after["a"][1]],
+                         [before["b"][0] - before["a"][0], before["b"][1] - before["a"][1]],
+                         "the two stopped standing side by side: %r -> %r" % (before, after))
+        # Which side it latched onto is the hand's business (that is its own test); what matters here
+        # is that the window in the hand landed against the target, on one of them, and exactly.
+        spots = self.bench("""return ['left','right','above','below']
+          .map((s) => P.joinPreview(by('g3').id, s, by('g1').id)).map((p) => [p.x, p.y]);""")
+        self.assertIn(after["a"], spots,
+                      "the window in the hand did not land on any of its previews: %r" % (after,))
+
+    def test_the_frame_follows_its_windows_past_the_origin(self):
+        """The group's tint is drawn cell by cell, and each cell used to be pinned at zero — from when
+        a window could not be carried past the origin. Once it could, the frame stopped following its
+        own windows up and to the left and piled against the corner instead, where it read as having
+        latched onto whatever window was sitting there (user, 2026-09-17)."""
+        r = self.bench("""put('g1',-200,-150,240,160); put('g2',52,-150,240,160);
+          P.joinGroups(by('g1').id, by('g2').id); P.sizeWorld(); P.paintGroups();
+          return [...document.querySelectorAll('.gcell')]
+            .map((c) => [parseFloat(c.style.left), parseFloat(c.style.top)])
+            .sort((a, b) => a[0] - b[0]);""")
+        self.assertEqual(r, [[-210, -160], [42, -160]],
+                         "the tint did not go where its windows went: %r" % (r,))
 
     def test_taking_one_out_of_the_middle_closes_the_hole(self):
         """Closing the middle window closed the group up; taking it out with Alt-drag left its hole

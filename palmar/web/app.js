@@ -1750,7 +1750,7 @@ function paintTidy() {
     : 'tidy this canvas — nothing to close up, it already starts at the corner';
 }
 
-function tidyCanvas(canvasId) {
+function tidyCanvas(canvasId, byHand) {
   const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
   if (!mine.length) return false;
   const dx = Math.min(...mine.map((t) => layout[t.id].x)) - GAP;
@@ -1769,14 +1769,26 @@ function tidyCanvas(canvasId) {
     layout[t.id] = Object.assign({}, r, { x: r.x - sx, y: r.y - sy });
   }
   saveLayout();
-  // Pull the viewport along too. If the content becomes shorter than the viewport the browser clips it to 0, but
-  // by then everything fits on one screen anyway, so nothing is missed.
-  // **Only for the canvas being looked at.** Every canvas shares the one scroll box (a hidden pane is just
-  // display:none). With auto-tidy on, one pane disappearing on a canvas in the background would slide the view
-  // you are looking at sideways — text moves while you touched nothing.
+  // **Go and look at the corner.** The view used to be nudged by exactly what the windows moved, so
+  // that nothing slid under the eye — and once the canvas had a square of slack around it that
+  // compensation became exact, which made pressing tidy do nothing visible at all: the windows went
+  // to the corner and the view went with them ("tidy 버튼 누르면 보고있는 화면에서 살짝 흔들리기만",
+  // user, 2026-09-17). A button whose whole job is "pull them back to the corner" has to leave you
+  // looking at the corner. Smoothly, because the windows themselves glide there on a transition.
+  //
+  // **Only for the canvas being looked at.** Every canvas shares the one scroll box (a hidden pane is
+  // just display:none). With auto-tidy on, one pane disappearing on a canvas in the background would
+  // slide the view you are looking at sideways — text moves while you touched nothing. That is why
+  // auto-tidy keeps the old behaviour: it was not asked for, so it must not move the view.
   if (canvasId === current) {
-    cvScroll.scrollLeft = Math.max(0, l0 - sx);
-    cvScroll.scrollTop = Math.max(0, t0 - sy);
+    if (byHand) {
+      const smooth = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+      cvScroll.scrollTo({ left: Math.max(0, originX - GAP), top: Math.max(0, originY - GAP),
+                          behavior: smooth ? 'smooth' : 'auto' });
+    } else {
+      cvScroll.scrollLeft = Math.max(0, l0 - sx);
+      cvScroll.scrollTop = Math.max(0, t0 - sy);
+    }
   }
   renderMinimap();
   refreshOff();
@@ -2120,7 +2132,23 @@ function place(id, x, y) {
 //: as the canvas — and that is all.
 function dropInto(meId, targetId, side) {
   const spot = joinPreview(targetId, side || 'right', meId);
-  if (spot) place(meId, spot.x, spot.y);
+  //: **A group lands as the group you carried.** This used to place the window in the hand and
+  //: nothing else, so carrying a pair onto an outside window put one of them beside the target and
+  //: left the other wherever the drag had ended — a row came down stacked, and the two were still
+  //: grouped, so it looked as though the group had rearranged itself (user, 2026-09-17: "좌우로
+  //: 붙어있던게 움직이다보면 상하 배치로 바뀔 때도 있어"). The mates are read **before** the join,
+  //: or the target's own group would be carried too, and every one of them moves by the step the
+  //: preview asks of the hand's window. The ghost still shows that window, and it still lands
+  //: exactly there; the rest keep the shape they had when you picked them up.
+  const carried = groupOf(meId);
+  if (spot) {
+    const was = layout[meId];
+    const dx = spot.x - was.x, dy = spot.y - was.y;
+    for (const id of carried) {
+      const r = layout[id];
+      if (r) place(id, r.x + dx, r.y + dy);
+    }
+  }
   joinGroups(meId, targetId);
   const ids = groupOf(meId);
   const me = tiles.get(meId);
@@ -2302,8 +2330,13 @@ function paintGroups() {
       const t = tiles.get(id);
       if (t) t.el.style.setProperty('--group', hue);
       const c = box.children[i];
-      c.style.left = Math.max(0, q.x - GROUP_PAD) + 'px';
-      c.style.top = Math.max(0, q.y - GROUP_PAD) + 'px';
+      // **No floor at zero.** These used to be clamped, from when a window could not be carried past
+      // the origin. Once it could, the frame stopped following its own windows up and to the left and
+      // sat piled at the corner instead — where it looked like it had latched onto whatever window
+      // happened to be there ("백그라운드 색깔이 다른 터미널에 붙게 되", user, 2026-09-17). Pressing
+      // tidy appeared to repair it, because tidy puts everything back on the positive side.
+      c.style.left = (q.x - GROUP_PAD) + 'px';
+      c.style.top = (q.y - GROUP_PAD) + 'px';
       c.style.width = (q.w + GROUP_PAD * 2) + 'px';
       c.style.height = (q.h + GROUP_PAD * 2) + 'px';
     });
@@ -3874,12 +3907,29 @@ if (updateBox) {
 //: 2026-09-16: a 1536x912 work area gave 1050x892 — 1.18:1, and `.win` has a min-width of 1120, so
 //: the right rail was cut off and the page scrolled sideways. Dragging it wider did not stick.
 //:
-//: So the page widens itself. **Once**, because doing it every load would undo the size somebody
-//: chose. **Never narrower and never shorter**, because taking room away from a window that has
-//: plenty is not ours to do. **Only in an app window** — a tab ignores resizeTo and then reports the
+//: So the page gives the window palmar's own shape. **Once**, because doing it every load would undo
+//: the size somebody chose. **Only in an app window** — a tab ignores resizeTo and then reports the
 //: size it refused to take, so running it there would change nothing and lie about it afterwards.
+//:
+//: **It is the height that is wrong, not only the width** (user, 2026-09-17). The first version set
+//: the width and passed `outerHeight` straight back, so a window that was already wide enough was
+//: left exactly as square as Chromium had made it: 1280x1029 on a 2560x1392 work area, 1.24:1, and
+//: 1302x893 on Windows. Worse, the guard read `want > outerWidth`, so on both of those it declined to
+//: do anything at all. Width alone was never the shape that was wrong.
+//:
+//: So: **never narrower** than Chromium gave it and never wider than the work area — taking width
+//: away from someone with the screen for it is not ours to do — and the height follows from that
+//: width at the proportions palmar's own window opens at. "Never shorter" was the rule before and it
+//: is gone on purpose: on the one load this runs, nobody has chosen a height yet, so there is no
+//: choice to take away, and keeping it was the whole reason the square window survived the fix.
 const LS_SIZED = 'palmar.sized';
-const FIRST_W = 1280;        // what palmar's own window opens at (app/src/main.rs)
+const FIRST_W = 1280, FIRST_H = 820;   // what palmar's own window opens at (app/src/main.rs)
+// The rule on its own, away from the screen and the window, because the arithmetic is the part that
+// has been wrong both times and it is the part a test can hold on to.
+function firstWindowSize(availW, availH, outerW) {
+  const w = Math.min(availW - 40, Math.max(FIRST_W, outerW));
+  return { w: w, h: Math.min(availH - 40, Math.round(w * FIRST_H / FIRST_W)) };
+}
 function sizeWindowOnce() {
   try {
     if (localStorage.getItem(LS_SIZED) === '1') return;
@@ -3887,8 +3937,8 @@ function sizeWindowOnce() {
   } catch (e) { return; }    // cannot remember having done it, so do not do it at all
   try {
     if (!matchMedia('(display-mode: standalone)').matches) return;
-    const want = Math.min(FIRST_W, screen.availWidth - 40);
-    if (want > outerWidth) resizeTo(want, outerHeight);
+    const want = firstWindowSize(screen.availWidth, screen.availHeight, outerWidth);
+    if (want.w !== outerWidth || want.h !== outerHeight) resizeTo(want.w, want.h);
   } catch (e) {}
 }
 
@@ -4500,11 +4550,13 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   removeCanvas, watchInput, newTerminal, newCanvas, switchCanvas, openViewer, viewerId, toast,
                   // Auto-tidy only runs on a pane disappearing, and that moment is hard to create from outside.
                   // Expose **the same function** the button calls, unchanged.
-                  tidyCanvas,
+                  // paintTidy with it: the button's enabled state is what a person actually sees,
+                  // and a test that writes the board directly has to be able to bring it up to date.
+                  tidyCanvas, paintTidy,
                   // Push-aside. A test drives the real drag with mouse events; these are here so the geometry
                   // can also be asked directly — the cascade and the round limit need more windows than a
                   // hand can comfortably drag into place one at a time.
-                  pushAside, applyPush, hits, firstFree,
+                  pushAside, applyPush, hits, firstFree, firstWindowSize,
                   // The world: how far the canvas scrolls and where the board's origin sits. A test
                   // has to be able to ask both, because the bug they fix was arithmetic nobody could see.
                   sizeWorld, contentExtent, origin: () => ({ x: originX, y: originY }),
@@ -4851,7 +4903,9 @@ function boot() {
     }
   }
   const tidyBtn = document.getElementById('tidy');
-  if (tidyBtn) tidyBtn.addEventListener('click', () => { undoMark('tidying up'); tidyCanvas(current); });
+  // `byHand`: a person pressed it, so the view is allowed to go where the windows went. Auto-tidy
+  // (the two calls above, on a pane disappearing) must not — nobody asked for that one.
+  if (tidyBtn) tidyBtn.addEventListener('click', () => { undoMark('tidying up'); tidyCanvas(current, true); });
   // The floating new-terminal button. Folding the right rail took "Open terminal here" with it and
   // left no way to open one by hand (user, 2026-09-15); this one shows only while that rail is folded
   // and does what Ctrl/⌘⏎ does — a terminal in the folder of the one you are on.
