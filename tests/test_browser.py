@@ -1456,6 +1456,37 @@ class TidyWithTheWindowsFarApart(unittest.TestCase):
     def js(self, body):
         return self.b.ev("(()=>{" + self.PUT + "\n" + body + "})()")
 
+    def test_tidy_shows_you_the_group_you_were_working_in(self):
+        """The window in front is the one you last touched, so that is what tidy takes you back to —
+        with its group, because a member on its own is half a thing to look at (user, 2026-09-17)."""
+        self.js("""
+          put('far', 1800, 60, 300, 200);      // top right, and the one we will be working in
+          put('near', 60, 1400, 300, 200);     // bottom left, the one nearest the corner
+          P.focusTile(by('far').id, {keyboard: false});
+          const o = P.origin(); S.scrollLeft = o.x + 400; S.scrollTop = o.y + 400;
+          P.paintTidy(); return 1;""")
+        self.b.ev("document.getElementById('tidy').click()")
+        time.sleep(1.5)
+        seen = self.b.ev("""(()=>{const P=window.palmar, S=document.getElementById('cv-scroll');
+          const b=S.getBoundingClientRect();
+          return [...P.tiles.values()].filter((t)=>{const q=t.el.getBoundingClientRect();
+            return q.right>b.left && q.left<b.right && q.bottom>b.top && q.top<b.bottom;})
+            .map((t)=>t.s.name).sort();})()""")
+        self.assertIn("far", seen, "tidy did not go back to the window in front: %r" % (seen,))
+
+    def test_a_new_window_opens_where_you_are_looking(self):
+        """The canvas is far bigger than the screen, and a new terminal at the board's corner is one
+        you have to go and find (user, 2026-09-17). The whole-canvas scan stays underneath it."""
+        r = self.js("""
+          put('far', 12, 12, 300, 200); put('near', 12, 240, 300, 200);
+          const o = P.origin(); S.scrollLeft = o.x + 1500; S.scrollTop = o.y + 1200;
+          return {spot: P.firstFree(300, 200, by('far').s.canvas),
+                  view: [S.scrollLeft - o.x, S.scrollTop - o.y, S.clientWidth, S.clientHeight]};""")
+        vx, vy, vw, vh = r["view"]
+        sx, sy = r["spot"]["x"], r["spot"]["y"]
+        self.assertTrue(vx <= sx and sx + 300 <= vx + vw and vy <= sy and sy + 200 <= vy + vh,
+                        "it opened off screen: spot %r, looking at %r" % (r["spot"], r["view"]))
+
     def test_tidy_does_not_leave_you_staring_between_two_windows(self):
         """One window at the top right and one at the bottom left: the corner of the box they make is
         empty canvas, and pressing tidy went and looked at it (user, 2026-09-17). The view goes to
@@ -2256,6 +2287,32 @@ class Grouping(unittest.TestCase):
         after = self.b.ev("""(()=>{const c=document.querySelector('.gbox .gcell');
           return getComputedStyle(c).transitionProperty !== 'none';})()""")
         self.assertTrue(after, "the tint never got its glide back after the drag")
+
+    def test_a_drag_does_not_grind_the_group_out_of_line(self):
+        """**A drag is a rigid translation, ten times over.** The user has a group that walks out of
+        line over many drags — a row of two becoming a staircase (2026-09-17) — and this does not
+        reproduce it: not here, not over other windows, not in and out of the viewport, not at 1.125.
+        What it does hold down is the property that would have to break for that to happen: a hand
+        moving a group changes no member's position relative to any other, and leaves none of them on
+        a fraction of a pixel. It is a fence, not the catch. The catch is the watch behind
+        `palmar.watchgroups`, which prints the stack of whatever really moves one member alone."""
+        self.bench("""put('g1',200,200,220,150); put('g2',432,200,220,150);
+                      P.joinGroups(by('g1').id, by('g2').id); return 1;""")
+        before = self.bench("return {a: at('g1'), b: at('g2')};")
+        for n in range(10):
+            x, y = self.press("g1")
+            self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+            for i in (1, 2, 3):
+                self.send(type="mouseMoved", x=x + 7.37 * i / 3, y=y + 5.61 * i / 3, buttons=1)
+            self.send(type="mouseReleased", x=x + 7.37, y=y + 5.61, clickCount=1, buttons=0)
+            time.sleep(0.45)
+            now = self.bench("return {a: at('g1'), b: at('g2')};")
+            self.assertEqual([now["b"][0] - now["a"][0], now["b"][1] - now["a"][1]],
+                             [before["b"][0] - before["a"][0], before["b"][1] - before["a"][1]],
+                             "drag %d put the group out of line: %r" % (n + 1, now))
+            for k in "ab":
+                for v in now[k]:
+                    self.assertEqual(v, int(v), "a window came to rest on half a pixel: %r" % (now,))
 
     def test_the_frame_follows_its_windows_past_the_origin(self):
         """The group's tint is drawn cell by cell, and each cell used to be pinned at zero — from when

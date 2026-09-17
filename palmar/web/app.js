@@ -205,7 +205,43 @@ try { localStorage.removeItem('palmar-tiles'); } catch (e) {}   // the copy olde
 const CLIENT = Math.random().toString(36).slice(2, 10);   // who saved — a page ignores its own broadcast
 let layoutRev = 0;
 let layoutOnDaemon = null;        // null until hello says; false when the daemon predates the endpoint
+//: **A watch for a bug nobody here can reproduce.** A group walks out of line over many drags — a
+//: row of two becomes a staircase, a pixel or so at a time (user, 2026-09-17). Twenty long drags on
+//: this machine, over other windows, in and out of the viewport, at four scale factors, never moved
+//: one member relative to another. So instead of another theory: every save compares each group's
+//: internal offsets with the last ones and, when they differ without the group having been joined or
+//: closed up, prints the offsets and the stack that got here. The stack is the point — it names the
+//: function that moved one member and not the other, which is the one thing all the guessing was for.
+//:
+//: Off unless `palmar.watchgroups` is set, and it only ever reads and prints.
+const LS_WATCH = 'palmar.watchgroups';
+let watchOn = false;
+try { watchOn = localStorage.getItem(LS_WATCH) === '1'; } catch (e) {}
+const watchWas = new Map();
+function watchGroups() {
+  if (!watchOn) return;
+  const now = new Map();
+  for (const t of tiles.values()) {
+    const r = layout[t.id];
+    if (r && r.g) { if (!now.has(r.g)) now.set(r.g, []); now.get(r.g).push([t.id, r.x, r.y]); }
+  }
+  for (const [g, list] of now) {
+    list.sort((a, b) => (a[0] < b[0] ? -1 : 1));
+    const shape = list.map(([, x, y]) => (x - list[0][1]) + ',' + (y - list[0][2])).join(' | ');
+    const was = watchWas.get(g);
+    const ids = list.map(([id]) => id).join(' ');
+    // A member joining or leaving changes the shape for an honest reason; only a set that stayed
+    // the same and moved anyway is worth a word.
+    if (was && was.ids === ids && was.shape !== shape) {
+      console.warn('[palmar] group ' + g + ' changed shape\n  was: ' + was.shape +
+                   '\n  now: ' + shape + '\n' + new Error('here').stack);
+    }
+    watchWas.set(g, { ids: ids, shape: shape });
+  }
+  for (const g of [...watchWas.keys()]) if (!now.has(g)) watchWas.delete(g);
+}
 function saveLayout() {
+  watchGroups();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(pushLayout, 150);
 }
@@ -1080,8 +1116,17 @@ class Tile {
     }, 400);
   }
 
-  persist() {
+  //: `at` is "you already know where this is — do not measure it", which is the rule the whole file
+  //: keeps (applyPush, tidyCanvas, the drop handler): write the intended value, never read it back.
+  //: The drag was the one place still breaking it — it wrote every member's position and then asked
+  //: `offsetLeft` what it had written. **This is hygiene, not a fix for anything measured.** It was
+  //: put in while chasing a group that walks out of line over many drags, on the theory that
+  //: `offsetLeft` rounds two windows different ways at a fractional scale factor; that theory is
+  //: wrong — measured at 1, 1.125, 1.25 and 1.5, the rounding is the same for every window
+  //: (2026-09-17). What remains true is that nothing good comes of measuring what you already know.
+  persist(at) {
     const r = this.rect();
+    if (at) { r.x = at.x; r.y = at.y; }
     // **Keep the group.** This rewrites the entry wholesale, which is how the text size was thrown
     // away once before (see below) — membership would have gone the same way on every drag.
     const was = layout[this.id] || {};
@@ -1206,7 +1251,9 @@ class Tile {
         // space above and to the left, try to drag a window there, and it stopped dead at the edge of
         // the windows already placed (user, 2026-09-17). Board coordinates go negative now; the world
         // holds the origin far enough in that the pad still starts at zero.
-        const mdx = dx, mdy = dy;
+        // A whole number of pixels, and the same one for everybody: a group under the hand is one
+        // rigid thing, and nothing downstream should ever have a fraction to make a decision about.
+        const mdx = Math.round(dx), mdy = Math.round(dy);
         for (const id of party) {
           const t = tiles.get(id), st = starts.get(id), r = layout[id];
           if (!t || !r) continue;
@@ -1249,10 +1296,13 @@ class Tile {
         if (left) compactGroup(groupMembers(left));
         if (left) toast([{ b: this.nameEl.textContent || 'window' }, 'left its group — ' + KMOD + 'Z puts it back']);
       }
-      for (const id of party) { const t = tiles.get(id); if (t && t !== this) t.persist(); }
+      // The drag wrote every member's position into the store as it went; saving it is not an
+      // excuse to go and measure the screen again (see persist).
+      const told = (t) => (was === 'move' && layout[t.id]) ? { x: layout[t.id].x, y: layout[t.id].y } : null;
+      for (const id of party) { const t = tiles.get(id); if (t && t !== this) t.persist(told(t)); }
       paintTidy();          // moving a window creates or removes slack to close up
       if (was === 'size') this.refit();   // tell the PTY only when the resize is let go (spike D)
-      this.persist();
+      this.persist(told(this));
       // **Everything below places windows, and placing writes the store directly.** persist() reads the
       // position back off the element, and .tile slides for 350ms, so a persist that follows an
       // arrangement reads a number from the middle of that slide and saves the *old* position —
@@ -1387,7 +1437,7 @@ class Viewer {
   }
   visible() { return current === null || this.s.canvas === current; }
   rect() { return { x: this.el.offsetLeft, y: this.el.offsetTop, w: this.el.offsetWidth, h: this.el.offsetHeight }; }
-  persist() { Tile.prototype.persist.call(this); }
+  persist(at) { Tile.prototype.persist.call(this, at); }
   dragify() { Tile.prototype.dragify.call(this); }
   rename() {}
   refit() {}
@@ -1792,8 +1842,15 @@ function tidyCanvas(canvasId, byHand) {
       // corner is empty canvas between them, which is what pressing tidy left you staring at
       // (user, 2026-09-17). So the view goes to whichever window is nearest the corner, with the
       // same GAP of room around it that the corner itself would have had.
-      const lead = mine.map((t) => layout[t.id])
-        .reduce((a, q) => (a && a.x + a.y <= q.x + q.y ? a : q), null);
+      // **And if you were working in one, that is the one it shows you.** The window in front is the
+      // one you last touched, so tidy takes you back to it rather than to whatever happens to lie
+      // nearest the corner — with its group, because a member on its own is half a thing to look at
+      // (user, 2026-09-17). Nothing in front, or in front on another canvas: the corner-most window.
+      const mine_ = mine.map((t) => layout[t.id]);
+      const front = tiles.get(focused);
+      const lead = (front && front.s.canvas === canvasId && layout[focused])
+        ? blockOf(groupOf(focused))
+        : mine_.reduce((a, q) => (a && a.x + a.y <= q.x + q.y ? a : q), null);
       const smooth = !matchMedia('(prefers-reduced-motion: reduce)').matches;
       cvScroll.scrollTo({ left: Math.max(0, originX + lead.x - GAP),
                           top: Math.max(0, originY + lead.y - GAP),
@@ -1828,6 +1885,15 @@ function firstFree(w, h, canvasId) {
   const W = Math.max(cvScroll.clientWidth, rects.reduce((m, r) => Math.max(m, r.x + r.w), 0) + GAP + w);
   const H = Math.max(cvScroll.clientHeight, rects.reduce((m, r) => Math.max(m, r.y + r.h), 0) + GAP + h);
   const hit = (x, y) => rects.some((r) => x < r.x + r.w + GAP && x + w + GAP > r.x && y < r.y + r.h + GAP && y + h + GAP > r.y);
+  // **Where you are looking, first** (user, 2026-09-17). The canvas is far bigger than the screen, and
+  // a new terminal opening at the board's top-left corner is a new terminal you have to go and find.
+  // This is a first pass, not the rule: scanning the viewport and stopping there is what used to pile
+  // windows downwards for ever once it was full (2026-09-14, the test below this one), so if nothing
+  // in view can hold it the whole canvas is searched exactly as before.
+  const vx = Math.round(cvScroll.scrollLeft - originX), vy = Math.round(cvScroll.scrollTop - originY);
+  for (let y = vy + GAP; y + h <= vy + cvScroll.clientHeight; y += GRID)
+    for (let x = vx + GAP; x + w <= vx + cvScroll.clientWidth; x += GRID)
+      if (!hit(x, y)) return { x, y };
   for (let y = GAP; y + h <= H; y += GRID)
     for (let x = GAP; x + w <= W; x += GRID)
       if (!hit(x, y)) return { x, y };
@@ -4601,7 +4667,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // Push-aside. A test drives the real drag with mouse events; these are here so the geometry
                   // can also be asked directly — the cascade and the round limit need more windows than a
                   // hand can comfortably drag into place one at a time.
-                  pushAside, applyPush, hits, firstFree, firstWindowSize,
+                  pushAside, applyPush, hits, firstFree, firstWindowSize, focusTile,
                   // The world: how far the canvas scrolls and where the board's origin sits. A test
                   // has to be able to ask both, because the bug they fix was arithmetic nobody could see.
                   sizeWorld, contentExtent, origin: () => ({ x: originX, y: originY }),
