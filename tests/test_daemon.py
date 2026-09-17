@@ -329,6 +329,86 @@ class Restore(unittest.TestCase):
             st, _ = d.raw("POST", "/api/restore")
             self.assertEqual(st, 409)
 
+    def test_the_rail_follows_a_cd_too(self):
+        """The restore file has followed a `cd` since the day it was written. **What a browser is told
+        never did** — `to_json` handed out the folder the pane was created with and nothing ever
+        changed it, so the left rail named the opening folder for the life of the session, on every
+        platform (measured 2026-09-17: a Mac, a cd, eleven seconds, still the old name). The live
+        value was already being read every ten seconds for the snapshot and thrown away."""
+        from palmar import daemon as D
+        if D.cwd_of(os.getpid()) is None:
+            self.skipTest("cwd_of is not implemented on %s" % sys.platform)
+        with Daemon() as d:
+            deep = os.path.join(d.home, "somewhere", "deep")
+            os.makedirs(deep)
+            sid = d.open_pane(d.home, name="wanderer")["id"]
+            time.sleep(1.0)
+            w = WS(d, "/pty/%s?token=%s&cols=80&rows=24" % (sid, d.token))
+            w.recv_json()
+            said = lambda: [r for r in d.panes() if r["id"] == sid][0]["cwd"]
+            self.assertEqual(os.path.realpath(said()), os.path.realpath(d.home))
+            w.send(("cd %s\r" % deep).encode(), opcode=0x2)
+            end = time.time() + D.RESTORE_EVERY_S + 6
+            while time.time() < end and os.path.realpath(said()) != os.path.realpath(deep):
+                time.sleep(0.5)
+            w.close()
+            self.assertEqual(os.path.realpath(said()), os.path.realpath(deep),
+                             "the rail is still naming the folder the pane opened in")
+
+    def test_a_pane_can_say_where_it_is_when_nobody_can_read_it(self):
+        """The Windows route, driven here from a shell that could have been read anyway — because the
+        thing under test is the daemon's side of it. PowerShell's `Set-Location` never touches the
+        process working directory, so `cwd_of` answers with where the shell started however correctly
+        it reads; palmar's preamble has the prompt write `palmar:cwd:<path>` into the title instead."""
+        with Daemon() as d:
+            from palmar import daemon as D
+            elsewhere = os.path.join(d.home, "elsewhere")
+            os.makedirs(elsewhere)
+            sid = d.open_pane(d.home, name="quiet")["id"]
+            time.sleep(1.0)
+            w = WS(d, "/pty/%s?token=%s&cols=80&rows=24" % (sid, d.token))
+            w.recv_json()
+            row = lambda: [r for r in d.panes() if r["id"] == sid][0]
+            w.send(("printf '\\033]2;%s%s\\007'\r" % (D.TITLE_CWD, elsewhere)).encode(), opcode=0x2)
+            end = time.time() + 8
+            while time.time() < end and os.path.realpath(row()["cwd"]) != os.path.realpath(elsewhere):
+                time.sleep(0.25)
+            w.close()
+            self.assertEqual(os.path.realpath(row()["cwd"]), os.path.realpath(elsewhere),
+                             "the pane said where it was and was not believed")
+            self.assertNotEqual(row()["status"], "working",
+                                "palmar's own marker was read as the agent working")
+
+    def test_a_shell_that_says_it_outright_is_believed(self):
+        """OSC 133, through a real pane: the whole path from the pty to what a browser is told. The
+        marks are driven by hand here because no shell palmar ships to yet emits them — the Windows
+        preamble does, and zsh and bash are still to come."""
+        with Daemon() as d:
+            sid = d.open_pane(d.home, name="talker")["id"]
+            time.sleep(1.0)
+            w = WS(d, "/pty/%s?token=%s&cols=80&rows=24" % (sid, d.token))
+            w.recv_json()
+            status = lambda: [r for r in d.panes() if r["id"] == sid][0]["status"]
+            osc = lambda m: ("printf '\\033]133;%s\\007'\r" % m).encode()
+            w.send(osc("C"), opcode=0x2)
+            end = time.time() + 6
+            while time.time() < end and status() != "working":
+                time.sleep(0.2)
+            self.assertEqual(status(), "working", "the shell said a command had started")
+            w.send(b"echo something\r", opcode=0x2)
+            time.sleep(0.8)
+            w.send(osc("D"), opcode=0x2)
+            end = time.time() + 6
+            while time.time() < end and status() != "done":
+                time.sleep(0.2)
+            self.assertEqual(status(), "done", "the shell said it had finished")
+            w.send(osc("A"), opcode=0x2)
+            end = time.time() + 6
+            while time.time() < end and status() != "idle":
+                time.sleep(0.2)
+            self.assertEqual(status(), "idle", "the shell said it was back at a prompt")
+            w.close()
+
     def test_a_cd_is_what_gets_remembered(self):
         """Not the folder the pane opened at — the one the person moved to."""
         from palmar import daemon as D

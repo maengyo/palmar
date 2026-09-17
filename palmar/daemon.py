@@ -152,6 +152,12 @@ ALT_OFF = b"\x1b[?1049l"
 #: so a 3-second window covers both. Requiring two is what keeps a one-shot title change (Claude Code
 #: renames the window to the turn's words when a turn starts) from reading as "it is spinning".
 OSC_TITLE = re.compile(rb"\x1b\][012];([^\x07\x1b]{0,255})(?:\x07|\x1b\\)")
+#: **The two things palmar reads out of the byte stream**, in one pass so the carry cannot disagree
+#: with itself. Group 2 is a window title; group 3 is a shell integration mark (OSC 133).
+OSC_SEEN = re.compile(
+    rb"\x1b\](?:([012]);([^\x07\x1b]{0,255})|133;([A-D])(?:;[^\x07\x1b]{0,255})?)(?:\x07|\x1b\\)")
+#: A title that begins with this is palmar's preamble saying where the pane is, not an agent at work.
+TITLE_CWD = "palmar:cwd:"
 TITLE_WINDOW_S = 3.0
 TITLE_BUSY_N = 2
 #: **The count alone is not enough — how far it spreads matters too.** A shell that swaps the title on
@@ -443,6 +449,18 @@ DEFAULT_PATH = [r"C:\Windows\system32;C:\Windows" if sys.platform == "win32" els
 #: whole rc-wrapping dance POSIX needs (ZDOTDIR, --rcfile) is an argument order here. User files are
 #: never read or written.
 #:
+#: **And the prompt says where the pane is.** `cwd_of` reads the process working directory, and
+#: PowerShell's `Set-Location` never touches it — it moves PowerShell's own location and nothing
+#: else — so however correctly that is read it answers with the folder the shell started in. Only the
+#: shell can say, so the prompt says: `palmar:cwd:<path>` in the window title, which the daemon
+#: already watches and now understands (`_title_cwd`).
+#:
+#: **Written beside the prompt, not inside it.** The escape goes out with `[Console]::Write` before
+#: the prompt string is returned, so PSReadLine never measures it. A zero-width sequence inside the
+#: returned string is exactly the mistake that breaks line wrapping in zsh when `%{...%}` is
+#: forgotten, and there is no reason to make it here. The user's prompt runs first, so if it sets a
+#: title of its own, ours is the one that lands.
+#:
 #: `-CommandType Application` is what stops the function finding itself. The POSIX shim does the same
 #: job by taking its own directory out of PATH as a fixed string, which went wrong once (#12: the `.`
 #: in `.palmar` read as a regex). Asking for a type cannot go wrong that way.
@@ -462,6 +480,36 @@ function global:claude {
   }
   if ($f -and (Test-Path -LiteralPath $f)) { & $real.Source --settings $f @args }
   else { & $real.Source @args }
+}
+
+# 이 pane 이 어느 폴더에 있는지 프롬프트가 직접 말한다. PowerShell 의 Set-Location 은
+# 프로세스 작업 디렉터리를 안 바꿔서, 밖에서는 읽을 방법이 없다 (#30).
+if (-not $global:PalmarUserPrompt) {
+  $global:PalmarUserPrompt = $function:prompt
+  function global:prompt {
+    $out = & $global:PalmarUserPrompt      # 사용자 것이 먼저 — 제목을 건드린다면 우리가 뒤에 온다
+    try {
+      $e = [char]27; $b = [char]7
+      # 어디에 있는지, 그리고 "직전 명령이 끝났다 · 프롬프트다 · 입력을 기다린다" (OSC 133).
+      [Console]::Write("$e]2;palmar:cwd:$($PWD.ProviderPath)$b$e]133;D$b$e]133;A$b")
+    } catch {}
+    $out
+  }
+}
+
+# "명령이 시작됐다" (OSC 133;C). PSReadLine 이 한 줄을 다 받아 돌려주는 바로 그 자리다 —
+# 프롬프트 문자열이 아니라 그 옆이라, 줄 길이 계산에 끼어들지 않는다.
+if (-not $global:PalmarReadLine -and (Get-Command PSConsoleHostReadLine -ErrorAction SilentlyContinue)) {
+  $global:PalmarReadLine = $function:PSConsoleHostReadLine
+  function global:PSConsoleHostReadLine {
+    $line = & $global:PalmarReadLine
+    try {
+      $e = [char]27; $b = [char]7
+      [Console]::Write("$e]133;B$b")
+      if ($line -and $line.Trim()) { [Console]::Write("$e]133;C$b") }
+    } catch {}
+    $line
+  }
 }
 """
 
@@ -744,6 +792,8 @@ class Session:
         self.title_hits = []         # recent title-change times (monotonic). Anything outside TITLE_WINDOW_S is dropped
         self.title_timer = None
         self.osc_carry = b""         # an OSC candidate straddling a chunk boundary
+        self.shell_marks = False     # has this shell ever spoken OSC 133 — then the guesses stand down
+        self.cmd_start = None        # monotonic time of the last 133;C, or None between commands
         self.derived = "idle"        # status read from title and output when there are no hooks
         #: Has this pane's title **actually spun**. Not "was it ever set" — a shell setting the title on
         #: every prompt is very common (that is bash's default on WSL: `\e]0;\u@\h: \w\a`), and taking that
@@ -1008,16 +1058,21 @@ class Session:
         if alt_changed:
             registry.changed(self)   # when alt flips, send session over /events
 
-    # ── Reading status from the title (#38) ──────────────
+    # ── Reading status out of the bytes (#38) ────────────
     def _scan_title(self, data: bytes) -> None:
-        """Only counts title sequences. It removes them neither from the ring nor from the frame going to
-        the browser — xterm must receive them as-is and do its job (unlike the alt markers)."""
+        """Only counts. It removes nothing from the ring or from the frame going to the browser —
+        xterm must receive these as-is and do its job (unlike the alt markers)."""
         buf = self.osc_carry + data
         last = 0
         hit = False
-        for m in OSC_TITLE.finditer(buf):
+        for m in OSC_SEEN.finditer(buf):
             last = m.end()
-            t = m.group(1).decode("utf-8", "replace")
+            if m.group(3):             # OSC 133 — the shell saying it plainly
+                self._shell_mark(m.group(3).decode())
+                continue
+            t = m.group(2).decode("utf-8", "replace")
+            if self._title_cwd(t):     # palmar's own marker — a place, not a heartbeat
+                continue
             if t != self.title:        # setting the same title again is not a change
                 self.title = t
                 self.title_hits.append(time.monotonic())
@@ -1048,9 +1103,42 @@ class Session:
             return False
         return self.title_hits[-1] - self.title_hits[0] >= TITLE_MIN_S
 
+    #: **OSC 133 — the shell saying it, instead of us guessing.** `A` a prompt is being drawn, `B` it
+    #: is waiting for typing, `C` a command has started, `D` it finished. Every layer above this one
+    #: is inference: the title spinning is a heartbeat we hope means work, and the output rule is
+    #: "printing on and on = working, printing then stopping = done", which calls a long quiet think
+    #: finished and a chatty log busy. A shell that emits these is telling us, and once one does the
+    #: guessing stops for that pane — the same rule as hooks over the title (`eff_status`).
+    #:
+    #: **Done means something ran and said something.** `C` then `D` with nothing printed between is
+    #: an empty line and an Enter, and lighting "finished" for that would be a light nobody asked
+    #: for — the same discipline `_out_tick` and `_title_tick` already keep.
+    #:
+    #: Hooks still win. This only ever writes `derived`, which `eff_status` reads when the hooks are
+    #: silent.
+    def _shell_mark(self, mark: str) -> None:
+        self.shell_marks = True
+        if mark == "C":
+            self.cmd_start = time.monotonic()
+            want = "working"
+        elif mark == "D":
+            started, self.cmd_start = self.cmd_start, None
+            said = started is not None and self.last_out >= started
+            want = "done" if said else "idle"
+        else:                                   # A or B: at a prompt, waiting for a person
+            if self.cmd_start is not None:
+                return                          # a prompt redrawn mid-command means nothing
+            want = "idle"
+        if want != self.derived:
+            self.derived = want
+            if self.status == "unknown":
+                registry.changed(self)
+
     def _title_tick(self) -> None:
         """Spinning means working; **spinning and then** stopping means done. Nothing becomes done without
         having spun — turning a TUI sitting still (vim, say) into 'finished' leaves the lights always on."""
+        if self.shell_marks:
+            return                         # the shell says it outright — see _shell_mark
         busy = self._title_busy()
         if busy:
             self.title_spun = True         # **only here** does the title layer take the lead
@@ -1124,6 +1212,37 @@ class Session:
         self.fg_varied = self.pty.fg_varied
         return bool(answer)
 
+    #: **The folder a pane is in, not the one it was opened in.** `to_json` handed out the cwd the
+    #: pane was *created* with and nothing ever changed it, so the left rail named the opening folder
+    #: for the life of the session — on every platform, not only Windows (measured 2026-09-17: a `cd`
+    #: into a subfolder, and eleven seconds later the rail still said the folder it started in). The
+    #: restore snapshot had been reading the live one all along with this very call, so the number was
+    #: being fetched every ten seconds and thrown away.
+    #:
+    #: **None is not an answer, it is the absence of one.** `cwd_of` cannot see a PowerShell
+    #: `Set-Location` and returns None on a platform it cannot ask, and the last place we knew about
+    #: is a better answer than no place at all. Windows fills this in through the title instead.
+    def sample_cwd(self) -> None:
+        live = cwd_of(self.pid)
+        if live and live != self.cwd:
+            self.cwd = live
+            registry.changed(self)
+
+    #: The pane telling us where it is, because we cannot see it: `palmar:cwd:<path>` in the window
+    #: title. PowerShell's `Set-Location` moves PowerShell's own location and never calls
+    #: SetCurrentDirectory, so the process working directory — which is all `cwd_of` can read — stays
+    #: where the shell started (#30). Only a shell that says so can be followed, and palmar's preamble
+    #: makes the prompt say so. **It is not a title spin**: it changes when the folder does, once,
+    #: which is nothing like an agent working, and counting it as one would be a lie in the lights.
+    def _title_cwd(self, t: str) -> bool:
+        if not t.startswith(TITLE_CWD):
+            return False
+        path = t[len(TITLE_CWD):].strip()
+        if path and path != self.cwd and os.path.isdir(path):
+            self.cwd = path
+            registry.changed(self)
+        return True
+
     def sample_fg(self) -> None:
         """Read who is in front and, when that changed, tell every browser. Called on every output tick
         and every ten seconds from the restore timer, so a command that prints nothing is still seen."""
@@ -1139,6 +1258,8 @@ class Session:
         """At a prompt: idle. Something running and printing **on and on**: working. Printing then stopping:
         done — nothing becomes done without ever having printed (same discipline as the title side)."""
         self.sample_fg()
+        if self.shell_marks:
+            return                          # the shell says it outright — see _shell_mark
         now = time.monotonic()
         if self._at_prompt():
             want = "idle"
@@ -1919,12 +2040,24 @@ _LAST_SNAP = [None]
 
 def snapshot() -> dict:
     """What is worth having back after this daemon is gone: the canvases, and each pane's name and
-    **the folder it is in now** — not the one it opened at."""
+    **the folder it is in now** — not the one it opened at.
+
+    **It asks the panes to look first.** This used to read `cwd_of(pid)` here and hand the answer
+    straight to the file, which was right for the file and left the browser with the folder the pane
+    opened in for the life of the session. Now one call answers both: each pane samples itself, and
+    this reads what the panes say. Sampling **here** rather than only on the ten-second tick is what
+    keeps a clean stop honest — it saves on the way out, seconds after a `cd`, and the tick would not
+    have come round yet (measured 2026-09-17: the first version of this lost exactly that case)."""
+    for x in registry.list():
+        try:
+            x.sample_cwd()
+        except Exception:
+            pass
     return {
         "v": 1,
         "canvases": [{"id": c.id, "name": c.name} for c in registry.canvas_list()],
         "sessions": [{"name": s.name, "canvas": s.canvas,
-                      "cwd": cwd_of(s.pid) or s.cwd}
+                      "cwd": s.cwd}          # kept live by sample_cwd / the title marker
                      for s in registry.list()],
     }
 
@@ -4927,6 +5060,8 @@ async def main(port: int, open_page: bool = True, web: bool = False, new: bool =
     # in, which changes with a `cd` that may print nothing and fire no event. Ten seconds is the most
     # that can be lost to a kill -9; a clean stop saves on the way out.
     def tick():
+        # save_restore asks every pane where it is, so a `cd` that printed nothing reaches the rail
+        # on this same ten seconds — and on a clean stop, which also saves.
         save_restore()
         for x in registry.list():
             try:
@@ -5082,6 +5217,20 @@ def doctor(port: int) -> int:
         out("  locale    %s%s" % (loc or "(none)", "" if utf8 else "   <- not UTF-8"))
         out("  panes get %s" % ("this, unchanged" if utf8 else "LC_CTYPE=" + (UTF8_CTYPE[0] or pick_utf8_locale())))
     out("  home      %s" % PALMAR_DIR)
+    # **Is the thing that makes the lights work actually attached?** AGENTS principle 3: a pane with
+    # no hooks must not be left quietly grey. On Windows every one of these was missing at once and
+    # the only way to find out was to read the source (2026-09-17), so it says which, by name.
+    if POSIX_PERMS:
+        shim = BIN_DIR / "claude"
+        out("  hooks     %s%s" % (shim, "" if shim.exists() else "   <- MISSING; `claude` gets no --settings"))
+        out("            zsh %s · bash %s" % (
+            "ok" if (ZDOT_DIR / ".zshrc").exists() else "MISSING",
+            "ok" if BASHRC.exists() else "MISSING"))
+    else:
+        out("  hooks     %s%s" % (PWSH_FILE, "" if PWSH_FILE.exists() else "   <- MISSING"))
+        out("            PowerShell panes only — one opened with cmd.exe gets no hooks (#30)")
+    out("  PATH      panes get %s first" % BIN_DIR)
+    out("  shell     %s" % " ".join(Pty_default_shell()))
     out("")
 
     # **Is a daemon running** — screened by the lock. The token file outlives a dead daemon, so it is no evidence.

@@ -292,6 +292,22 @@ class TheShimOnWindows(unittest.TestCase):
         self.assertIn("Join-Path '/tmp/h/.palmar/run'", rendered)
         self.assertNotIn("{run}", rendered)
 
+    def test_the_prompt_says_where_the_pane_is(self):
+        """The two halves have to agree: the preamble writes a marker and the daemon reads one. If
+        anybody edits either spelling alone, this is what notices."""
+        body = D.PWSH_PREAMBLE
+        self.assertIn("palmar:cwd:", body, "the prompt does not say where the pane is")
+        self.assertIn(D.TITLE_CWD, body, "the preamble and the daemon disagree on the marker")
+        self.assertIn("$PWD.ProviderPath", body,
+                      "a PSDrive path would be sent where a folder is meant")
+        self.assertIn("$global:PalmarUserPrompt", body, "it replaced the user's prompt instead of wrapping it")
+        # The user's prompt is called first, so if it sets a title of its own ours is the one that lands.
+        self.assertLess(body.index("& $global:PalmarUserPrompt"), body.index("palmar:cwd:"),
+                        "palmar's title is written before the user's prompt has had its turn")
+        # Beside the prompt, not inside it: a zero-width sequence in the returned string is the
+        # mistake that breaks line wrapping in zsh when %{...%} is forgotten.
+        self.assertIn("[Console]::Write(", body, "the escape is going through the prompt string")
+
     def test_the_profile_runs_and_the_policy_does_not_refuse(self):
         """Three things the arguments have to get right at once. **The user's profile still runs** —
         no `-NoProfile` — and because PowerShell loads it before `-Command`, palmar's part comes
@@ -314,6 +330,154 @@ class TheShimOnWindows(unittest.TestCase):
         argv = D.pwsh_argv(["pwsh"], "C:/Users/O'Brien/.palmar/pwsh/preamble.ps1")
         self.assertIn("C:/Users/O''Brien/", argv[-1], "the quote was left to close the string: " + argv[-1])
         self.assertEqual(argv[-1].count("'") % 2, 0, "unbalanced quotes: " + argv[-1])
+
+
+class TheFolderAPaneIsIn(unittest.TestCase):
+    """`to_json` handed out the folder a pane was **created** with, and nothing ever changed it — so
+    the left rail named the opening folder for the life of the session. On every platform: measured
+    2026-09-17 on a Mac, a `cd` into a subfolder and eleven seconds later the rail still said the
+    folder it started in. The live value was being read every ten seconds for the restore snapshot
+    and thrown away."""
+
+    def pane(self, cwd="/start"):
+        class F:
+            pass
+        f = F()
+        f.cwd = cwd
+        f.pid = os.getpid()
+        f.title = ""
+        f.title_hits = []
+        f.osc_carry = b""
+        # _scan_title reaches for it through self, and this stand-in is not a Session.
+        f._title_cwd = lambda t: D.Session._title_cwd(f, t)
+        f._title_tick = lambda: None
+        f._arm_settle = lambda: None
+        return f
+
+    def test_the_marker_moves_the_pane(self):
+        """The Windows route. PowerShell's `Set-Location` never touches the process working
+        directory, so `cwd_of` answers with where the shell started however correctly it reads — only
+        a shell that says so can be followed, and palmar's preamble makes the prompt say so."""
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            took = D.Session._title_cwd(f, D.TITLE_CWD + tempfile.gettempdir())
+        self.assertTrue(took, "the marker was not recognised as palmar's own")
+        self.assertEqual(f.cwd, tempfile.gettempdir())
+
+    def test_a_folder_that_is_not_there_is_not_believed(self):
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            took = D.Session._title_cwd(f, D.TITLE_CWD + "/no/such/place/at/all")
+        self.assertTrue(took, "it is still palmar's marker, and still not a title spin")
+        self.assertEqual(f.cwd, "/start", "it believed a folder that does not exist")
+
+    def test_an_ordinary_title_is_left_alone(self):
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            self.assertFalse(D.Session._title_cwd(f, "~/work — claude"))
+        self.assertEqual(f.cwd, "/start")
+
+    def test_the_marker_is_not_a_heartbeat(self):
+        """It changes when the folder does, once, which is nothing like an agent working. Counting it
+        as a spin would put "working" in the lights for a `cd`."""
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._scan_title(f, b"\x1b]2;" + (D.TITLE_CWD + tempfile.gettempdir()).encode() + b"\x07")
+        self.assertEqual(f.title_hits, [], "palmar's own marker was counted as the agent working")
+        self.assertEqual(f.cwd, tempfile.gettempdir())
+
+
+class WhenTheShellSaysItOutright(unittest.TestCase):
+    """OSC 133. Every other layer under the hooks is inference: the title spinning is a heartbeat we
+    hope means work, and the output rule — printing on and on is working, printing then stopping is
+    done — calls a long quiet think finished and a chatty log busy. A shell that emits these marks is
+    telling us, and there is nothing left to guess."""
+
+    def pane(self):
+        class F:
+            pass
+        f = F()
+        f.derived, f.status = "idle", "unknown"
+        f.shell_marks, f.cmd_start = False, None
+        f.last_out = 0.0
+        f.title, f.title_hits, f.title_spun, f.osc_carry = "", [], False, b""
+        f.cwd, f.pid = "/start", os.getpid()
+        f._title_cwd = lambda t: D.Session._title_cwd(f, t)
+        f._shell_mark = lambda m: D.Session._shell_mark(f, m)
+        f._title_tick = lambda: D.Session._title_tick(f)
+        f._arm_settle = lambda: None
+        return f
+
+    def mark(self, f, *marks):
+        with mock.patch.object(D.registry, "changed"):
+            for m in marks:
+                D.Session._shell_mark(f, m)
+        return f.derived
+
+    def test_a_command_starting_is_working(self):
+        self.assertEqual(self.mark(self.pane(), "C"), "working")
+
+    def test_a_command_that_said_something_is_done(self):
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._shell_mark(f, "C")
+            f.last_out = time.monotonic()      # it printed
+            D.Session._shell_mark(f, "D")
+        self.assertEqual(f.derived, "done")
+
+    def test_an_empty_line_and_an_enter_is_not_finished_work(self):
+        """`C` then `D` with nothing printed between is a person pressing Enter on an empty line.
+        Lighting "finished" for that is a light nobody asked for."""
+        self.assertEqual(self.mark(self.pane(), "C", "D"), "idle")
+
+    def test_a_prompt_is_idle(self):
+        f = self.pane()
+        f.derived = "working"
+        self.assertEqual(self.mark(f, "D", "A", "B"), "idle")
+
+    def test_a_prompt_redrawn_mid_command_means_nothing(self):
+        """Ctrl-L, a window resize, a progress line that repaints — the prompt can be written again
+        while a command is still running, and that is not the command ending."""
+        f = self.pane()
+        self.assertEqual(self.mark(f, "C", "A"), "working")
+
+    def test_the_guessing_stands_down_once_the_shell_speaks(self):
+        """The same rule as hooks over the title: the exact source wins and the inferring one stops,
+        rather than the two of them taking turns writing the light."""
+        f = self.pane()
+        self.mark(f, "C")
+        f.title_hits = [time.monotonic() - g for g in (2.0, 1.0, 0.0)]   # a spinner, on any other day
+        f.title_spun = True
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._title_tick(f)
+        self.assertEqual(f.derived, "working")
+        self.mark(f, "D")
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._title_tick(f)
+        self.assertEqual(f.derived, "idle", "the title layer wrote over what the shell said")
+
+    def test_hooks_still_win(self):
+        """This only ever writes `derived`. A pane the hooks speak for reads its status from them."""
+        f = self.pane()
+        f.status = "waiting"
+        self.mark(f, "C")
+        self.assertEqual(D.Session.eff_status(f), "waiting")
+
+    def test_the_marks_are_found_in_the_stream_and_are_not_titles(self):
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._scan_title(f, b"hello\x1b]133;C\x07world\x1b]0;vim\x07")
+        self.assertEqual(f.derived, "working", "the mark was not seen in the stream")
+        self.assertEqual(f.title, "vim", "the title beside it was lost")
+        self.assertEqual(len(f.title_hits), 1, "the mark was counted as a title change")
+
+    def test_a_mark_split_across_two_chunks_is_still_one_mark(self):
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._scan_title(f, b"\x1b]133")
+            self.assertEqual(f.derived, "idle", "half a sequence was acted on")
+            D.Session._scan_title(f, b";C\x07")
+        self.assertEqual(f.derived, "working", "the carry lost the mark at the chunk boundary")
 
 
 URL = "http://127.0.0.1:8801/?k=abc123"
