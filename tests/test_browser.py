@@ -1426,6 +1426,55 @@ class ANewPaneFitsItsWindow(unittest.TestCase):
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+
+class TidyWithTheWindowsFarApart(unittest.TestCase):
+    """Two windows, far apart, and its own board — TheWorldAroundTheWindows has exactly one window
+    on purpose, because its arithmetic is about the one that alone defines the world."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser(scrollbars=True).start()
+        cls.b.open(cls.d.url)
+        cls.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          for (const n of ['far','near'])
+            await fetch('/api/sessions?token='+T,{method:'POST',
+              headers:{'content-type':'application/json'},
+              body:JSON.stringify({cwd:%s,name:n})});})()""" % json.dumps(cls.d.home))
+        time.sleep(6)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def tearDown(self):
+        self.assertEqual(self.b.errors(), [], "the page threw while being driven")
+
+    PUT = TheWorldAroundTheWindows.PUT
+
+    def js(self, body):
+        return self.b.ev("(()=>{" + self.PUT + "\n" + body + "})()")
+
+    def test_tidy_does_not_leave_you_staring_between_two_windows(self):
+        """One window at the top right and one at the bottom left: the corner of the box they make is
+        empty canvas, and pressing tidy went and looked at it (user, 2026-09-17). The view goes to
+        whichever window is nearest that corner instead, so something is always on screen."""
+        self.js("""
+          put('far', 1800, 60, 300, 200);      // top right
+          put('near', 60, 1400, 300, 200);     // bottom left
+          const o = P.origin(); S.scrollLeft = o.x + 900; S.scrollTop = o.y + 700;
+          P.paintTidy(); return 1;""")
+        self.b.ev("document.getElementById('tidy').click()")
+        time.sleep(1.5)
+        r = self.b.ev("""(()=>{const P=window.palmar, S=document.getElementById('cv-scroll');
+          const b=S.getBoundingClientRect();
+          const seen=[...P.tiles.values()].filter((t)=>{const q=t.el.getBoundingClientRect();
+            return q.right>b.left && q.left<b.right && q.bottom>b.top && q.top<b.bottom;})
+            .map((t)=>t.s.name);
+          return {seen: seen.sort()};})()""")
+        self.assertTrue(r["seen"], "tidy left the view on empty canvas: " + repr(r))
+
 class Grouping(unittest.TestCase):
     """Hold a window still over another and they travel together.
 
@@ -2153,6 +2202,8 @@ class Grouping(unittest.TestCase):
         self.bench("""put('g1',420,420,240,160); put('g2',672,420,240,160); put('g3',60,60,240,160);
                       P.joinGroups(by('g1').id, by('g2').id); return 1;""")
         before = self.bench("return {a: at('g1'), b: at('g2')};")
+        spots = self.bench("""return ['left','right','above','below']
+          .map((s) => P.joinBlock(by('g3').id, s, by('g1').id)).map((p) => [p.x, p.y]);""")
         x, y = self.press("g1")
         tx, ty = self.press("g3")
         self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
@@ -2173,11 +2224,38 @@ class Grouping(unittest.TestCase):
                          [before["b"][0] - before["a"][0], before["b"][1] - before["a"][1]],
                          "the two stopped standing side by side: %r -> %r" % (before, after))
         # Which side it latched onto is the hand's business (that is its own test); what matters here
-        # is that the window in the hand landed against the target, on one of them, and exactly.
-        spots = self.bench("""return ['left','right','above','below']
-          .map((s) => P.joinPreview(by('g3').id, s, by('g1').id)).map((p) => [p.x, p.y]);""")
+        # is that the block landed against the target, on one of the four sides, and exactly. The
+        # four are read **before** the drag: afterwards g3 is in the group, so the block is a
+        # different shape and its own previews no longer describe the drop that happened. g1 is the
+        # block's top-left corner here, so where the block went is where g1 went.
         self.assertIn(after["a"], spots,
-                      "the window in the hand did not land on any of its previews: %r" % (after,))
+                      "the block did not land against the target: %r, wanted one of %r" % (after, spots))
+
+    def test_the_carried_group_does_not_leave_its_colour_behind(self):
+        """The cells slide to their new place on a transition, which is right when a group is pushed
+        aside and wrong under the hand: the windows have theirs switched off while they are dragged,
+        so the tint hung a third of a second behind them, over whatever the group had just left
+        (user, 2026-09-17). Three windows so that two of them make a group with a frame to watch."""
+        self.bench("""put('g1',300,300,200,150); put('g2',512,300,200,150);
+                      P.joinGroups(by('g1').id, by('g2').id); return 1;""")
+        x, y = self.press("g1")
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x - 40 * i, y=y - 30 * i, buttons=1)
+        # Read it while the hand is still down: this is the only moment the lag existed in.
+        mid = self.b.ev("""(()=>{const c=document.querySelector('.gbox .gcell');
+          const t=[...window.palmar.tiles.values()].find(t=>t.s.name==='g1');
+          const cr=c.getBoundingClientRect(), tr=t.el.getBoundingClientRect();
+          return {glides: getComputedStyle(c).transitionProperty !== 'none',
+                  dx: Math.round(tr.left - cr.left), dy: Math.round(tr.top - cr.top)};})()""")
+        self.send(type="mouseReleased", x=x - 120, y=y - 90, clickCount=1, buttons=0)
+        time.sleep(0.6)
+        self.assertFalse(mid["glides"], "the tint was still on a transition while it was being carried")
+        self.assertEqual([mid["dx"], mid["dy"]], [10, 10],
+                         "the tint was not sitting under its own window mid-drag: %r" % (mid,))
+        after = self.b.ev("""(()=>{const c=document.querySelector('.gbox .gcell');
+          return getComputedStyle(c).transitionProperty !== 'none';})()""")
+        self.assertTrue(after, "the tint never got its glide back after the drag")
 
     def test_the_frame_follows_its_windows_past_the_origin(self):
         """The group's tint is drawn cell by cell, and each cell used to be pinned at zero — from when
@@ -2405,6 +2483,76 @@ class Grouping(unittest.TestCase):
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+
+class TwoGroupsMeeting(unittest.TestCase):
+    """Four windows, because the smallest case that goes wrong is a pair carried onto a pair.
+
+    Its own board: the matrix below places all four itself for every one of the thirty-two runs, and
+    a fourth window left lying around in Grouping would be one more thing for its pushes to find."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+        cls.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          for (const n of ['g1','g2','g3','g4'])
+            await fetch('/api/sessions?token='+T,{method:'POST',
+              headers:{'content-type':'application/json'},
+              body:JSON.stringify({cwd:%s,name:n})});})()""" % json.dumps(cls.d.home))
+        time.sleep(6)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def tearDown(self):
+        self.assertEqual(self.b.errors(), [], "the page threw while being driven")
+
+    JS = Grouping.JS
+
+    def bench(self, body):
+        return self.b.ev("(()=>{" + self.JS + "\n" + body + "})()")
+
+    def test_two_groups_meeting_never_stack_a_window_on_a_window(self):
+        """**Every way two pairs can meet.** Placing only the window in the hand put the one behind it
+        exactly on top of the target's own mate — the whole window, 220x150 of it, in seven of these
+        thirty-two (user, 2026-09-17: "묶은 직후 두 터미널이 완전히 겹쳐있는 경우도 있어"). Clearing
+        only the target and not the mate standing behind it left two more. The push cannot save either
+        one: it resolves what the *anchor* overlaps, and the anchor is the window that landed cleanly.
+        Nothing overlaps, and the pair you carried is still the pair you carried."""
+        W, H, G = 220, 150, 12
+        for mine in ("row", "col"):
+            for theirs in ("row", "col"):
+                for target in ("g3", "g4"):
+                    for side in ("left", "right", "above", "below"):
+                        r = self.bench("""
+                          const W=%d,H=%d,G=%d;
+                          if ('%s'==='row') { put('g1',100,600,W,H); put('g2',100+W+G,600,W,H); }
+                          else              { put('g1',100,600,W,H); put('g2',100,600+H+G,W,H); }
+                          if ('%s'==='row') { put('g3',700,200,W,H); put('g4',700+W+G,200,W,H); }
+                          else              { put('g3',700,200,W,H); put('g4',700,200+H+G,W,H); }
+                          P.joinGroups(by('g1').id, by('g2').id);
+                          P.joinGroups(by('g3').id, by('g4').id);
+                          const rel = () => [L[by('g2').id].x - L[by('g1').id].x,
+                                             L[by('g2').id].y - L[by('g1').id].y];
+                          const was = rel();
+                          P.dropInto(by('g1').id, by('%s').id, '%s');
+                          P.settle(by('g1').id, {compact: false});
+                          const ns = ['g1','g2','g3','g4'], over = [];
+                          for (let i=0;i<4;i++) for (let j=i+1;j<4;j++) {
+                            const p=L[by(ns[i]).id], q=L[by(ns[j]).id];
+                            const w=Math.min(p.x+p.w,q.x+q.w)-Math.max(p.x,q.x);
+                            const h=Math.min(p.y+p.h,q.y+q.h)-Math.max(p.y,q.y);
+                            if (w>0 && h>0) over.push(ns[i]+'/'+ns[j]+' '+w+'x'+h);
+                          }
+                          return {over: over, kept: rel()[0]===was[0] && rel()[1]===was[1]};
+                        """ % (W, H, G, mine, theirs, target, side))
+                        where = "carrying a %s onto a %s, aiming %s of %s" % (mine, theirs, side, target)
+                        self.assertEqual(r["over"], [], "windows ended up on top of each other — " + where)
+                        self.assertTrue(r["kept"], "the pair you carried came apart — " + where)
+
 class Undoing(unittest.TestCase):
     """One way back for everything that moves a window.
 

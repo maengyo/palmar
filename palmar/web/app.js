@@ -1133,6 +1133,7 @@ class Tile {
       undoMark(m === 'move' ? 'moving a window' : 'resizing a window', this.s.canvas);
       solo = !!(ev.altKey && m === 'move' && layout[this.id] && layout[this.id].g);
       party = (m === 'move' && !solo) ? groupOf(this.id) : [this.id];
+      carrying = (party.length > 1 && layout[this.id]) ? layout[this.id].g || null : null;
       starts = new Map(party.map((id) => [id, { x: layout[id].x, y: layout[id].y }]));
       overId = null; overSince = 0; armed = null; overSide = null; overSideAtDrop = null;
       for (const id of party) { const t = tiles.get(id); if (t) t.el.classList.add('drag'); }
@@ -1180,7 +1181,7 @@ class Tile {
         // once, which is what says the hold has something to hold on to.
         const pct = (Date.now() - overSince - GROUP_LEAD_MS) / GROUP_HOLD_MS * 100;
         setGauge(this.id, pct);                        // 0 or less takes the ring off
-        showGhost(pct > 0 ? joinPreview(overId, overSide, this.id) : null, overSide, pct);
+        showGhost(pct > 0 ? joinBlock(overId, overSide, this.id) : null, overSide, pct);
       }
       if (overId && Date.now() - overSince >= GROUP_LEAD_MS + GROUP_HOLD_MS) {
         // **Armed, not done.** It used to join here, in the middle of the drag, so carrying on
@@ -1192,7 +1193,7 @@ class Tile {
         overSideAtDrop = overSide;
         markHold(overId, 'ready');
         setGauge(this.id, 100);
-        showGhost(joinPreview(overId, overSide, this.id), overSide, 100);
+        showGhost(joinBlock(overId, overSide, this.id), overSide, 100);
       }
     };
     const move = (ev) => {
@@ -1229,6 +1230,10 @@ class Tile {
     const up = () => {
       if (!mode) return;
       const was = mode; mode = null;
+      // Whatever it does from here on, it may glide there — and it has to be told, because a drop
+      // that moves nothing paints nothing and the frame would keep the drag's stiffness for good.
+      carrying = null;
+      paintGroups();
       clearInterval(holdTimer); holdTimer = null;
       if (overId) { markHold(overId, false); overId = null; }
       setGauge(this.id, 0);
@@ -1782,8 +1787,16 @@ function tidyCanvas(canvasId, byHand) {
   // auto-tidy keeps the old behaviour: it was not asked for, so it must not move the view.
   if (canvasId === current) {
     if (byHand) {
+      // **Look at a window, not at a corner.** The corner of the box the windows make is not
+      // somewhere a window has to be: one at the top right and one at the bottom left and that
+      // corner is empty canvas between them, which is what pressing tidy left you staring at
+      // (user, 2026-09-17). So the view goes to whichever window is nearest the corner, with the
+      // same GAP of room around it that the corner itself would have had.
+      const lead = mine.map((t) => layout[t.id])
+        .reduce((a, q) => (a && a.x + a.y <= q.x + q.y ? a : q), null);
       const smooth = !matchMedia('(prefers-reduced-motion: reduce)').matches;
-      cvScroll.scrollTo({ left: Math.max(0, originX - GAP), top: Math.max(0, originY - GAP),
+      cvScroll.scrollTo({ left: Math.max(0, originX + lead.x - GAP),
+                          top: Math.max(0, originY + lead.y - GAP),
                           behavior: smooth ? 'smooth' : 'auto' });
     } else {
       cvScroll.scrollLeft = Math.max(0, l0 - sx);
@@ -2027,13 +2040,38 @@ function paneOver(id, ignore, current) {
 //: Where it would land: beside the target, on that side, at the size it already is. **Not the exact
 //: final position** — the group re-arranges after joining — but the side it will end up on, which is
 //: the thing a person is choosing while they hold it there.
+//: **What joins is the block, not the window in the hand.** Putting only that window beside the
+//: target left the one behind it standing exactly on top of the target's own mate — the whole window,
+//: 220x150 of it, in seven of the thirty-two ways two pairs of windows can meet (measured
+//: 2026-09-17, after the user: "두 그룹 끼리 묶을때는 묶은 직후 두 터미널이 완전히 겹쳐있는 경우도
+//: 있어"). The push that follows could not save it either: it resolves what the *anchor* overlaps,
+//: and the anchor was the one window that had landed cleanly. So the rectangle that has to clear the
+//: target is the carried group's, and everyone inside keeps their place in it.
+function joinBlock(overId, side, meId) {
+  const r = layout[overId], blk = blockOf(groupOf(meId));
+  if (!r || !blk) return null;
+  const at = (x, y) => ({ x: x, y: y, w: blk.w, h: blk.h, blk: blk });
+  // **And it clears the mates standing in its way, but only those.** Aiming at one member of a group
+  // and clearing only that member dropped the block straight onto the member behind it — under a
+  // column, or to the left of a row. Clearing the target's whole block instead would have been the
+  // easy answer and the wrong one: it would undo "under a shorter neighbour touches that neighbour",
+  // where a tall window two columns over has no business setting the landing height. So the cross
+  // axis stays where the aim put it, and only the mates that actually stand in that band count.
+  const vert = side === 'above' || side === 'below';
+  const band = groupOf(overId).map((id) => layout[id]).filter((q) => q && (vert
+    ? (q.x < r.x + blk.w && q.x + q.w > r.x)
+    : (q.y < r.y + blk.h && q.y + q.h > r.y)));
+  if (side === 'right') return at(Math.max.apply(null, band.map((q) => q.x + q.w)) + GAP, r.y);
+  if (side === 'left') return at(Math.min.apply(null, band.map((q) => q.x)) - GAP - blk.w, r.y);
+  if (side === 'below') return at(r.x, Math.max.apply(null, band.map((q) => q.y + q.h)) + GAP);
+  return at(r.x, Math.min.apply(null, band.map((q) => q.y)) - GAP - blk.h);
+}
+//: The same answer narrowed to one window — where *this* window ends up once its block has landed.
+//: Carried alone, the block is the window, and this is what it has always been.
 function joinPreview(overId, side, meId) {
-  const r = layout[overId], me = layout[meId];
-  if (!r || !me) return null;
-  if (side === 'right') return { x: r.x + r.w + GAP, y: r.y, w: me.w, h: me.h };
-  if (side === 'left') return { x: r.x - GAP - me.w, y: r.y, w: me.w, h: me.h };
-  if (side === 'below') return { x: r.x, y: r.y + r.h + GAP, w: me.w, h: me.h };
-  return { x: r.x, y: r.y - GAP - me.h, w: me.w, h: me.h };
+  const b = joinBlock(overId, side, meId), me = layout[meId];
+  if (!b || !me) return null;
+  return { x: b.x + (me.x - b.blk.x), y: b.y + (me.y - b.blk.y), w: me.w, h: me.h };
 }
 
 //: **Two ways of showing the hold, and the person picks.** `ring` runs a line round the border of the
@@ -2131,7 +2169,7 @@ function place(id, x, y) {
 //: drop displaces is pushed out of the way inside the group by exactly the overlap — the same push
 //: as the canvas — and that is all.
 function dropInto(meId, targetId, side) {
-  const spot = joinPreview(targetId, side || 'right', meId);
+  const spot = joinBlock(targetId, side || 'right', meId);
   //: **A group lands as the group you carried.** This used to place the window in the hand and
   //: nothing else, so carrying a pair onto an outside window put one of them beside the target and
   //: left the other wherever the drag had ended — a row came down stacked, and the two were still
@@ -2142,8 +2180,7 @@ function dropInto(meId, targetId, side) {
   //: exactly there; the rest keep the shape they had when you picked them up.
   const carried = groupOf(meId);
   if (spot) {
-    const was = layout[meId];
-    const dx = spot.x - was.x, dy = spot.y - was.y;
+    const dx = spot.x - spot.blk.x, dy = spot.y - spot.blk.y;
     for (const id of carried) {
       const r = layout[id];
       if (r) place(id, r.x + dx, r.y + dy);
@@ -2315,6 +2352,7 @@ function paintGroups() {
       groupBoxes.set(g, box);
     }
     box.style.setProperty('--group', 'hsl(' + groupHue(g) + ' 70% 55%)');
+    box.classList.toggle('carried', g === carrying);
     // The wrapper is only a coordinate origin; the shape is the cells inside it.
     box.style.left = '0px'; box.style.top = '0px';
     box.style.width = '0px'; box.style.height = '0px';
@@ -2348,6 +2386,13 @@ function paintGroups() {
   }
 }
 const groupBoxes = new Map();
+//: **The frame does not glide while it is being carried.** A cell slides to its new place on a 350ms
+//: transition, which is right when a group is pushed aside or closes up — and wrong under the hand,
+//: where the windows themselves have their transition off (the `drag` class) and the tint was left
+//: a third of a second behind them: it hung over whatever the group had just left, so a member could
+//: be clear of a window while its colour still covered it (user, 2026-09-17). The group in the hand
+//: is named here for the length of the drag, and paintGroups takes its transition off for that long.
+let carrying = null;
 
 const PUSH_ROUNDS = 20;                 // termcanvas's limit, the number decisions.md names
 
@@ -4561,7 +4606,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // has to be able to ask both, because the bug they fix was arithmetic nobody could see.
                   sizeWorld, contentExtent, origin: () => ({ x: originX, y: originY }),
                   // Groups: the model is testable without a hand, the gesture needs one.
-                  groupOf, groupRect, joinGroups, leaveGroup, paneOver, joinPreview, setGauge, compactGroup, dropInto, settle, paintGroups,
+                  groupOf, groupRect, joinGroups, leaveGroup, paneOver, joinPreview, joinBlock, setGauge, compactGroup, dropInto, settle, paintGroups,
                   // Undo: one way back for everything that moves a window.
                   undoMark, undoLast, undoDepth: () => undoStack.length,
                   // Path joining is platform-shaped and the platform it gets wrong has no Chrome
