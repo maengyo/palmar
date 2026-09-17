@@ -402,11 +402,13 @@ class Restore(unittest.TestCase):
             while time.time() < end and status() != "done":
                 time.sleep(0.2)
             self.assertEqual(status(), "done", "the shell said it had finished")
+            # And the prompt coming back does not take that away. palmar's preamble writes `D` and
+            # `A` in one go, and while `A` set idle the done light was erased in the same breath it
+            # was set — nobody could ever see it (user, 2026-09-18).
             w.send(osc("A"), opcode=0x2)
-            end = time.time() + 6
-            while time.time() < end and status() != "idle":
-                time.sleep(0.2)
-            self.assertEqual(status(), "idle", "the shell said it was back at a prompt")
+            w.send(osc("B"), opcode=0x2)
+            time.sleep(1.5)
+            self.assertEqual(status(), "done", "the prompt wrote over the light the command earned")
             w.close()
 
     def test_a_cd_is_what_gets_remembered(self):

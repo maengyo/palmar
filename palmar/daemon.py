@@ -485,12 +485,19 @@ function global:claude {
 # 이 pane 이 어느 폴더에 있는지 프롬프트가 직접 말한다. PowerShell 의 Set-Location 은
 # 프로세스 작업 디렉터리를 안 바꿔서, 밖에서는 읽을 방법이 없다 (#30).
 if (-not $global:PalmarUserPrompt) {
-  $global:PalmarUserPrompt = $function:prompt
+  # 감싸기 전에 감쌀 것이 있어야 한다. -Command 가 도는 시점에 prompt 가 아직 없을 수 있고,
+  # 그러면 래퍼가 $null 을 부르다 매번 throw 해서 D 가 영영 안 나간다 — 초록불만 남는다.
+  $p = $function:prompt
+  if (-not $p) { $p = { "PS $($PWD.ProviderPath)> " } }
+  $global:PalmarUserPrompt = $p
   function global:prompt {
-    $out = & $global:PalmarUserPrompt      # 사용자 것이 먼저 — 제목을 건드린다면 우리가 뒤에 온다
+    # 사용자 것이 먼저 — 제목을 건드린다면 우리가 뒤에 온다. 남의 프롬프트가 던져도
+    # 우리 표식은 나가야 한다.
+    $out = $null
+    try { $out = & $global:PalmarUserPrompt } catch { $out = "PS $($PWD.ProviderPath)> " }
     try {
       $e = [char]27; $b = [char]7
-      # 어디에 있는지, 그리고 "직전 명령이 끝났다 · 프롬프트다 · 입력을 기다린다" (OSC 133).
+      # 어디에 있는지, 그리고 "직전 명령이 끝났다 · 프롬프트다" (OSC 133).
       [Console]::Write("$e]2;palmar:cwd:$($PWD.ProviderPath)$b$e]133;D$b$e]133;A$b")
     } catch {}
     $out
@@ -792,6 +799,7 @@ class Session:
         self.title_hits = []         # recent title-change times (monotonic). Anything outside TITLE_WINDOW_S is dropped
         self.title_timer = None
         self.osc_carry = b""         # an OSC candidate straddling a chunk boundary
+        self.cwd_told = False        # has this shell ever said where it is — then we stop reading it
         self.shell_marks = False     # has this shell ever spoken OSC 133 — then the guesses stand down
         self.cmd_start = None        # monotonic time of the last 133;C, or None between commands
         self.derived = "idle"        # status read from title and output when there are no hooks
@@ -1125,10 +1133,12 @@ class Session:
             started, self.cmd_start = self.cmd_start, None
             said = started is not None and self.last_out >= started
             want = "done" if said else "idle"
-        else:                                   # A or B: at a prompt, waiting for a person
-            if self.cmd_start is not None:
-                return                          # a prompt redrawn mid-command means nothing
-            want = "idle"
+        else:
+            # **A and B say nothing the D before them did not.** They used to set idle, and the
+            # preamble writes `D` and `A` in one go — so "finished" was erased in the same breath it
+            # was set and the done light could never be seen. A prompt appearing is not a state; the
+            # command ending is, and `D` is that.
+            return
         if want != self.derived:
             self.derived = want
             if self.status == "unknown":
@@ -1223,6 +1233,15 @@ class Session:
     #: `Set-Location` and returns None on a platform it cannot ask, and the last place we knew about
     #: is a better answer than no place at all. Windows fills this in through the title instead.
     def sample_cwd(self) -> None:
+        # **A pane that has said where it is is not corrected from outside.** These two were fighting
+        # on Windows: the prompt writes the right folder into the title, and ten seconds later this
+        # read the PEB — which `Set-Location` never updates — and put the folder the pane *opened* in
+        # back. From the outside it looked like running an agent sent the rail home and kept it there
+        # (user, 2026-09-18: "aelix 실행하면 ~ 로 바뀌고 … 돌아와도 ~ 로 유지되네"). It was the tick,
+        # not the agent. Same rule as hooks over the title, and OSC 133 over the guesses: the one who
+        # knows wins, and the one who infers stops.
+        if self.cwd_told:
+            return
         live = cwd_of(self.pid)
         if live and live != self.cwd:
             self.cwd = live
@@ -1238,6 +1257,7 @@ class Session:
         if not t.startswith(TITLE_CWD):
             return False
         path = t[len(TITLE_CWD):].strip()
+        self.cwd_told = True
         if path and path != self.cwd and os.path.isdir(path):
             self.cwd = path
             registry.changed(self)

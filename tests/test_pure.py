@@ -344,6 +344,7 @@ class TheFolderAPaneIsIn(unittest.TestCase):
             pass
         f = F()
         f.cwd = cwd
+        f.cwd_told = False
         f.pid = os.getpid()
         f.title = ""
         f.title_hits = []
@@ -370,6 +371,29 @@ class TheFolderAPaneIsIn(unittest.TestCase):
             took = D.Session._title_cwd(f, D.TITLE_CWD + "/no/such/place/at/all")
         self.assertTrue(took, "it is still palmar's marker, and still not a title spin")
         self.assertEqual(f.cwd, "/start", "it believed a folder that does not exist")
+
+    def test_once_a_pane_has_said_where_it_is_we_stop_reading_it(self):
+        """**The two were fighting.** The prompt writes the right folder into the title, and ten
+        seconds later the tick read the process working directory and put the folder the pane
+        *opened* in back — because PowerShell's `Set-Location` never touches it. From the outside it
+        looked like running an agent sent the rail home and kept it there (user, 2026-09-18). It was
+        the tick, not the agent. The one who knows wins; the one who reads from outside stops."""
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._title_cwd(f, D.TITLE_CWD + tempfile.gettempdir())
+            self.assertTrue(f.cwd_told)
+            D.Session.sample_cwd(f)           # the ten-second tick, reading this very process
+        self.assertEqual(f.cwd, tempfile.gettempdir(),
+                         "the tick put the folder the pane opened in back")
+
+    def test_a_pane_that_has_never_said_is_still_read(self):
+        """The other three quarters of the world: a shell that says nothing, where reading the
+        process is the only way to follow a cd — and it works there."""
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session.sample_cwd(f)
+        self.assertEqual(os.path.realpath(f.cwd), os.path.realpath(os.getcwd()),
+                         "a silent pane stopped being read")
 
     def test_an_ordinary_title_is_left_alone(self):
         f = self.pane()
@@ -430,16 +454,32 @@ class WhenTheShellSaysItOutright(unittest.TestCase):
         Lighting "finished" for that is a light nobody asked for."""
         self.assertEqual(self.mark(self.pane(), "C", "D"), "idle")
 
-    def test_a_prompt_is_idle(self):
+    def test_the_prompt_appearing_does_not_erase_what_just_finished(self):
+        """**The bug the user saw first.** The preamble writes `D` and `A` in one go, and `A` used to
+        set idle — so "finished" was erased in the same breath it was set and the done light could
+        never be seen at all (2026-09-18). A prompt appearing is not a state of its own; the command
+        ending is, and `D` is that."""
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._shell_mark(f, "C")
+            f.last_out = time.monotonic()
+            D.Session._shell_mark(f, "D")
+            self.assertEqual(f.derived, "done")
+            D.Session._shell_mark(f, "A")
+            D.Session._shell_mark(f, "B")
+        self.assertEqual(f.derived, "done", "the prompt wrote over the light the command had earned")
+
+    def test_a_command_that_said_nothing_ends_at_idle(self):
         f = self.pane()
         f.derived = "working"
-        self.assertEqual(self.mark(f, "D", "A", "B"), "idle")
+        self.assertEqual(self.mark(f, "D"), "idle")
 
     def test_a_prompt_redrawn_mid_command_means_nothing(self):
         """Ctrl-L, a window resize, a progress line that repaints — the prompt can be written again
         while a command is still running, and that is not the command ending."""
         f = self.pane()
         self.assertEqual(self.mark(f, "C", "A"), "working")
+        self.assertIsNotNone(f.cmd_start, "the mid-command mark forgot a command was running")
 
     def test_the_guessing_stands_down_once_the_shell_speaks(self):
         """The same rule as hooks over the title: the exact source wins and the inferring one stops,
