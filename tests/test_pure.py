@@ -243,6 +243,79 @@ class Startup(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), str(D.PROTOCOL))
 
 
+class TheShimOnWindows(unittest.TestCase):
+    """What palmar puts in front of `claude` so the hooks come back — and why none of it reached
+    Windows (#30). The lights there do not move, and this is the half of the reason that is not a
+    missing feature but two plain mistakes."""
+
+    def test_the_path_separator_is_the_platforms(self):
+        """It was a colon, written in. On Windows that made the first entry
+        `C:\\Users\\…\\.palmar\\bin;C:\\Windows\\system32` — one path, and not one that exists — so
+        `.palmar\\bin` was **never on PATH** and nothing in it could be found."""
+        got = D.front_of_path(r"C:\Users\x\.palmar\bin", r"C:\Windows\system32;C:\Windows", sep=";")
+        self.assertEqual(got.split(";")[0], r"C:\Users\x\.palmar\bin", "the shim is not first: " + got)
+        self.assertEqual(got.split(";")[1:], [r"C:\Windows\system32", r"C:\Windows"],
+                         "it did not leave the rest of PATH alone: " + got)
+
+    def test_posix_is_left_exactly_as_it_was(self):
+        """The fix is `os.pathsep`, which on POSIX is the colon that was written in — so the one
+        platform where this all works today must come out character for character the same."""
+        self.assertEqual(D.front_of_path("/h/.palmar/bin", "/usr/local/bin:/usr/bin"),
+                         "/h/.palmar/bin:/usr/local/bin:/usr/bin")
+        self.assertEqual(D.front_of_path("/h/.palmar/bin", None),
+                         "/h/.palmar/bin:" + D.DEFAULT_PATH[0])
+
+    def test_the_sh_shim_is_not_written_where_it_cannot_run(self):
+        """`~/.palmar/bin/claude` is a `#!/bin/sh` script under an extension-less name. Windows has no
+        shebang and PATHEXT does not list "", so it is a file that can never be run — and once the
+        separator above is fixed it would be sitting first on PATH."""
+        self.assertTrue(D.SHIM.startswith("#!/bin/sh"), "the shim stopped being a shell script")
+        src = pathlib.Path(D.__file__).read_text(encoding="utf-8")
+        self.assertIn('if POSIX_PERMS:\n        write_private(BIN_DIR / "claude"', src,
+                      "the sh shim is written on every platform again")
+
+    def test_the_preamble_cannot_find_itself(self):
+        """The POSIX shim keeps out of its own way by taking its directory out of PATH as a fixed
+        string, which went wrong once — the `.` in `.palmar` read as a regex (#12) — and exec'd itself
+        forever. The PowerShell side asks for a **type** instead, which cannot go wrong that way."""
+        body = D.PWSH_PREAMBLE
+        self.assertIn("-CommandType Application", body, "the function would find itself")
+        self.assertIn("--settings", body, "it does not attach the hooks, which is its whole job")
+        self.assertIn("@args", body, "it drops the arguments the person typed")
+        self.assertIn("$env:PALMAR_PANE", body, "it does not know which pane it is in")
+        self.assertNotIn("#!/bin/sh", body)
+
+    def test_the_preamble_knows_where_the_pane_files_are(self):
+        """The run directory is written in when the file is made, rather than rebuilt from $HOME in
+        PowerShell — one place decides where palmar keeps things, and it is the daemon."""
+        rendered = D.PWSH_PREAMBLE.replace("{run}", "/tmp/h/.palmar/run")
+        self.assertIn("Join-Path '/tmp/h/.palmar/run'", rendered)
+        self.assertNotIn("{run}", rendered)
+
+    def test_the_profile_runs_and_the_policy_does_not_refuse(self):
+        """Three things the arguments have to get right at once. **The user's profile still runs** —
+        no `-NoProfile` — and because PowerShell loads it before `-Command`, palmar's part comes
+        after it, which is the whole rc-wrapping dance POSIX needs. **The window stays** (`-NoExit`).
+        And it is not `-File`: running a `.ps1` goes through the execution policy, `Restricted` by
+        default on a client, which would refuse it — text made into a script block is not a script
+        file, so the policy has nothing to say."""
+        argv = D.pwsh_argv(["C:/pwsh.exe", "-NoLogo"], "C:/Users/x/.palmar/pwsh/preamble.ps1")
+        self.assertEqual(argv[:2], ["C:/pwsh.exe", "-NoLogo"], "it lost the shell's own arguments")
+        self.assertIn("-NoExit", argv, "the pane would close as soon as the preamble finished")
+        self.assertIn("-Command", argv)
+        self.assertNotIn("-File", argv, "a .ps1 file is what the execution policy refuses")
+        self.assertNotIn("-NoProfile", argv, "it would be skipping the user's own profile")
+        self.assertIn("scriptblock]::Create", argv[-1], "it is dot-sourcing the path after all")
+        self.assertTrue(argv[-1].startswith(". "), "not dot-sourced — the function would not survive")
+
+    def test_an_apostrophe_in_the_path_does_not_end_the_string(self):
+        """A person's name is enough to put one there. In a single-quoted PowerShell string it is
+        escaped by doubling, and both places that write a path into one have to do it."""
+        argv = D.pwsh_argv(["pwsh"], "C:/Users/O'Brien/.palmar/pwsh/preamble.ps1")
+        self.assertIn("C:/Users/O''Brien/", argv[-1], "the quote was left to close the string: " + argv[-1])
+        self.assertEqual(argv[-1].count("'") % 2, 0, "unbalanced quotes: " + argv[-1])
+
+
 URL = "http://127.0.0.1:8801/?k=abc123"
 
 

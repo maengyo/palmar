@@ -225,6 +225,8 @@ CONTENT_FAST = 512      # bigger than this and there is content, no need to chec
 HOME = Path.home().resolve()
 PALMAR_DIR = Path.home() / ".palmar"        # must be the same spelling as the shim's "$HOME/.palmar"
 BIN_DIR = PALMAR_DIR / "bin"
+PWSH_DIR = PALMAR_DIR / "pwsh"                 # the Windows half of the shim (#30)
+PWSH_FILE = PWSH_DIR / "preamble.ps1"
 ZDOT_DIR = PALMAR_DIR / "zsh"      # zsh wrapper rc
 BASHRC = PALMAR_DIR / "bash" / "bashrc"   # bash wrapper rc (hooked in with --rcfile)      # rc that wraps zsh. Puts PATH back at the front after the user's rc
 RUN_DIR = PALMAR_DIR / "run"
@@ -409,6 +411,75 @@ case ":$PATH:" in
   *) PATH="$HOME/.palmar/bin:$PATH"; export PATH ;;
 esac
 """
+
+#: **The separator is the platform's, and it was not.** This read `f"{BIN_DIR}:{PATH}"` with the colon
+#: written in, so on Windows the first entry came out as `C:\\Users\\…\\.palmar\\bin;C:\\Windows\\system32`
+#: — one path that does not exist — and `.palmar\\bin` was **never on PATH at all**. Nothing there could
+#: ever be found, which is half of why the lights do not move on Windows (#30). On POSIX `os.pathsep`
+#: is the same colon, so this changes nothing there.
+#:
+#: The fallback is only reached when the environment has no PATH, which on Windows would be a broken
+#: machine rather than a bare one — but answering with `/usr/bin:/bin` there is answering in the wrong
+#: language, so it says what that platform would have said.
+def front_of_path(bin_dir, current: str, sep: str = os.pathsep, fallback: str = "") -> str:
+    """`bin_dir` first, then whatever was already there."""
+    return sep.join([str(bin_dir), current or fallback or DEFAULT_PATH[0]])
+
+
+DEFAULT_PATH = [r"C:\Windows\system32;C:\Windows" if sys.platform == "win32" else "/usr/bin:/bin"]
+
+# ── PowerShell preamble ───────────────────────────────────────────────────────────────
+#: **The Windows half of the shim** (#30). POSIX puts a shell script in front of `claude` on PATH;
+#: Windows cannot run that file at all — no shebang, and an extension-less name is not in PATHEXT —
+#: so a `claude` opened in a palmar pane got no `--settings`, no hooks, and a light that never moved.
+#:
+#: **A function, not a file.** PowerShell resolves a function before anything on PATH, so this shadows
+#: `claude` without a second process in the way. A `.cmd` wrapper would have been the closer analogue
+#: and it brings `Terminate batch job (Y/N)?` to every Ctrl-C, which in a pane running an agent is not
+#: a cost worth paying. The price of a function is that it is only in this shell: a claude started by
+#: a script, from `cmd.exe`, or in a nested shell does not see it, and those still get no hooks.
+#:
+#: **It runs after the user's profile** — PowerShell loads profiles and *then* runs `-Command`, so the
+#: whole rc-wrapping dance POSIX needs (ZDOTDIR, --rcfile) is an argument order here. User files are
+#: never read or written.
+#:
+#: `-CommandType Application` is what stops the function finding itself. The POSIX shim does the same
+#: job by taking its own directory out of PATH as a fixed string, which went wrong once (#12: the `.`
+#: in `.palmar` read as a regex). Asking for a type cannot go wrong that way.
+PWSH_PREAMBLE = """# palmar 가 만든 것. 고치지 마라 — 데몬이 뜰 때마다 다시 쓴다.
+# 사용자 프로필이 먼저 돌고, 그다음 이 파일이 온다.
+
+function global:claude {
+  $real = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue |
+          Select-Object -First 1
+  if (-not $real) {
+    Write-Error 'palmar: claude not found on PATH'
+    return
+  }
+  $f = $null
+  if ($env:PALMAR_PANE) {
+    $f = Join-Path '{run}' ("{0}.json" -f $env:PALMAR_PANE)
+  }
+  if ($f -and (Test-Path -LiteralPath $f)) { & $real.Source --settings $f @args }
+  else { & $real.Source @args }
+}
+"""
+
+
+#: How the preamble is reached. **Not `-File`** — that is not interactive, and not a dot-source of the
+#: path either: running a `.ps1` goes through the execution policy, which is `Restricted` by default on
+#: a client and would refuse it. Text turned into a script block is not a script file, so the policy
+#: does not apply, and `.` in front runs it in this scope so the function survives. `-EncodedCommand`
+#: would also dodge the policy and turns the command line into a base64 blob nobody can read.
+#:
+#: A path may hold a single quote — a person's name with an apostrophe is enough — and in a PowerShell
+#: single-quoted string that is escaped by doubling it.
+def pwsh_argv(shell_argv, preamble) -> list:
+    lit = str(preamble).replace("'", "''")
+    return list(shell_argv) + [
+        "-NoExit", "-Command",
+        ". ([scriptblock]::Create((Get-Content -Raw -LiteralPath '%s')))" % lit]
+
 
 SHIM = """#!/bin/sh
 # palmar shim: attaches hooks to a claude started inside a palmar terminal. Nothing else.
@@ -742,7 +813,7 @@ class Session:
         env = {k: v for k, v in os.environ.items()
                if k in KEEP_ENV_EXACT
                or (not k.startswith(STRIP_ENV_PREFIXES) and k not in STRIP_ENV_EXACT)}
-        env["PATH"] = f"{BIN_DIR}:{env.get('PATH', '/usr/bin:/bin')}"   # shim at the front
+        env["PATH"] = front_of_path(BIN_DIR, env.get("PATH"))          # shim at the front
         # Putting ourselves at the front of PATH is not enough — the user's rc runs later and puts its own back first
         # (measured: one `export PATH="$HOME/.local/bin:$PATH"` line in ~/.zshrc pushed the shim out).
         # For zsh, wrap it with ZDOTDIR so our rc runs **last**. User files are never touched.
@@ -751,6 +822,8 @@ class Session:
         if base == "zsh" and (ZDOT_DIR / ".zshrc").exists():
             env["PALMAR_USER_ZDOTDIR"] = env.get("ZDOTDIR") or str(HOME)
             env["ZDOTDIR"] = str(ZDOT_DIR)
+        elif base.lower() in ("pwsh.exe", "powershell.exe") and PWSH_FILE.exists():
+            argv = pwsh_argv(argv0, PWSH_FILE)
         elif base == "bash" and BASHRC.exists():
             # bash has no ZDOTDIR. --rcfile replaces an interactive shell's rc —
             # ours sources the user's first and then puts PATH back (measured 2026-09-08).
@@ -2345,7 +2418,16 @@ def setup_palmar_dir() -> str:
     KEY[0] = load_or_make_key()      # inside the lock — so two cannot make one and overwrite each other
     token = secrets.token_urlsafe(32)
     write_private(TOKEN_FILE, token.encode() + b"\n", 0o600)
-    write_private(BIN_DIR / "claude", SHIM.encode(), 0o755)
+    # **Not on Windows.** It is a `#!/bin/sh` script under an extension-less name: no shebang there,
+    # and PATHEXT does not list "" — so it is a file that can never be run, sitting first on PATH.
+    # The preamble below is what stands in its place.
+    if POSIX_PERMS:
+        write_private(BIN_DIR / "claude", SHIM.encode(), 0o755)
+    else:
+        ensure_private_dir(PWSH_DIR)
+        # Doubled, because it lands inside a single-quoted PowerShell string — see pwsh_argv.
+        write_private(PWSH_FILE,
+                      PWSH_PREAMBLE.replace("{run}", str(RUN_DIR).replace("'", "''")).encode(), 0o600)
     ensure_private_dir(ZDOT_DIR)
     ensure_private_dir(BASHRC.parent)
     write_private(BASHRC, BASH_RC.encode(), 0o600)
