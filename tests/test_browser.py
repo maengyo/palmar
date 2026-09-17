@@ -1474,6 +1474,41 @@ class TidyWithTheWindowsFarApart(unittest.TestCase):
             .map((t)=>t.s.name).sort();})()""")
         self.assertIn("far", seen, "tidy did not go back to the window in front: %r" % (seen,))
 
+    def test_a_full_view_sends_the_next_window_next_door_not_home(self):
+        """Two windows in sight leave no room for a third, and falling straight back to the top-left of
+        the board put it where the person had to go and find it — the very thing looking in view first
+        was for (user, 2026-09-17). The gap it takes is the nearest one to the view."""
+        r = self.js("""
+          put('far', 1500, 1200, 520, 360); put('near', 2032, 1200, 520, 360);
+          const o = P.origin(); S.scrollLeft = o.x + 1488; S.scrollTop = o.y + 1188;
+          return {spot: P.firstFree(520, 360, by('far').s.canvas),
+                  view: [S.scrollLeft - o.x, S.scrollTop - o.y, S.clientWidth, S.clientHeight]};""")
+        vx, vy, vw, vh = r["view"]
+        sx, sy = r["spot"]["x"], r["spot"]["y"]
+        self.assertNotEqual([sx, sy], [12, 12], "it went home to the board's corner")
+        near = max(abs(sx + 260 - (vx + vw / 2)), abs(sy + 180 - (vy + vh / 2)))
+        self.assertLess(near, max(vw, vh), "it landed a long way from the view: %r, looking at %r"
+                        % (r["spot"], r["view"]))
+
+    def test_tidy_is_there_even_when_there_is_nothing_to_close_up(self):
+        """The button was lit by slack alone, so on a canvas already at the corner it went grey and the
+        other half of what it does — taking you back to what you were working in — could not be
+        reached (user, 2026-09-17). Only an empty canvas has nowhere to take you."""
+        self.js("put('far', 12, 12, 300, 200); put('near', 330, 12, 300, 200); P.paintTidy(); return 1;")
+        self.assertEqual(self.js("return P.tidyCanvas(P.canvas(), false);"), False,
+                         "there was slack after all — this test is not testing what it says")
+        self.assertFalse(self.b.ev("document.getElementById('tidy').disabled"),
+                         "tidy went grey on a canvas that still has windows to go and look at")
+        # And pressing it takes you there rather than doing nothing at all.
+        self.js("const o = P.origin(); S.scrollLeft = o.x + 900; S.scrollTop = o.y + 700; return 1;")
+        self.b.ev("document.getElementById('tidy').click()")
+        time.sleep(1.5)
+        seen = self.b.ev("""(()=>{const P=window.palmar, S=document.getElementById('cv-scroll');
+          const b=S.getBoundingClientRect();
+          return [...P.tiles.values()].filter((t)=>{const q=t.el.getBoundingClientRect();
+            return q.right>b.left && q.left<b.right && q.bottom>b.top && q.top<b.bottom;}).length;})()""")
+        self.assertTrue(seen, "pressing it left the view on empty canvas")
+
     def test_a_new_window_opens_where_you_are_looking(self):
         """The canvas is far bigger than the screen, and a new terminal at the board's corner is one
         you have to go and find (user, 2026-09-17). The whole-canvas scan stays underneath it."""

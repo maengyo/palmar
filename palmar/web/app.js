@@ -1795,14 +1795,20 @@ function tidySlack(canvasId) {
        + Math.abs(Math.min(...mine.map((t) => layout[t.id].y)) - GAP);
 }
 
+//: **It does two things now, and only one of them can run out.** The button was lit by slack alone —
+//: by whether the windows had drifted off the corner — so on a canvas that was already tidy it went
+//: grey, and the other half of what it does, taking you back to what you were working in, could not
+//: be reached at all (user, 2026-09-17: "특정 터미널을 옮겨야만 버튼이 활성화되서 불편한거같아").
+//: A canvas with a window on it always has somewhere to take you. Only an empty one has not.
 function paintTidy() {
   const b = document.getElementById('tidy');
   if (!b) return;
+  const any = current !== null && [...tiles.values()].some((t) => t.s.canvas === current && layout[t.id]);
   const slack = current === null ? 0 : tidySlack(current);
-  b.disabled = !slack;
-  b.title = slack
-    ? 'tidy this canvas — pull the windows back to the corner'
-    : 'tidy this canvas — nothing to close up, it already starts at the corner';
+  b.disabled = !any;
+  b.title = !any ? 'tidy this canvas — nothing on it yet'
+    : slack ? 'tidy this canvas — pull the windows back to the corner'
+            : 'tidy this canvas — already at the corner; this takes you there';
 }
 
 function tidyCanvas(canvasId, byHand) {
@@ -1810,20 +1816,24 @@ function tidyCanvas(canvasId, byHand) {
   if (!mine.length) return false;
   const dx = Math.min(...mine.map((t) => layout[t.id].x)) - GAP;
   const dy = Math.min(...mine.map((t) => layout[t.id].y)) - GAP;
-  if (dx === 0 && dy === 0) return false;
   const sx = dx, sy = dy;                    // signed: the corner may be above and to the left
+  // Nothing to close up is not nothing to do: by hand it still goes and looks. Left to itself
+  // (auto-tidy) it stops here, because a run that moves nothing must not move the view either.
   const l0 = cvScroll.scrollLeft, t0 = cvScroll.scrollTop;
   // **Write the intended value instead of reading it back.** `persist()` reads `offsetLeft`, but the position has
   // a transition on it, so that value is a **mid-move** one — save it as-is and the old position goes back in and
   // nothing appears to have happened (measured: pressing it left the positions unchanged). The drag path was
   // dodging this trap by turning the transition off with the `drag` class.
-  for (const t of mine) {
-    const r = layout[t.id];
-    t.el.style.left = (r.x - sx) + 'px';
-    t.el.style.top = (r.y - sy) + 'px';
-    layout[t.id] = Object.assign({}, r, { x: r.x - sx, y: r.y - sy });
+  if (!sx && !sy && !byHand) return false;
+  if (sx || sy) {
+    for (const t of mine) {
+      const r = layout[t.id];
+      t.el.style.left = (r.x - sx) + 'px';
+      t.el.style.top = (r.y - sy) + 'px';
+      layout[t.id] = Object.assign({}, r, { x: r.x - sx, y: r.y - sy });
+    }
+    saveLayout();
   }
-  saveLayout();
   // **Go and look at the corner.** The view used to be nudged by exactly what the windows moved, so
   // that nothing slid under the eye — and once the canvas had a square of slack around it that
   // compensation became exact, which made pressing tidy do nothing visible at all: the windows went
@@ -1864,7 +1874,7 @@ function tidyCanvas(canvasId, byHand) {
   refreshOff();
   paintTidy();
   paintGroups();   // every window on the canvas just moved, and the frame is drawn from where they are
-  return true;
+  return !!(sx || sy);
 }
 
 // Where a new window goes: **the first gap anywhere on the canvas, and only then below everything.**
@@ -1894,9 +1904,23 @@ function firstFree(w, h, canvasId) {
   for (let y = vy + GAP; y + h <= vy + cvScroll.clientHeight; y += GRID)
     for (let x = vx + GAP; x + w <= vx + cvScroll.clientWidth; x += GRID)
       if (!hit(x, y)) return { x, y };
-  for (let y = GAP; y + h <= H; y += GRID)
-    for (let x = GAP; x + w <= W; x += GRID)
-      if (!hit(x, y)) return { x, y };
+  // **And when it cannot, the nearest gap to the view rather than the board's corner.** With a
+  // window or two in sight there is often no room left in view for a third, and falling straight
+  // back to the top-left of the board put it somewhere the person had to go and find — the very
+  // thing the pass above was for (user, 2026-09-17: "그 다음 터미널은 기존의 원점에서 생성되는거
+  // 같아"). Same scan, same gaps, same fallback under it; it just takes the closest one now.
+  const cx = vx + cvScroll.clientWidth / 2, cy = vy + cvScroll.clientHeight / 2;
+  let best = null, bestD = Infinity;
+  for (let y = GAP; y + h <= H; y += GRID) {
+    const ody = y + h / 2 - cy;
+    if (ody > 0 && ody * ody >= bestD) break;      // every row below this one is further still
+    for (let x = GAP; x + w <= W; x += GRID) {
+      if (hit(x, y)) continue;
+      const ox = x + w / 2 - cx, d = ox * ox + ody * ody;
+      if (d < bestD) { bestD = d; best = { x: x, y: y }; }
+    }
+  }
+  if (best) return best;
   // Nothing fits anywhere — every gap is smaller than this window. Below the lot, and the canvas grows.
   const bottom = rects.reduce((m, r) => Math.max(m, r.y + r.h), 0);
   return { x: GAP, y: bottom ? bottom + GAP : GAP };
