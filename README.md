@@ -12,9 +12,11 @@
 ## Why
 
 **You can see which one wants you.** Every terminal carries a light — working, waiting on you,
-done, idle — worked out from what the shell is actually doing, with nothing to configure and no
-integration with the agent inside. The one that has been waiting longest sits at the top of the
-list, even if its window is off-screen.
+done, idle. There is nothing to install and nothing to configure: palmar attaches the agent's own
+hooks itself, through a shim on the shell's PATH, and where an agent offers none it reads the window
+title, and where there is no title either, what the shell is actually printing. Your settings files
+are not touched. The one that has been waiting longest sits at the top of the list, even if its
+window is off-screen.
 
 **A window stays where you put it.** Drag it, size it, and the shell's rows and columns follow;
 nothing is tiled and nothing is resized behind your back. Windows never overlap — drop one on
