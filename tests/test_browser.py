@@ -735,6 +735,13 @@ class TheWorldAroundTheWindows(unittest.TestCase):
         cls.b.stop()
         cls.d.stop()
 
+    def setUp(self):
+        """**The room the hand pulls out is kept for the session, on purpose** — so tests that read an
+        exact scroll range have to start from a known one, or the first test to pan leaves its slack
+        lying around for every test after it. tidy is the page's own way of giving it back."""
+        self.b.ev("(()=>{window.palmar.tidyCanvas(window.palmar.canvas(), true); return 1;})()")
+        time.sleep(0.6)
+
     PUT = """
       const P = window.palmar, L = P.layout(), S = document.getElementById('cv-scroll');
       const by = (n) => [...P.tiles.values()].find((t) => t.s.name === n);
@@ -750,7 +757,12 @@ class TheWorldAroundTheWindows(unittest.TestCase):
     def js(self, body):
         return self.b.ev("(()=>{" + self.PUT + "\n" + body + "})()")
 
-    def test_the_world_is_three_squares_by_three_with_the_windows_in_the_middle(self):
+    def test_the_scroll_runs_to_the_windows_and_no_further(self):
+        """**Nine squares became one.** The canvas used to scroll a whole screen past the windows on
+        every side, so that any of them could be brought to the middle — and dragging the bar to the
+        bottom to see the bottom window took you a screen past it into nothing, which is the gesture
+        everybody actually makes (user, 2026-09-17). The slack is still reachable; it is taken by
+        hand now, and the tests below this one are about that."""
         r = self.js("""
           put('far', 1600, 1100, 520, 360);
           const pad = document.querySelector('.cv-pad'), w = document.querySelector('.cv-world');
@@ -759,26 +771,94 @@ class TheWorldAroundTheWindows(unittest.TestCase):
                   content: P.contentExtent()};
         """)
         c = r["content"]
-        self.assertEqual(r["padW"], c["w"] * 3, "the world is not three squares across")
-        self.assertEqual(r["padH"], c["h"] * 3, "the world is not three squares down")
-        self.assertEqual(r["ox"], c["w"], "the windows do not start one square in")
-        self.assertEqual(r["oy"], c["h"], "the windows do not start one square down")
+        self.assertEqual(r["padW"], c["hx"] - c["lx"], "the scroll does not end at the far window")
+        self.assertEqual(r["padH"], c["hy"] - c["ly"], "the scroll does not end below the last window")
+        self.assertEqual(r["ox"], -c["lx"], "board zero is not where the near edge puts it")
+        self.assertEqual(r["oy"], -c["ly"], "board zero is not where the near edge puts it")
 
-    def test_a_window_at_the_far_corner_can_be_brought_to_the_middle_of_the_screen(self):
-        """(A). Before the slack existed this was short by (viewport - window)/2 every time."""
+    def test_scrolling_to_the_bottom_stops_at_the_bottom_window(self):
+        """The gesture everybody makes: drag the bar to the bottom to see the bottom window. With a
+        screen of slack under it that took you a screen past it, into nothing (user, 2026-09-17)."""
         r = self.js("""
+          put('far', 12, 1600, 520, 360);
+          S.scrollTop = 1e7; S.scrollLeft = 1e7;
+          const q = by('far').el.getBoundingClientRect(), box = S.getBoundingClientRect();
+          return {below: Math.round(box.bottom - q.bottom), right: Math.round(box.right - q.right),
+                  view: [S.clientWidth, S.clientHeight]};""")
+        self.assertLess(r["below"], 40, "a screen of nothing under the last window: " + repr(r))
+        self.assertGreaterEqual(r["below"], 0, "it scrolled past the bottom of the window: " + repr(r))
+
+    def test_a_hand_on_the_bare_canvas_makes_room_past_the_end(self):
+        """The slack is not gone, it is taken: grab the floor and pull, and the room appears as you
+        go. With a real hand, because the whole point is the gesture."""
+        before = self.js("""
+          put('far', 12, 12, 520, 360); S.scrollTop = 1e7;
+          const pad = document.querySelector('.cv-pad');
+          return {pad: [pad.offsetWidth, pad.offsetHeight], at: Math.round(S.scrollTop)};""")
+        spot = self.b.ev("""(()=>{const S=document.getElementById('cv-scroll');
+          const b=S.getBoundingClientRect();
+          for (let fx=0.7; fx>0.3; fx-=0.05) for (let fy=0.3; fy<0.7; fy+=0.05) {
+            const x=b.left+b.width*fx, y=b.top+b.height*fy;
+            if (document.elementFromPoint(x,y)===S) return {x:x, y:y};
+          } return null;})()""")
+        self.assertTrue(spot, "no bare canvas to grab")
+        self.b.ws.call("Input.dispatchMouseEvent",
+                       dict(type="mousePressed", button="left", x=spot["x"], y=spot["y"],
+                            clickCount=1, buttons=1))
+        for i in range(1, 13):
+            self.b.ws.call("Input.dispatchMouseEvent",
+                           dict(type="mouseMoved", button="left", x=spot["x"], y=spot["y"] - 40 * i, buttons=1))
+            time.sleep(0.03)
+        self.b.ws.call("Input.dispatchMouseEvent",
+                       dict(type="mouseReleased", button="left", x=spot["x"], y=spot["y"] - 480,
+                            clickCount=1, buttons=0))
+        time.sleep(0.5)
+        after = self.js("""const pad = document.querySelector('.cv-pad');
+          return {pad: [pad.offsetWidth, pad.offsetHeight], at: Math.round(S.scrollTop)};""")
+        self.assertGreater(after["pad"][1], before["pad"][1],
+                           "pulling past the end made no room: %r -> %r" % (before, after))
+        self.assertGreater(after["at"], before["at"],
+                           "the view did not follow the hand past the end: %r -> %r" % (before, after))
+
+    def test_the_hand_pulls_out_the_room_the_scrollbar_does_not_offer(self):
+        """(A), which the slack was for and which the scrollbar no longer reaches on its own: bringing
+        the far window to the middle of the screen. Setting the scroll is not enough any more — the
+        pad ends at that window's far edge, so the browser clamps it, and it lands short by exactly
+        (viewport - window)/2, the number this test was born measuring. Panning there makes the room
+        on the way, and then it centres."""
+        short = self.js("""
           const id = put('far', 1600, 1100, 520, 360);
-          // Ask for the scroll that would centre it, then report where it actually landed.
           const L2 = P.layout()[id], W = document.querySelector('.cv-world');
-          const ox = parseFloat(W.style.left), oy = parseFloat(W.style.top);
-          S.scrollLeft = ox + L2.x + L2.w / 2 - S.clientWidth / 2;
-          S.scrollTop  = oy + L2.y + L2.h / 2 - S.clientHeight / 2;
+          S.scrollLeft = parseFloat(W.style.left) + L2.x + L2.w / 2 - S.clientWidth / 2;
+          S.scrollTop  = parseFloat(W.style.top)  + L2.y + L2.h / 2 - S.clientHeight / 2;
           const r2 = by('far').el.getBoundingClientRect(), box = S.getBoundingClientRect();
           return {cx: r2.left + r2.width / 2 - box.left, cy: r2.top + r2.height / 2 - box.top,
-                  vx: S.clientWidth / 2, vy: S.clientHeight / 2};
-        """)
+                  vx: S.clientWidth / 2, vy: S.clientHeight / 2};""")
+        self.assertGreater(abs(short["cx"] - short["vx"]), 2,
+                           "the scrollbar reached past the windows on its own: " + repr(short))
+        r = self.js("""
+          const L2 = P.layout()[by('far').id];
+          P.panTo(L2.x + L2.w / 2 - S.clientWidth / 2, L2.y + L2.h / 2 - S.clientHeight / 2);
+          const r2 = by('far').el.getBoundingClientRect(), box = S.getBoundingClientRect();
+          return {cx: r2.left + r2.width / 2 - box.left, cy: r2.top + r2.height / 2 - box.top,
+                  vx: S.clientWidth / 2, vy: S.clientHeight / 2};""")
         self.assertLess(abs(r["cx"] - r["vx"]), 2, "it could not be centred across: " + repr(r))
         self.assertLess(abs(r["cy"] - r["vy"]), 2, "it could not be centred down: " + repr(r))
+
+    def test_tidy_gives_back_the_room_the_hand_pulled_out(self):
+        """Room reached by hand is kept for the session so it cannot vanish under you. tidy is the
+        one place it is asked for back, and then the scrollbar means the windows again."""
+        r = self.js("""
+          put('far', 12, 12, 520, 360);      // already at the corner: tidy moves nothing, only gives back
+          const pad = document.querySelector('.cv-pad');
+          const tight = [pad.offsetWidth, pad.offsetHeight];
+          P.panTo(3000, 2500);
+          const pulled = [pad.offsetWidth, pad.offsetHeight];
+          P.tidyCanvas(P.canvas(), true);
+          return {tight: tight, pulled: pulled, after: [pad.offsetWidth, pad.offsetHeight]};""")
+        self.assertGreater(r["pulled"][0], r["tight"][0], "panning past the end made no room: " + repr(r))
+        self.assertGreater(r["pulled"][1], r["tight"][1], "panning past the end made no room: " + repr(r))
+        self.assertEqual(r["after"], r["tight"], "tidy did not give the room back: " + repr(r))
 
     def test_the_world_does_not_shrink_while_the_page_is_open(self):
         """The slack you panned into does not vanish under you. It goes on a reload, not before."""
@@ -818,12 +898,14 @@ class TheWorldAroundTheWindows(unittest.TestCase):
           const pad=document.querySelector('.cv-pad'), w=document.querySelector('.cv-world');
           return {pad: !!pad, world: !!w, padW: pad?pad.offsetWidth:0, padH: pad?pad.offsetHeight:0,
                   ox: w?parseFloat(w.style.left):0, oy: w?parseFloat(w.style.top):0,
-                  cw: S.clientWidth, ch: S.clientHeight};})()""")
+                  cw: S.clientWidth, ch: S.clientHeight, ext: window.palmar.contentExtent()};})()""")
         self.assertTrue(r["pad"] and r["world"], "the world was never built: " + repr(r))
-        self.assertGreaterEqual(r["padW"], r["cw"] * 3 - 2, "no slack across: " + repr(r))
-        self.assertGreaterEqual(r["padH"], r["ch"] * 3 - 2, "no slack down: " + repr(r))
-        self.assertGreater(r["ox"], 0, "the board does not start one square in: " + repr(r))
-        self.assertGreater(r["oy"], 0, "the board does not start one square down: " + repr(r))
+        self.assertGreaterEqual(r["padW"], r["cw"] - 2, "the floor is narrower than the screen: " + repr(r))
+        self.assertGreaterEqual(r["padH"], r["ch"] - 2, "the floor is shorter than the screen: " + repr(r))
+        self.assertEqual(r["padW"], r["ext"]["hx"] - r["ext"]["lx"], "the floor is not the windows' room: " + repr(r))
+        self.assertEqual(r["padH"], r["ext"]["hy"] - r["ext"]["ly"], "the floor is not the windows' room: " + repr(r))
+        self.assertEqual([r["ox"], r["oy"]], [-r["ext"]["lx"], -r["ext"]["ly"]],
+                         "board zero is not where the near edge puts it: " + repr(r))
 
     def test_a_window_can_be_carried_past_the_origin(self):
         """The slack was somewhere you could look but not put anything: the drag clamped every window

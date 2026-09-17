@@ -1825,6 +1825,10 @@ function tidyCanvas(canvasId, byHand) {
   // nothing appears to have happened (measured: pressing it left the positions unchanged). The drag path was
   // dodging this trap by turning the transition off with the `drag` class.
   if (!sx && !sy && !byHand) return false;
+  // **Pressing it gives back the room you pulled out.** Slack reached by hand is kept for the
+  // session so that it cannot vanish under you — but tidy is the ask, so here it goes, and the
+  // scrollbar comes back to the windows (user, 2026-09-17).
+  if (byHand) worldSeen.delete(canvasId);
   if (sx || sy) {
     for (const t of mine) {
       const r = layout[t.id];
@@ -1834,6 +1838,7 @@ function tidyCanvas(canvasId, byHand) {
     }
     saveLayout();
   }
+  if (byHand && canvasId === current) sizeWorld();
   // **Go and look at the corner.** The view used to be nudged by exactly what the windows moved, so
   // that nothing slid under the eye — and once the canvas had a square of slack around it that
   // compensation became exact, which made pressing tidy do nothing visible at all: the windows went
@@ -2963,17 +2968,24 @@ function refreshOff(fromScroll) {
 cvScroll.addEventListener('scroll', () => refreshOff(true), { passive: true });
 
 // ── the world ───────────────────────────────────────────
-//: **How far the canvas scrolls is ours to say.** The rule the user chose (2026-09-17): take the
-//: room the windows actually occupy, call that the middle square, and lay nine of them out three by
-//: three — one square of slack on every side and corner. So any window can be brought to the middle
-//: of the screen, which is where a person puts the one they are looking at.
+//: **How far the canvas scrolls is ours to say.** It runs to where the windows are, and no further.
 //:
-//: **It never shrinks while you are working.** Slack you panned into does not vanish under you; it
-//: goes when the page is reloaded or the daemon restarts, and you pull it out again. That one rule
-//: also fixes the drag: the area cannot shrink mid-drag, so the browser never clamps the scroll, so
-//: the window follows the hand. Freezing it for the length of a gesture — which was the other way to
-//: fix that — would have snapped the view 888px sideways on release (measured).
-const WORLD_SQUARES = 3;                  // three by three: the content, and one square each side
+//: It used to run a whole screen past them on every side — nine squares with the windows in the
+//: middle one, the user's own rule earlier the same day — so that any window could be brought to the
+//: middle of the screen. The cost was the gesture everybody actually makes: dragging the bar to the
+//: bottom to see the bottom window took you a screen past it, into nothing ("여백이 밑에 많고
+//: 스크롤이 존재하니 터미널을 지나치게되네", 2026-09-17). A scrollbar is a promise about where the
+//: content is, and a screen of empty space at the end of it is a broken one.
+//:
+//: **The slack is still there; you take it with your hand.** Grab the bare canvas and pan past the
+//: end and the room appears as you go — exactly as much as you asked for, and kept for the rest of
+//: the session, so the far window can still be brought to the middle of the screen and held there.
+//: tidy gives it back, and so does a reload.
+//:
+//: **And it never shrinks under you.** Room you pulled out stays out until you ask for it to go.
+//: That one rule also fixes the drag: the area cannot shrink mid-drag, so the browser never clamps
+//: the scroll, so the window follows the hand. Freezing it for the length of a gesture — the other
+//: way to fix that — would have snapped the view 888px sideways on release (measured).
 const worldSeen = new Map();              // canvas id → the largest extent that canvas has had this session
 let worldCanvas = null;
 let cvPad = null, cvWorld = null;
@@ -3002,15 +3014,34 @@ function contentExtent() {
   return { lx, ly, hx, hy, w: hx - lx, h: hy - ly };
 }
 
+//: **Panning past the end makes the room.** The scroll stops where the windows do, so this is how
+//: the slack is reached: ask for a board position, and if the pad cannot show it, the pad grows by
+//: exactly the shortfall first. Board coordinates, not pad ones — the origin moves underneath while
+//: this runs, and a board coordinate does not.
+function panTo(bx, by) {
+  const seen = worldSeen.get(current) || { ox: 0, oy: 0, w: 0, h: 0 };
+  const ox = Math.max(seen.ox, -bx), oy = Math.max(seen.oy, -by);
+  const w = Math.max(seen.w, ox + bx + cvScroll.clientWidth);
+  const h = Math.max(seen.h, oy + by + cvScroll.clientHeight);
+  if (ox !== seen.ox || oy !== seen.oy || w !== seen.w || h !== seen.h) {
+    worldSeen.set(current, { ox: ox, oy: oy, w: w, h: h });
+    sizeWorld();                 // lays the pad out and carries the scroll along with the origin
+    renderMinimap();
+  }
+  cvScroll.scrollLeft = originX + bx;
+  cvScroll.scrollTop = originY + by;
+}
+
 function sizeWorld() {
   if (!cvPad) return;
   const c = contentExtent();
   const seen = worldSeen.get(current) || { ox: 0, oy: 0, w: 0, h: 0 };
-  // Where board zero sits inside the pad: one square of slack, plus however far the windows have
-  // gone the other side of zero. `c.lx` is negative or zero, so this only ever adds.
-  const ox = Math.max(seen.ox, c.w - c.lx), oy = Math.max(seen.oy, c.h - c.ly);
-  // And the pad runs one more square past the far edge.
-  const w = Math.max(seen.w, ox + c.hx + c.w), h = Math.max(seen.h, oy + c.hy + c.h);
+  // Where board zero sits inside the pad: however far the windows have gone the other side of it,
+  // plus whatever room the hand has pulled out. `c.lx` is negative or zero, so this only ever adds.
+  const ox = Math.max(seen.ox, -c.lx), oy = Math.max(seen.oy, -c.ly);
+  // And it ends at the far edge of them. `c.hx`/`c.hy` are at least one viewport, so the pad is
+  // never smaller than the screen it is shown in.
+  const w = Math.max(seen.w, ox + c.hx), h = Math.max(seen.h, oy + c.hy);
   worldSeen.set(current, { ox, oy, w, h });
   const dx = ox - originX, dy = oy - originY;
   const same = worldCanvas === current;
@@ -3040,7 +3071,7 @@ const PAN_SLOP = 3;      // below this much movement it is not a drag — that i
 cvScroll.addEventListener('pointerdown', (ev) => {
   if (ev.button !== 0 || ev.target !== cvScroll) return;   // on the bare floor only
   const x0 = ev.clientX, y0 = ev.clientY;
-  const l0 = cvScroll.scrollLeft, t0 = cvScroll.scrollTop;
+  const b0x = cvScroll.scrollLeft - originX, b0y = cvScroll.scrollTop - originY;
   let on = false;
   const move = (e2) => {
     const dx = e2.clientX - x0, dy = e2.clientY - y0;
@@ -3050,9 +3081,9 @@ cvScroll.addEventListener('pointerdown', (ev) => {
       cvScroll.classList.add('panning');
       try { cvScroll.setPointerCapture(ev.pointerId); } catch (e) {}
     }
-    // Scroll **the other way** so the grabbed point follows the hand. The browser stops at both ends on its own.
-    cvScroll.scrollLeft = l0 - dx;
-    cvScroll.scrollTop = t0 - dy;
+    // Scroll **the other way** so the grabbed point follows the hand. The browser used to stop it at
+    // both ends; now the end moves instead, which is the only way left to reach the slack.
+    panTo(b0x - dx, b0y - dy);
   };
   const up = () => {
     cvScroll.classList.remove('panning');
@@ -4691,7 +4722,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // Push-aside. A test drives the real drag with mouse events; these are here so the geometry
                   // can also be asked directly — the cascade and the round limit need more windows than a
                   // hand can comfortably drag into place one at a time.
-                  pushAside, applyPush, hits, firstFree, firstWindowSize, focusTile,
+                  pushAside, applyPush, hits, firstFree, firstWindowSize, focusTile, panTo,
                   // The world: how far the canvas scrolls and where the board's origin sits. A test
                   // has to be able to ask both, because the bug they fix was arithmetic nobody could see.
                   sizeWorld, contentExtent, origin: () => ({ x: originX, y: originY }),
