@@ -735,6 +735,13 @@ class TheWorldAroundTheWindows(unittest.TestCase):
         cls.b.stop()
         cls.d.stop()
 
+    def setUp(self):
+        """**The room the hand pulls out is kept for the session, on purpose** — so tests that read an
+        exact scroll range have to start from a known one, or the first test to pan leaves its slack
+        lying around for every test after it. tidy is the page's own way of giving it back."""
+        self.b.ev("(()=>{window.palmar.tidyCanvas(window.palmar.canvas(), true); return 1;})()")
+        time.sleep(0.6)
+
     PUT = """
       const P = window.palmar, L = P.layout(), S = document.getElementById('cv-scroll');
       const by = (n) => [...P.tiles.values()].find((t) => t.s.name === n);
@@ -750,7 +757,12 @@ class TheWorldAroundTheWindows(unittest.TestCase):
     def js(self, body):
         return self.b.ev("(()=>{" + self.PUT + "\n" + body + "})()")
 
-    def test_the_world_is_three_squares_by_three_with_the_windows_in_the_middle(self):
+    def test_the_scroll_runs_to_the_windows_and_no_further(self):
+        """**Nine squares became one.** The canvas used to scroll a whole screen past the windows on
+        every side, so that any of them could be brought to the middle — and dragging the bar to the
+        bottom to see the bottom window took you a screen past it into nothing, which is the gesture
+        everybody actually makes (user, 2026-09-17). The slack is still reachable; it is taken by
+        hand now, and the tests below this one are about that."""
         r = self.js("""
           put('far', 1600, 1100, 520, 360);
           const pad = document.querySelector('.cv-pad'), w = document.querySelector('.cv-world');
@@ -759,26 +771,94 @@ class TheWorldAroundTheWindows(unittest.TestCase):
                   content: P.contentExtent()};
         """)
         c = r["content"]
-        self.assertEqual(r["padW"], c["w"] * 3, "the world is not three squares across")
-        self.assertEqual(r["padH"], c["h"] * 3, "the world is not three squares down")
-        self.assertEqual(r["ox"], c["w"], "the windows do not start one square in")
-        self.assertEqual(r["oy"], c["h"], "the windows do not start one square down")
+        self.assertEqual(r["padW"], c["hx"] - c["lx"], "the scroll does not end at the far window")
+        self.assertEqual(r["padH"], c["hy"] - c["ly"], "the scroll does not end below the last window")
+        self.assertEqual(r["ox"], -c["lx"], "board zero is not where the near edge puts it")
+        self.assertEqual(r["oy"], -c["ly"], "board zero is not where the near edge puts it")
 
-    def test_a_window_at_the_far_corner_can_be_brought_to_the_middle_of_the_screen(self):
-        """(A). Before the slack existed this was short by (viewport - window)/2 every time."""
+    def test_scrolling_to_the_bottom_stops_at_the_bottom_window(self):
+        """The gesture everybody makes: drag the bar to the bottom to see the bottom window. With a
+        screen of slack under it that took you a screen past it, into nothing (user, 2026-09-17)."""
         r = self.js("""
+          put('far', 12, 1600, 520, 360);
+          S.scrollTop = 1e7; S.scrollLeft = 1e7;
+          const q = by('far').el.getBoundingClientRect(), box = S.getBoundingClientRect();
+          return {below: Math.round(box.bottom - q.bottom), right: Math.round(box.right - q.right),
+                  view: [S.clientWidth, S.clientHeight]};""")
+        self.assertLess(r["below"], 40, "a screen of nothing under the last window: " + repr(r))
+        self.assertGreaterEqual(r["below"], 0, "it scrolled past the bottom of the window: " + repr(r))
+
+    def test_a_hand_on_the_bare_canvas_makes_room_past_the_end(self):
+        """The slack is not gone, it is taken: grab the floor and pull, and the room appears as you
+        go. With a real hand, because the whole point is the gesture."""
+        before = self.js("""
+          put('far', 12, 12, 520, 360); S.scrollTop = 1e7;
+          const pad = document.querySelector('.cv-pad');
+          return {pad: [pad.offsetWidth, pad.offsetHeight], at: Math.round(S.scrollTop)};""")
+        spot = self.b.ev("""(()=>{const S=document.getElementById('cv-scroll');
+          const b=S.getBoundingClientRect();
+          for (let fx=0.7; fx>0.3; fx-=0.05) for (let fy=0.3; fy<0.7; fy+=0.05) {
+            const x=b.left+b.width*fx, y=b.top+b.height*fy;
+            if (document.elementFromPoint(x,y)===S) return {x:x, y:y};
+          } return null;})()""")
+        self.assertTrue(spot, "no bare canvas to grab")
+        self.b.ws.call("Input.dispatchMouseEvent",
+                       dict(type="mousePressed", button="left", x=spot["x"], y=spot["y"],
+                            clickCount=1, buttons=1))
+        for i in range(1, 13):
+            self.b.ws.call("Input.dispatchMouseEvent",
+                           dict(type="mouseMoved", button="left", x=spot["x"], y=spot["y"] - 40 * i, buttons=1))
+            time.sleep(0.03)
+        self.b.ws.call("Input.dispatchMouseEvent",
+                       dict(type="mouseReleased", button="left", x=spot["x"], y=spot["y"] - 480,
+                            clickCount=1, buttons=0))
+        time.sleep(0.5)
+        after = self.js("""const pad = document.querySelector('.cv-pad');
+          return {pad: [pad.offsetWidth, pad.offsetHeight], at: Math.round(S.scrollTop)};""")
+        self.assertGreater(after["pad"][1], before["pad"][1],
+                           "pulling past the end made no room: %r -> %r" % (before, after))
+        self.assertGreater(after["at"], before["at"],
+                           "the view did not follow the hand past the end: %r -> %r" % (before, after))
+
+    def test_the_hand_pulls_out_the_room_the_scrollbar_does_not_offer(self):
+        """(A), which the slack was for and which the scrollbar no longer reaches on its own: bringing
+        the far window to the middle of the screen. Setting the scroll is not enough any more — the
+        pad ends at that window's far edge, so the browser clamps it, and it lands short by exactly
+        (viewport - window)/2, the number this test was born measuring. Panning there makes the room
+        on the way, and then it centres."""
+        short = self.js("""
           const id = put('far', 1600, 1100, 520, 360);
-          // Ask for the scroll that would centre it, then report where it actually landed.
           const L2 = P.layout()[id], W = document.querySelector('.cv-world');
-          const ox = parseFloat(W.style.left), oy = parseFloat(W.style.top);
-          S.scrollLeft = ox + L2.x + L2.w / 2 - S.clientWidth / 2;
-          S.scrollTop  = oy + L2.y + L2.h / 2 - S.clientHeight / 2;
+          S.scrollLeft = parseFloat(W.style.left) + L2.x + L2.w / 2 - S.clientWidth / 2;
+          S.scrollTop  = parseFloat(W.style.top)  + L2.y + L2.h / 2 - S.clientHeight / 2;
           const r2 = by('far').el.getBoundingClientRect(), box = S.getBoundingClientRect();
           return {cx: r2.left + r2.width / 2 - box.left, cy: r2.top + r2.height / 2 - box.top,
-                  vx: S.clientWidth / 2, vy: S.clientHeight / 2};
-        """)
+                  vx: S.clientWidth / 2, vy: S.clientHeight / 2};""")
+        self.assertGreater(abs(short["cx"] - short["vx"]), 2,
+                           "the scrollbar reached past the windows on its own: " + repr(short))
+        r = self.js("""
+          const L2 = P.layout()[by('far').id];
+          P.panTo(L2.x + L2.w / 2 - S.clientWidth / 2, L2.y + L2.h / 2 - S.clientHeight / 2);
+          const r2 = by('far').el.getBoundingClientRect(), box = S.getBoundingClientRect();
+          return {cx: r2.left + r2.width / 2 - box.left, cy: r2.top + r2.height / 2 - box.top,
+                  vx: S.clientWidth / 2, vy: S.clientHeight / 2};""")
         self.assertLess(abs(r["cx"] - r["vx"]), 2, "it could not be centred across: " + repr(r))
         self.assertLess(abs(r["cy"] - r["vy"]), 2, "it could not be centred down: " + repr(r))
+
+    def test_tidy_gives_back_the_room_the_hand_pulled_out(self):
+        """Room reached by hand is kept for the session so it cannot vanish under you. tidy is the
+        one place it is asked for back, and then the scrollbar means the windows again."""
+        r = self.js("""
+          put('far', 12, 12, 520, 360);      // already at the corner: tidy moves nothing, only gives back
+          const pad = document.querySelector('.cv-pad');
+          const tight = [pad.offsetWidth, pad.offsetHeight];
+          P.panTo(3000, 2500);
+          const pulled = [pad.offsetWidth, pad.offsetHeight];
+          P.tidyCanvas(P.canvas(), true);
+          return {tight: tight, pulled: pulled, after: [pad.offsetWidth, pad.offsetHeight]};""")
+        self.assertGreater(r["pulled"][0], r["tight"][0], "panning past the end made no room: " + repr(r))
+        self.assertGreater(r["pulled"][1], r["tight"][1], "panning past the end made no room: " + repr(r))
+        self.assertEqual(r["after"], r["tight"], "tidy did not give the room back: " + repr(r))
 
     def test_the_world_does_not_shrink_while_the_page_is_open(self):
         """The slack you panned into does not vanish under you. It goes on a reload, not before."""
@@ -789,6 +869,115 @@ class TheWorldAroundTheWindows(unittest.TestCase):
           return {big: big, after: document.querySelector('.cv-pad').offsetWidth};
         """)
         self.assertEqual(r["after"], r["big"], "the world shrank under the user: " + repr(r))
+
+    def test_the_first_window_takes_palmars_own_shape(self):
+        """**Chromium's app window is nearly square and this page does not fit in it.** Every case
+        here is a work area somebody measured, and every one of them was wrong under the first rule,
+        which set the width and handed `outerHeight` straight back: on two of the three it declined
+        to do anything at all, because the window was already wide enough and width was never the
+        thing that was wrong. The shape palmar's own window opens at is 1280x820."""
+        for avail_w, avail_h, outer_w, want in [
+            (1536, 912, 1050, (1280, 820)),    # Windows, no saved bounds — the case that started it
+            (1536, 912, 1302, (1302, 834)),    # Windows, the same machine after Chromium had its way
+            (2560, 1392, 1280, (1280, 820)),   # the shape the user sent on 2026-09-17: 1280x1029
+            (1024, 700, 900, (984, 630)),      # a work area too small for palmar's own size
+        ]:
+            got = self.b.ev("(()=>{const s=window.palmar.firstWindowSize(%d,%d,%d);return [s.w,s.h];})()"
+                            % (avail_w, avail_h, outer_w))
+            self.assertEqual(got, list(want),
+                             "a %dx%d work area holding a %dpx window: %r" % (avail_w, avail_h, outer_w, got))
+            self.assertLessEqual(got[0], avail_w, "wider than the screen it is on")
+            self.assertLessEqual(got[1], avail_h, "taller than the screen it is on")
+            self.assertGreaterEqual(got[0], min(outer_w, avail_w - 40), "it took width away from the window")
+
+    def test_the_world_is_sized_without_being_told(self):
+        """The other tests here call sizeWorld through the bench, which proves the arithmetic and not
+        that anything runs it. This one touches nothing and reads what the page did on its own — the
+        gap that let "the slack is there" and "the slack appears" be two different things."""
+        r = self.b.ev("""(()=>{const S=document.getElementById('cv-scroll');
+          const pad=document.querySelector('.cv-pad'), w=document.querySelector('.cv-world');
+          return {pad: !!pad, world: !!w, padW: pad?pad.offsetWidth:0, padH: pad?pad.offsetHeight:0,
+                  ox: w?parseFloat(w.style.left):0, oy: w?parseFloat(w.style.top):0,
+                  cw: S.clientWidth, ch: S.clientHeight, ext: window.palmar.contentExtent()};})()""")
+        self.assertTrue(r["pad"] and r["world"], "the world was never built: " + repr(r))
+        self.assertGreaterEqual(r["padW"], r["cw"] - 2, "the floor is narrower than the screen: " + repr(r))
+        self.assertGreaterEqual(r["padH"], r["ch"] - 2, "the floor is shorter than the screen: " + repr(r))
+        self.assertEqual(r["padW"], r["ext"]["hx"] - r["ext"]["lx"], "the floor is not the windows' room: " + repr(r))
+        self.assertEqual(r["padH"], r["ext"]["hy"] - r["ext"]["ly"], "the floor is not the windows' room: " + repr(r))
+        self.assertEqual([r["ox"], r["oy"]], [-r["ext"]["lx"], -r["ext"]["ly"]],
+                         "board zero is not where the near edge puts it: " + repr(r))
+
+    def test_a_window_can_be_carried_past_the_origin(self):
+        """The slack was somewhere you could look but not put anything: the drag clamped every window
+        at board zero, so panning into the empty space above and to the left and dragging a window
+        there stopped it dead at the edge of the ones already placed (user, 2026-09-17). And because
+        a window was always pinned to the corner, tidy had nothing to close up and its button sat
+        disabled — one cause, two complaints."""
+        # **Scroll to it first.** The world is three screens wide, so a window placed by the bench is
+        # very often nowhere near the view — and a title bar that is off screen cannot be grabbed.
+        self.js("""
+          const id = put('far', 60, 50, 300, 200);
+          const o = P.origin(), q = P.layout()[id];
+          S.scrollLeft = o.x + q.x - 420;      // room on screen to carry it past the origin
+          S.scrollTop  = o.y + q.y - 300;
+          return 1;""")
+        time.sleep(0.3)
+        box = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name==='far');
+          const r = t.el.querySelector('.tb').getBoundingClientRect();
+          return {x: r.left + r.width/2, y: r.top + r.height/2};})()""")
+        send = lambda **kw: self.b.ws.call("Input.dispatchMouseEvent", dict(button="left", **kw))
+        send(type="mousePressed", x=box["x"], y=box["y"], clickCount=1, buttons=1)
+        for i in range(1, 11):
+            send(type="mouseMoved", x=box["x"] - 30 * i - (i % 3), y=box["y"] - 22 * i - (i % 5), buttons=1)
+        send(type="mouseReleased", x=box["x"] - 300, y=box["y"] - 220, clickCount=1, buttons=0)
+        time.sleep(0.8)
+        r = self.b.ev("""(()=>{const P=window.palmar, L=P.layout(), o=P.origin();
+          const t=[...P.tiles.values()].find(t=>t.s.name==='far'); const q=L[t.id];
+          const pad=document.querySelector('.cv-pad');
+          const mm=document.getElementById('mm'), mb=mm.getBoundingClientRect();
+          const inside=[...mm.querySelectorAll('.mm-t')].every(e=>{const b=e.getBoundingClientRect();
+            return b.left>=mb.left-1&&b.top>=mb.top-1&&b.right<=mb.right+1&&b.bottom<=mb.bottom+1;});
+          return {x:q.x, y:q.y, onPad:[o.x+q.x, o.y+q.y], padW:pad.offsetWidth, padH:pad.offsetHeight,
+                  mmInside:inside, tidyOff:document.getElementById('tidy').disabled};})()""")
+        self.assertLess(r["x"], 0, "the window was still stopped at the origin: " + repr(r))
+        self.assertLess(r["y"], 0, "the window was still stopped at the origin: " + repr(r))
+        # **The pad has to have grown to hold it.** A board coordinate may be negative; a place on the
+        # scrolled canvas may not, or the window would sit where nothing can scroll to.
+        self.assertGreaterEqual(r["onPad"][0], 0, "it landed off the front of the canvas: " + repr(r))
+        self.assertGreaterEqual(r["onPad"][1], 0, "it landed off the top of the canvas: " + repr(r))
+        self.assertTrue(r["mmInside"], "the minimap drew a window outside its own box: " + repr(r))
+        self.assertFalse(r["tidyOff"], "tidy still says there is nothing to close up: " + repr(r))
+        back = self.b.ev("""(()=>{const P=window.palmar, L=P.layout();
+          const t=[...P.tiles.values()].find(t=>t.s.name==='far');
+          document.getElementById('tidy').click();
+          return [L[t.id].x, L[t.id].y];})()""")
+        self.assertEqual(back, [12, 12], "tidy did not pull it back to the corner: " + repr(back))
+
+    def test_tidy_leaves_you_looking_at_the_corner(self):
+        """Pressing it used to do nothing you could see. The view was nudged by exactly what the
+        windows moved so that nothing slid under the eye, and once the canvas had a square of slack
+        that compensation became exact — the windows went to the corner and the view went with them
+        ("tidy 버튼 누르면 보고있는 화면에서 살짝 흔들리기만", user, 2026-09-17). A button whose job is
+        "pull them back to the corner" has to leave you looking at the corner."""
+        self.js("""
+          put('far', 500, 400, 300, 200);
+          const o = P.origin();
+          S.scrollLeft = o.x + 900; S.scrollTop = o.y + 700;   // a long way from the corner
+          P.paintTidy();
+          return 1;""")
+        off = self.b.ev("document.getElementById('tidy').disabled")
+        self.assertFalse(off, "tidy says there is nothing to close up, with a window at 500,400")
+        self.b.ev("document.getElementById('tidy').click()")
+        time.sleep(1.5)
+        r = self.b.ev("""(()=>{const P=window.palmar, L=P.layout(), S=document.getElementById('cv-scroll');
+          const t=[...P.tiles.values()].find(t=>t.s.name==='far');
+          const r=t.el.getBoundingClientRect(), b=S.getBoundingClientRect();
+          return {at:[L[t.id].x, L[t.id].y], onScreen:[Math.round(r.left-b.left), Math.round(r.top-b.top)]};})()""")
+        self.assertEqual(r["at"], [12, 12], "the window was not pulled to the corner: " + repr(r))
+        # And you can see it: near the top-left of the viewport rather than a screen away.
+        self.assertLess(r["onScreen"][0], 80, "the view did not follow to the corner: " + repr(r))
+        self.assertLess(r["onScreen"][1], 80, "the view did not follow to the corner: " + repr(r))
+        self.assertGreaterEqual(r["onScreen"][0], 0, "it went past the corner: " + repr(r))
 
     def test_dragging_the_window_that_defines_the_world_moves_it_on_screen(self):
         """(B), with a real hand. The window used to stay put on screen however far the hand went."""
@@ -1319,6 +1508,121 @@ class ANewPaneFitsItsWindow(unittest.TestCase):
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+
+class TidyWithTheWindowsFarApart(unittest.TestCase):
+    """Two windows, far apart, and its own board — TheWorldAroundTheWindows has exactly one window
+    on purpose, because its arithmetic is about the one that alone defines the world."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser(scrollbars=True).start()
+        cls.b.open(cls.d.url)
+        cls.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          for (const n of ['far','near'])
+            await fetch('/api/sessions?token='+T,{method:'POST',
+              headers:{'content-type':'application/json'},
+              body:JSON.stringify({cwd:%s,name:n})});})()""" % json.dumps(cls.d.home))
+        time.sleep(6)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def tearDown(self):
+        self.assertEqual(self.b.errors(), [], "the page threw while being driven")
+
+    PUT = TheWorldAroundTheWindows.PUT
+
+    def js(self, body):
+        return self.b.ev("(()=>{" + self.PUT + "\n" + body + "})()")
+
+    def test_tidy_shows_you_the_group_you_were_working_in(self):
+        """The window in front is the one you last touched, so that is what tidy takes you back to —
+        with its group, because a member on its own is half a thing to look at (user, 2026-09-17)."""
+        self.js("""
+          put('far', 1800, 60, 300, 200);      // top right, and the one we will be working in
+          put('near', 60, 1400, 300, 200);     // bottom left, the one nearest the corner
+          P.focusTile(by('far').id, {keyboard: false});
+          const o = P.origin(); S.scrollLeft = o.x + 400; S.scrollTop = o.y + 400;
+          P.paintTidy(); return 1;""")
+        self.b.ev("document.getElementById('tidy').click()")
+        time.sleep(1.5)
+        seen = self.b.ev("""(()=>{const P=window.palmar, S=document.getElementById('cv-scroll');
+          const b=S.getBoundingClientRect();
+          return [...P.tiles.values()].filter((t)=>{const q=t.el.getBoundingClientRect();
+            return q.right>b.left && q.left<b.right && q.bottom>b.top && q.top<b.bottom;})
+            .map((t)=>t.s.name).sort();})()""")
+        self.assertIn("far", seen, "tidy did not go back to the window in front: %r" % (seen,))
+
+    def test_a_full_view_sends_the_next_window_next_door_not_home(self):
+        """Two windows in sight leave no room for a third, and falling straight back to the top-left of
+        the board put it where the person had to go and find it — the very thing looking in view first
+        was for (user, 2026-09-17). The gap it takes is the nearest one to the view."""
+        r = self.js("""
+          put('far', 1500, 1200, 520, 360); put('near', 2032, 1200, 520, 360);
+          const o = P.origin(); S.scrollLeft = o.x + 1488; S.scrollTop = o.y + 1188;
+          return {spot: P.firstFree(520, 360, by('far').s.canvas),
+                  view: [S.scrollLeft - o.x, S.scrollTop - o.y, S.clientWidth, S.clientHeight]};""")
+        vx, vy, vw, vh = r["view"]
+        sx, sy = r["spot"]["x"], r["spot"]["y"]
+        self.assertNotEqual([sx, sy], [12, 12], "it went home to the board's corner")
+        near = max(abs(sx + 260 - (vx + vw / 2)), abs(sy + 180 - (vy + vh / 2)))
+        self.assertLess(near, max(vw, vh), "it landed a long way from the view: %r, looking at %r"
+                        % (r["spot"], r["view"]))
+
+    def test_tidy_is_there_even_when_there_is_nothing_to_close_up(self):
+        """The button was lit by slack alone, so on a canvas already at the corner it went grey and the
+        other half of what it does — taking you back to what you were working in — could not be
+        reached (user, 2026-09-17). Only an empty canvas has nowhere to take you."""
+        self.js("put('far', 12, 12, 300, 200); put('near', 330, 12, 300, 200); P.paintTidy(); return 1;")
+        self.assertEqual(self.js("return P.tidyCanvas(P.canvas(), false);"), False,
+                         "there was slack after all — this test is not testing what it says")
+        self.assertFalse(self.b.ev("document.getElementById('tidy').disabled"),
+                         "tidy went grey on a canvas that still has windows to go and look at")
+        # And pressing it takes you there rather than doing nothing at all.
+        self.js("const o = P.origin(); S.scrollLeft = o.x + 900; S.scrollTop = o.y + 700; return 1;")
+        self.b.ev("document.getElementById('tidy').click()")
+        time.sleep(1.5)
+        seen = self.b.ev("""(()=>{const P=window.palmar, S=document.getElementById('cv-scroll');
+          const b=S.getBoundingClientRect();
+          return [...P.tiles.values()].filter((t)=>{const q=t.el.getBoundingClientRect();
+            return q.right>b.left && q.left<b.right && q.bottom>b.top && q.top<b.bottom;}).length;})()""")
+        self.assertTrue(seen, "pressing it left the view on empty canvas")
+
+    def test_a_new_window_opens_where_you_are_looking(self):
+        """The canvas is far bigger than the screen, and a new terminal at the board's corner is one
+        you have to go and find (user, 2026-09-17). The whole-canvas scan stays underneath it."""
+        r = self.js("""
+          put('far', 12, 12, 300, 200); put('near', 12, 240, 300, 200);
+          const o = P.origin(); S.scrollLeft = o.x + 1500; S.scrollTop = o.y + 1200;
+          return {spot: P.firstFree(300, 200, by('far').s.canvas),
+                  view: [S.scrollLeft - o.x, S.scrollTop - o.y, S.clientWidth, S.clientHeight]};""")
+        vx, vy, vw, vh = r["view"]
+        sx, sy = r["spot"]["x"], r["spot"]["y"]
+        self.assertTrue(vx <= sx and sx + 300 <= vx + vw and vy <= sy and sy + 200 <= vy + vh,
+                        "it opened off screen: spot %r, looking at %r" % (r["spot"], r["view"]))
+
+    def test_tidy_does_not_leave_you_staring_between_two_windows(self):
+        """One window at the top right and one at the bottom left: the corner of the box they make is
+        empty canvas, and pressing tidy went and looked at it (user, 2026-09-17). The view goes to
+        whichever window is nearest that corner instead, so something is always on screen."""
+        self.js("""
+          put('far', 1800, 60, 300, 200);      // top right
+          put('near', 60, 1400, 300, 200);     // bottom left
+          const o = P.origin(); S.scrollLeft = o.x + 900; S.scrollTop = o.y + 700;
+          P.paintTidy(); return 1;""")
+        self.b.ev("document.getElementById('tidy').click()")
+        time.sleep(1.5)
+        r = self.b.ev("""(()=>{const P=window.palmar, S=document.getElementById('cv-scroll');
+          const b=S.getBoundingClientRect();
+          const seen=[...P.tiles.values()].filter((t)=>{const q=t.el.getBoundingClientRect();
+            return q.right>b.left && q.left<b.right && q.bottom>b.top && q.top<b.bottom;})
+            .map((t)=>t.s.name);
+          return {seen: seen.sort()};})()""")
+        self.assertTrue(r["seen"], "tidy left the view on empty canvas: " + repr(r))
+
 class Grouping(unittest.TestCase):
     """Hold a window still over another and they travel together.
 
@@ -2036,6 +2340,110 @@ class Grouping(unittest.TestCase):
             self.assertEqual([after[k][0] - before[k][0], after[k][1] - before[k][1]], [90, 60],
                              "%s did not simply move with the group: %r -> %r" % (k, before, after))
 
+    def test_a_group_joins_as_the_group_you_carried(self):
+        """**The mates come too.** Joining placed the window in the hand at the preview spot and left
+        everyone else at the end of the drag, so carrying a pair onto an outside window put one of
+        them beside the target and dropped the other where the hand happened to stop: a row came down
+        as a stack, still grouped, so it read as the group rearranging itself (user, 2026-09-17:
+        "좌우로 붙어있던게 움직이다보면 상하 배치로 바뀔 때도 있어"). The hand's window still lands
+        exactly where its ghost was; the rest keep the shape they were picked up in."""
+        self.bench("""put('g1',420,420,240,160); put('g2',672,420,240,160); put('g3',60,60,240,160);
+                      P.joinGroups(by('g1').id, by('g2').id); return 1;""")
+        before = self.bench("return {a: at('g1'), b: at('g2')};")
+        spots = self.bench("""return ['left','right','above','below']
+          .map((s) => P.joinBlock(by('g3').id, s, by('g1').id)).map((p) => [p.x, p.y]);""")
+        x, y = self.press("g1")
+        tx, ty = self.press("g3")
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x + (tx - x) * i / 3, y=y + (ty - y) * i / 3, buttons=1)
+        for _ in range(20):
+            n = self.bench("return P.groupOf(by('g3').id).length;")
+            if n == 3:
+                break
+            time.sleep(0.18)
+            self.send(type="mouseMoved", x=tx + 1, y=ty, buttons=1)
+        self.send(type="mouseReleased", x=tx + 1, y=ty, clickCount=1, buttons=0)
+        time.sleep(0.8)
+        after = self.bench("return {a: at('g1'), b: at('g2'), c: at('g3')};")
+        self.assertEqual(self.bench("return P.groupOf(by('g1').id).length;"), 3,
+                         "the hold did not join the group to the window it was held over")
+        self.assertEqual([after["b"][0] - after["a"][0], after["b"][1] - after["a"][1]],
+                         [before["b"][0] - before["a"][0], before["b"][1] - before["a"][1]],
+                         "the two stopped standing side by side: %r -> %r" % (before, after))
+        # Which side it latched onto is the hand's business (that is its own test); what matters here
+        # is that the block landed against the target, on one of the four sides, and exactly. The
+        # four are read **before** the drag: afterwards g3 is in the group, so the block is a
+        # different shape and its own previews no longer describe the drop that happened. g1 is the
+        # block's top-left corner here, so where the block went is where g1 went.
+        self.assertIn(after["a"], spots,
+                      "the block did not land against the target: %r, wanted one of %r" % (after, spots))
+
+    def test_the_carried_group_does_not_leave_its_colour_behind(self):
+        """The cells slide to their new place on a transition, which is right when a group is pushed
+        aside and wrong under the hand: the windows have theirs switched off while they are dragged,
+        so the tint hung a third of a second behind them, over whatever the group had just left
+        (user, 2026-09-17). Three windows so that two of them make a group with a frame to watch."""
+        self.bench("""put('g1',300,300,200,150); put('g2',512,300,200,150);
+                      P.joinGroups(by('g1').id, by('g2').id); return 1;""")
+        x, y = self.press("g1")
+        self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+        for i in (1, 2, 3):
+            self.send(type="mouseMoved", x=x - 40 * i, y=y - 30 * i, buttons=1)
+        # Read it while the hand is still down: this is the only moment the lag existed in.
+        mid = self.b.ev("""(()=>{const c=document.querySelector('.gbox .gcell');
+          const t=[...window.palmar.tiles.values()].find(t=>t.s.name==='g1');
+          const cr=c.getBoundingClientRect(), tr=t.el.getBoundingClientRect();
+          return {glides: getComputedStyle(c).transitionProperty !== 'none',
+                  dx: Math.round(tr.left - cr.left), dy: Math.round(tr.top - cr.top)};})()""")
+        self.send(type="mouseReleased", x=x - 120, y=y - 90, clickCount=1, buttons=0)
+        time.sleep(0.6)
+        self.assertFalse(mid["glides"], "the tint was still on a transition while it was being carried")
+        self.assertEqual([mid["dx"], mid["dy"]], [10, 10],
+                         "the tint was not sitting under its own window mid-drag: %r" % (mid,))
+        after = self.b.ev("""(()=>{const c=document.querySelector('.gbox .gcell');
+          return getComputedStyle(c).transitionProperty !== 'none';})()""")
+        self.assertTrue(after, "the tint never got its glide back after the drag")
+
+    def test_a_drag_does_not_grind_the_group_out_of_line(self):
+        """**A drag is a rigid translation, ten times over.** The user has a group that walks out of
+        line over many drags — a row of two becoming a staircase (2026-09-17) — and this does not
+        reproduce it: not here, not over other windows, not in and out of the viewport, not at 1.125.
+        What it does hold down is the property that would have to break for that to happen: a hand
+        moving a group changes no member's position relative to any other, and leaves none of them on
+        a fraction of a pixel. It is a fence, not the catch. The catch is the watch behind
+        `palmar.watchgroups`, which prints the stack of whatever really moves one member alone."""
+        self.bench("""put('g1',200,200,220,150); put('g2',432,200,220,150);
+                      P.joinGroups(by('g1').id, by('g2').id); return 1;""")
+        before = self.bench("return {a: at('g1'), b: at('g2')};")
+        for n in range(10):
+            x, y = self.press("g1")
+            self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+            for i in (1, 2, 3):
+                self.send(type="mouseMoved", x=x + 7.37 * i / 3, y=y + 5.61 * i / 3, buttons=1)
+            self.send(type="mouseReleased", x=x + 7.37, y=y + 5.61, clickCount=1, buttons=0)
+            time.sleep(0.45)
+            now = self.bench("return {a: at('g1'), b: at('g2')};")
+            self.assertEqual([now["b"][0] - now["a"][0], now["b"][1] - now["a"][1]],
+                             [before["b"][0] - before["a"][0], before["b"][1] - before["a"][1]],
+                             "drag %d put the group out of line: %r" % (n + 1, now))
+            for k in "ab":
+                for v in now[k]:
+                    self.assertEqual(v, int(v), "a window came to rest on half a pixel: %r" % (now,))
+
+    def test_the_frame_follows_its_windows_past_the_origin(self):
+        """The group's tint is drawn cell by cell, and each cell used to be pinned at zero — from when
+        a window could not be carried past the origin. Once it could, the frame stopped following its
+        own windows up and to the left and piled against the corner instead, where it read as having
+        latched onto whatever window was sitting there (user, 2026-09-17)."""
+        r = self.bench("""put('g1',-200,-150,240,160); put('g2',52,-150,240,160);
+          P.joinGroups(by('g1').id, by('g2').id); P.sizeWorld(); P.paintGroups();
+          return [...document.querySelectorAll('.gcell')]
+            .map((c) => [parseFloat(c.style.left), parseFloat(c.style.top)])
+            .sort((a, b) => a[0] - b[0]);""")
+        self.assertEqual(r, [[-210, -160], [42, -160]],
+                         "the tint did not go where its windows went: %r" % (r,))
+
     def test_taking_one_out_of_the_middle_closes_the_hole(self):
         """Closing the middle window closed the group up; taking it out with Alt-drag left its hole
         behind (user, 2026-09-15). Both are "a member is gone" and both close up now."""
@@ -2249,6 +2657,76 @@ class Grouping(unittest.TestCase):
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+
+class TwoGroupsMeeting(unittest.TestCase):
+    """Four windows, because the smallest case that goes wrong is a pair carried onto a pair.
+
+    Its own board: the matrix below places all four itself for every one of the thirty-two runs, and
+    a fourth window left lying around in Grouping would be one more thing for its pushes to find."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+        cls.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          for (const n of ['g1','g2','g3','g4'])
+            await fetch('/api/sessions?token='+T,{method:'POST',
+              headers:{'content-type':'application/json'},
+              body:JSON.stringify({cwd:%s,name:n})});})()""" % json.dumps(cls.d.home))
+        time.sleep(6)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def tearDown(self):
+        self.assertEqual(self.b.errors(), [], "the page threw while being driven")
+
+    JS = Grouping.JS
+
+    def bench(self, body):
+        return self.b.ev("(()=>{" + self.JS + "\n" + body + "})()")
+
+    def test_two_groups_meeting_never_stack_a_window_on_a_window(self):
+        """**Every way two pairs can meet.** Placing only the window in the hand put the one behind it
+        exactly on top of the target's own mate — the whole window, 220x150 of it, in seven of these
+        thirty-two (user, 2026-09-17: "묶은 직후 두 터미널이 완전히 겹쳐있는 경우도 있어"). Clearing
+        only the target and not the mate standing behind it left two more. The push cannot save either
+        one: it resolves what the *anchor* overlaps, and the anchor is the window that landed cleanly.
+        Nothing overlaps, and the pair you carried is still the pair you carried."""
+        W, H, G = 220, 150, 12
+        for mine in ("row", "col"):
+            for theirs in ("row", "col"):
+                for target in ("g3", "g4"):
+                    for side in ("left", "right", "above", "below"):
+                        r = self.bench("""
+                          const W=%d,H=%d,G=%d;
+                          if ('%s'==='row') { put('g1',100,600,W,H); put('g2',100+W+G,600,W,H); }
+                          else              { put('g1',100,600,W,H); put('g2',100,600+H+G,W,H); }
+                          if ('%s'==='row') { put('g3',700,200,W,H); put('g4',700+W+G,200,W,H); }
+                          else              { put('g3',700,200,W,H); put('g4',700,200+H+G,W,H); }
+                          P.joinGroups(by('g1').id, by('g2').id);
+                          P.joinGroups(by('g3').id, by('g4').id);
+                          const rel = () => [L[by('g2').id].x - L[by('g1').id].x,
+                                             L[by('g2').id].y - L[by('g1').id].y];
+                          const was = rel();
+                          P.dropInto(by('g1').id, by('%s').id, '%s');
+                          P.settle(by('g1').id, {compact: false});
+                          const ns = ['g1','g2','g3','g4'], over = [];
+                          for (let i=0;i<4;i++) for (let j=i+1;j<4;j++) {
+                            const p=L[by(ns[i]).id], q=L[by(ns[j]).id];
+                            const w=Math.min(p.x+p.w,q.x+q.w)-Math.max(p.x,q.x);
+                            const h=Math.min(p.y+p.h,q.y+q.h)-Math.max(p.y,q.y);
+                            if (w>0 && h>0) over.push(ns[i]+'/'+ns[j]+' '+w+'x'+h);
+                          }
+                          return {over: over, kept: rel()[0]===was[0] && rel()[1]===was[1]};
+                        """ % (W, H, G, mine, theirs, target, side))
+                        where = "carrying a %s onto a %s, aiming %s of %s" % (mine, theirs, side, target)
+                        self.assertEqual(r["over"], [], "windows ended up on top of each other — " + where)
+                        self.assertTrue(r["kept"], "the pair you carried came apart — " + where)
+
 class Undoing(unittest.TestCase):
     """One way back for everything that moves a window.
 

@@ -205,7 +205,43 @@ try { localStorage.removeItem('palmar-tiles'); } catch (e) {}   // the copy olde
 const CLIENT = Math.random().toString(36).slice(2, 10);   // who saved — a page ignores its own broadcast
 let layoutRev = 0;
 let layoutOnDaemon = null;        // null until hello says; false when the daemon predates the endpoint
+//: **A watch for a bug nobody here can reproduce.** A group walks out of line over many drags — a
+//: row of two becomes a staircase, a pixel or so at a time (user, 2026-09-17). Twenty long drags on
+//: this machine, over other windows, in and out of the viewport, at four scale factors, never moved
+//: one member relative to another. So instead of another theory: every save compares each group's
+//: internal offsets with the last ones and, when they differ without the group having been joined or
+//: closed up, prints the offsets and the stack that got here. The stack is the point — it names the
+//: function that moved one member and not the other, which is the one thing all the guessing was for.
+//:
+//: Off unless `palmar.watchgroups` is set, and it only ever reads and prints.
+const LS_WATCH = 'palmar.watchgroups';
+let watchOn = false;
+try { watchOn = localStorage.getItem(LS_WATCH) === '1'; } catch (e) {}
+const watchWas = new Map();
+function watchGroups() {
+  if (!watchOn) return;
+  const now = new Map();
+  for (const t of tiles.values()) {
+    const r = layout[t.id];
+    if (r && r.g) { if (!now.has(r.g)) now.set(r.g, []); now.get(r.g).push([t.id, r.x, r.y]); }
+  }
+  for (const [g, list] of now) {
+    list.sort((a, b) => (a[0] < b[0] ? -1 : 1));
+    const shape = list.map(([, x, y]) => (x - list[0][1]) + ',' + (y - list[0][2])).join(' | ');
+    const was = watchWas.get(g);
+    const ids = list.map(([id]) => id).join(' ');
+    // A member joining or leaving changes the shape for an honest reason; only a set that stayed
+    // the same and moved anyway is worth a word.
+    if (was && was.ids === ids && was.shape !== shape) {
+      console.warn('[palmar] group ' + g + ' changed shape\n  was: ' + was.shape +
+                   '\n  now: ' + shape + '\n' + new Error('here').stack);
+    }
+    watchWas.set(g, { ids: ids, shape: shape });
+  }
+  for (const g of [...watchWas.keys()]) if (!now.has(g)) watchWas.delete(g);
+}
 function saveLayout() {
+  watchGroups();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(pushLayout, 150);
 }
@@ -1080,8 +1116,17 @@ class Tile {
     }, 400);
   }
 
-  persist() {
+  //: `at` is "you already know where this is — do not measure it", which is the rule the whole file
+  //: keeps (applyPush, tidyCanvas, the drop handler): write the intended value, never read it back.
+  //: The drag was the one place still breaking it — it wrote every member's position and then asked
+  //: `offsetLeft` what it had written. **This is hygiene, not a fix for anything measured.** It was
+  //: put in while chasing a group that walks out of line over many drags, on the theory that
+  //: `offsetLeft` rounds two windows different ways at a fractional scale factor; that theory is
+  //: wrong — measured at 1, 1.125, 1.25 and 1.5, the rounding is the same for every window
+  //: (2026-09-17). What remains true is that nothing good comes of measuring what you already know.
+  persist(at) {
     const r = this.rect();
+    if (at) { r.x = at.x; r.y = at.y; }
     // **Keep the group.** This rewrites the entry wholesale, which is how the text size was thrown
     // away once before (see below) — membership would have gone the same way on every drag.
     const was = layout[this.id] || {};
@@ -1133,6 +1178,7 @@ class Tile {
       undoMark(m === 'move' ? 'moving a window' : 'resizing a window', this.s.canvas);
       solo = !!(ev.altKey && m === 'move' && layout[this.id] && layout[this.id].g);
       party = (m === 'move' && !solo) ? groupOf(this.id) : [this.id];
+      carrying = (party.length > 1 && layout[this.id]) ? layout[this.id].g || null : null;
       starts = new Map(party.map((id) => [id, { x: layout[id].x, y: layout[id].y }]));
       overId = null; overSince = 0; armed = null; overSide = null; overSideAtDrop = null;
       for (const id of party) { const t = tiles.get(id); if (t) t.el.classList.add('drag'); }
@@ -1180,7 +1226,7 @@ class Tile {
         // once, which is what says the hold has something to hold on to.
         const pct = (Date.now() - overSince - GROUP_LEAD_MS) / GROUP_HOLD_MS * 100;
         setGauge(this.id, pct);                        // 0 or less takes the ring off
-        showGhost(pct > 0 ? joinPreview(overId, overSide, this.id) : null, overSide, pct);
+        showGhost(pct > 0 ? joinBlock(overId, overSide, this.id) : null, overSide, pct);
       }
       if (overId && Date.now() - overSince >= GROUP_LEAD_MS + GROUP_HOLD_MS) {
         // **Armed, not done.** It used to join here, in the middle of the drag, so carrying on
@@ -1192,7 +1238,7 @@ class Tile {
         overSideAtDrop = overSide;
         markHold(overId, 'ready');
         setGauge(this.id, 100);
-        showGhost(joinPreview(overId, overSide, this.id), overSide, 100);
+        showGhost(joinBlock(overId, overSide, this.id), overSide, 100);
       }
     };
     const move = (ev) => {
@@ -1200,13 +1246,14 @@ class Tile {
       const dx = ev.clientX - sx, dy = ev.clientY - sy;
       // Move the minimap rectangle along using **the value just computed** — do not ask the DOM again
       if (mode === 'move') {
-        // Everyone in the party moves by the same amount, clamped so no member crosses the origin.
-        let mdx = dx, mdy = dy;
-        for (const id of party) {
-          const st = starts.get(id);
-          mdx = Math.max(mdx, -st.x);
-          mdy = Math.max(mdy, -st.y);
-        }
+        // **A window may be carried past the origin.** It used to be clamped there, which made the
+        // room around the canvas somewhere you could look but not put anything — pan into the empty
+        // space above and to the left, try to drag a window there, and it stopped dead at the edge of
+        // the windows already placed (user, 2026-09-17). Board coordinates go negative now; the world
+        // holds the origin far enough in that the pad still starts at zero.
+        // A whole number of pixels, and the same one for everybody: a group under the hand is one
+        // rigid thing, and nothing downstream should ever have a fraction to make a decision about.
+        const mdx = Math.round(dx), mdy = Math.round(dy);
         for (const id of party) {
           const t = tiles.get(id), st = starts.get(id), r = layout[id];
           if (!t || !r) continue;
@@ -1230,6 +1277,10 @@ class Tile {
     const up = () => {
       if (!mode) return;
       const was = mode; mode = null;
+      // Whatever it does from here on, it may glide there — and it has to be told, because a drop
+      // that moves nothing paints nothing and the frame would keep the drag's stiffness for good.
+      carrying = null;
+      paintGroups();
       clearInterval(holdTimer); holdTimer = null;
       if (overId) { markHold(overId, false); overId = null; }
       setGauge(this.id, 0);
@@ -1245,10 +1296,13 @@ class Tile {
         if (left) compactGroup(groupMembers(left));
         if (left) toast([{ b: this.nameEl.textContent || 'window' }, 'left its group — ' + KMOD + 'Z puts it back']);
       }
-      for (const id of party) { const t = tiles.get(id); if (t && t !== this) t.persist(); }
+      // The drag wrote every member's position into the store as it went; saving it is not an
+      // excuse to go and measure the screen again (see persist).
+      const told = (t) => (was === 'move' && layout[t.id]) ? { x: layout[t.id].x, y: layout[t.id].y } : null;
+      for (const id of party) { const t = tiles.get(id); if (t && t !== this) t.persist(told(t)); }
       paintTidy();          // moving a window creates or removes slack to close up
       if (was === 'size') this.refit();   // tell the PTY only when the resize is let go (spike D)
-      this.persist();
+      this.persist(told(this));
       // **Everything below places windows, and placing writes the store directly.** persist() reads the
       // position back off the element, and .tile slides for 350ms, so a persist that follows an
       // arrangement reads a number from the middle of that slide and saves the *old* position —
@@ -1383,7 +1437,7 @@ class Viewer {
   }
   visible() { return current === null || this.s.canvas === current; }
   rect() { return { x: this.el.offsetLeft, y: this.el.offsetTop, w: this.el.offsetWidth, h: this.el.offsetHeight }; }
-  persist() { Tile.prototype.persist.call(this); }
+  persist(at) { Tile.prototype.persist.call(this, at); }
   dragify() { Tile.prototype.dragify.call(this); }
   rename() {}
   refit() {}
@@ -1667,8 +1721,8 @@ cvScroll.addEventListener('drop', (ev) => {
   ev.preventDefault();
   const box = cvScroll.getBoundingClientRect();
   // The board's coordinates start at the world's origin, not the scroller's (see "the world").
-  const at = { x: Math.max(0, Math.round(ev.clientX - box.left + cvScroll.scrollLeft - originX - 60)),
-               y: Math.max(0, Math.round(ev.clientY - box.top + cvScroll.scrollTop - originY - 15)) };
+  const at = { x: Math.round(ev.clientX - box.left + cvScroll.scrollLeft - originX - 60),
+               y: Math.round(ev.clientY - box.top + cvScroll.scrollTop - originY - 15) };
   openViewer(path, current, at);
   dragFile = null;
 });
@@ -1734,53 +1788,98 @@ function lastLine(term) {
 function tidySlack(canvasId) {
   const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
   if (!mine.length) return 0;
-  return Math.max(0, Math.min(...mine.map((t) => layout[t.id].x)) - GAP)
-       + Math.max(0, Math.min(...mine.map((t) => layout[t.id].y)) - GAP);
+  // **Either way.** A window carried into the slack sits at a negative coordinate, and pulling the
+  // canvas back to its corner from out there is closing up just as much as pulling it in from below
+  // and to the right.
+  return Math.abs(Math.min(...mine.map((t) => layout[t.id].x)) - GAP)
+       + Math.abs(Math.min(...mine.map((t) => layout[t.id].y)) - GAP);
 }
 
+//: **It does two things now, and only one of them can run out.** The button was lit by slack alone —
+//: by whether the windows had drifted off the corner — so on a canvas that was already tidy it went
+//: grey, and the other half of what it does, taking you back to what you were working in, could not
+//: be reached at all (user, 2026-09-17: "특정 터미널을 옮겨야만 버튼이 활성화되서 불편한거같아").
+//: A canvas with a window on it always has somewhere to take you. Only an empty one has not.
 function paintTidy() {
   const b = document.getElementById('tidy');
   if (!b) return;
+  const any = current !== null && [...tiles.values()].some((t) => t.s.canvas === current && layout[t.id]);
   const slack = current === null ? 0 : tidySlack(current);
-  b.disabled = !slack;
-  b.title = slack
-    ? 'tidy this canvas — pull the windows back to the corner'
-    : 'tidy this canvas — nothing to close up, it already starts at the corner';
+  b.disabled = !any;
+  b.title = !any ? 'tidy this canvas — nothing on it yet'
+    : slack ? 'tidy this canvas — pull the windows back to the corner'
+            : 'tidy this canvas — already at the corner; this takes you there';
 }
 
-function tidyCanvas(canvasId) {
+function tidyCanvas(canvasId, byHand) {
   const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
   if (!mine.length) return false;
   const dx = Math.min(...mine.map((t) => layout[t.id].x)) - GAP;
   const dy = Math.min(...mine.map((t) => layout[t.id].y)) - GAP;
-  if (dx <= 0 && dy <= 0) return false;
-  const sx = Math.max(0, dx), sy = Math.max(0, dy);
+  const sx = dx, sy = dy;                    // signed: the corner may be above and to the left
+  // Nothing to close up is not nothing to do: by hand it still goes and looks. Left to itself
+  // (auto-tidy) it stops here, because a run that moves nothing must not move the view either.
   const l0 = cvScroll.scrollLeft, t0 = cvScroll.scrollTop;
   // **Write the intended value instead of reading it back.** `persist()` reads `offsetLeft`, but the position has
   // a transition on it, so that value is a **mid-move** one — save it as-is and the old position goes back in and
   // nothing appears to have happened (measured: pressing it left the positions unchanged). The drag path was
   // dodging this trap by turning the transition off with the `drag` class.
-  for (const t of mine) {
-    const r = layout[t.id];
-    t.el.style.left = (r.x - sx) + 'px';
-    t.el.style.top = (r.y - sy) + 'px';
-    layout[t.id] = Object.assign({}, r, { x: r.x - sx, y: r.y - sy });
+  if (!sx && !sy && !byHand) return false;
+  // **Pressing it gives back the room you pulled out.** Slack reached by hand is kept for the
+  // session so that it cannot vanish under you — but tidy is the ask, so here it goes, and the
+  // scrollbar comes back to the windows (user, 2026-09-17).
+  if (byHand) worldSeen.delete(canvasId);
+  if (sx || sy) {
+    for (const t of mine) {
+      const r = layout[t.id];
+      t.el.style.left = (r.x - sx) + 'px';
+      t.el.style.top = (r.y - sy) + 'px';
+      layout[t.id] = Object.assign({}, r, { x: r.x - sx, y: r.y - sy });
+    }
+    saveLayout();
   }
-  saveLayout();
-  // Pull the viewport along too. If the content becomes shorter than the viewport the browser clips it to 0, but
-  // by then everything fits on one screen anyway, so nothing is missed.
-  // **Only for the canvas being looked at.** Every canvas shares the one scroll box (a hidden pane is just
-  // display:none). With auto-tidy on, one pane disappearing on a canvas in the background would slide the view
-  // you are looking at sideways — text moves while you touched nothing.
+  if (byHand && canvasId === current) sizeWorld();
+  // **Go and look at the corner.** The view used to be nudged by exactly what the windows moved, so
+  // that nothing slid under the eye — and once the canvas had a square of slack around it that
+  // compensation became exact, which made pressing tidy do nothing visible at all: the windows went
+  // to the corner and the view went with them ("tidy 버튼 누르면 보고있는 화면에서 살짝 흔들리기만",
+  // user, 2026-09-17). A button whose whole job is "pull them back to the corner" has to leave you
+  // looking at the corner. Smoothly, because the windows themselves glide there on a transition.
+  //
+  // **Only for the canvas being looked at.** Every canvas shares the one scroll box (a hidden pane is
+  // just display:none). With auto-tidy on, one pane disappearing on a canvas in the background would
+  // slide the view you are looking at sideways — text moves while you touched nothing. That is why
+  // auto-tidy keeps the old behaviour: it was not asked for, so it must not move the view.
   if (canvasId === current) {
-    cvScroll.scrollLeft = Math.max(0, l0 - sx);
-    cvScroll.scrollTop = Math.max(0, t0 - sy);
+    if (byHand) {
+      // **Look at a window, not at a corner.** The corner of the box the windows make is not
+      // somewhere a window has to be: one at the top right and one at the bottom left and that
+      // corner is empty canvas between them, which is what pressing tidy left you staring at
+      // (user, 2026-09-17). So the view goes to whichever window is nearest the corner, with the
+      // same GAP of room around it that the corner itself would have had.
+      // **And if you were working in one, that is the one it shows you.** The window in front is the
+      // one you last touched, so tidy takes you back to it rather than to whatever happens to lie
+      // nearest the corner — with its group, because a member on its own is half a thing to look at
+      // (user, 2026-09-17). Nothing in front, or in front on another canvas: the corner-most window.
+      const mine_ = mine.map((t) => layout[t.id]);
+      const front = tiles.get(focused);
+      const lead = (front && front.s.canvas === canvasId && layout[focused])
+        ? blockOf(groupOf(focused))
+        : mine_.reduce((a, q) => (a && a.x + a.y <= q.x + q.y ? a : q), null);
+      const smooth = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+      cvScroll.scrollTo({ left: Math.max(0, originX + lead.x - GAP),
+                          top: Math.max(0, originY + lead.y - GAP),
+                          behavior: smooth ? 'smooth' : 'auto' });
+    } else {
+      cvScroll.scrollLeft = Math.max(0, l0 - sx);
+      cvScroll.scrollTop = Math.max(0, t0 - sy);
+    }
   }
   renderMinimap();
   refreshOff();
   paintTidy();
   paintGroups();   // every window on the canvas just moved, and the frame is drawn from where they are
-  return true;
+  return !!(sx || sy);
 }
 
 // Where a new window goes: **the first gap anywhere on the canvas, and only then below everything.**
@@ -1801,9 +1900,32 @@ function firstFree(w, h, canvasId) {
   const W = Math.max(cvScroll.clientWidth, rects.reduce((m, r) => Math.max(m, r.x + r.w), 0) + GAP + w);
   const H = Math.max(cvScroll.clientHeight, rects.reduce((m, r) => Math.max(m, r.y + r.h), 0) + GAP + h);
   const hit = (x, y) => rects.some((r) => x < r.x + r.w + GAP && x + w + GAP > r.x && y < r.y + r.h + GAP && y + h + GAP > r.y);
-  for (let y = GAP; y + h <= H; y += GRID)
-    for (let x = GAP; x + w <= W; x += GRID)
+  // **Where you are looking, first** (user, 2026-09-17). The canvas is far bigger than the screen, and
+  // a new terminal opening at the board's top-left corner is a new terminal you have to go and find.
+  // This is a first pass, not the rule: scanning the viewport and stopping there is what used to pile
+  // windows downwards for ever once it was full (2026-09-14, the test below this one), so if nothing
+  // in view can hold it the whole canvas is searched exactly as before.
+  const vx = Math.round(cvScroll.scrollLeft - originX), vy = Math.round(cvScroll.scrollTop - originY);
+  for (let y = vy + GAP; y + h <= vy + cvScroll.clientHeight; y += GRID)
+    for (let x = vx + GAP; x + w <= vx + cvScroll.clientWidth; x += GRID)
       if (!hit(x, y)) return { x, y };
+  // **And when it cannot, the nearest gap to the view rather than the board's corner.** With a
+  // window or two in sight there is often no room left in view for a third, and falling straight
+  // back to the top-left of the board put it somewhere the person had to go and find — the very
+  // thing the pass above was for (user, 2026-09-17: "그 다음 터미널은 기존의 원점에서 생성되는거
+  // 같아"). Same scan, same gaps, same fallback under it; it just takes the closest one now.
+  const cx = vx + cvScroll.clientWidth / 2, cy = vy + cvScroll.clientHeight / 2;
+  let best = null, bestD = Infinity;
+  for (let y = GAP; y + h <= H; y += GRID) {
+    const ody = y + h / 2 - cy;
+    if (ody > 0 && ody * ody >= bestD) break;      // every row below this one is further still
+    for (let x = GAP; x + w <= W; x += GRID) {
+      if (hit(x, y)) continue;
+      const ox = x + w / 2 - cx, d = ox * ox + ody * ody;
+      if (d < bestD) { bestD = d; best = { x: x, y: y }; }
+    }
+  }
+  if (best) return best;
   // Nothing fits anywhere — every gap is smaller than this window. Below the lot, and the canvas grows.
   const bottom = rects.reduce((m, r) => Math.max(m, r.y + r.h), 0);
   return { x: GAP, y: bottom ? bottom + GAP : GAP };
@@ -2013,13 +2135,38 @@ function paneOver(id, ignore, current) {
 //: Where it would land: beside the target, on that side, at the size it already is. **Not the exact
 //: final position** — the group re-arranges after joining — but the side it will end up on, which is
 //: the thing a person is choosing while they hold it there.
+//: **What joins is the block, not the window in the hand.** Putting only that window beside the
+//: target left the one behind it standing exactly on top of the target's own mate — the whole window,
+//: 220x150 of it, in seven of the thirty-two ways two pairs of windows can meet (measured
+//: 2026-09-17, after the user: "두 그룹 끼리 묶을때는 묶은 직후 두 터미널이 완전히 겹쳐있는 경우도
+//: 있어"). The push that follows could not save it either: it resolves what the *anchor* overlaps,
+//: and the anchor was the one window that had landed cleanly. So the rectangle that has to clear the
+//: target is the carried group's, and everyone inside keeps their place in it.
+function joinBlock(overId, side, meId) {
+  const r = layout[overId], blk = blockOf(groupOf(meId));
+  if (!r || !blk) return null;
+  const at = (x, y) => ({ x: x, y: y, w: blk.w, h: blk.h, blk: blk });
+  // **And it clears the mates standing in its way, but only those.** Aiming at one member of a group
+  // and clearing only that member dropped the block straight onto the member behind it — under a
+  // column, or to the left of a row. Clearing the target's whole block instead would have been the
+  // easy answer and the wrong one: it would undo "under a shorter neighbour touches that neighbour",
+  // where a tall window two columns over has no business setting the landing height. So the cross
+  // axis stays where the aim put it, and only the mates that actually stand in that band count.
+  const vert = side === 'above' || side === 'below';
+  const band = groupOf(overId).map((id) => layout[id]).filter((q) => q && (vert
+    ? (q.x < r.x + blk.w && q.x + q.w > r.x)
+    : (q.y < r.y + blk.h && q.y + q.h > r.y)));
+  if (side === 'right') return at(Math.max.apply(null, band.map((q) => q.x + q.w)) + GAP, r.y);
+  if (side === 'left') return at(Math.min.apply(null, band.map((q) => q.x)) - GAP - blk.w, r.y);
+  if (side === 'below') return at(r.x, Math.max.apply(null, band.map((q) => q.y + q.h)) + GAP);
+  return at(r.x, Math.min.apply(null, band.map((q) => q.y)) - GAP - blk.h);
+}
+//: The same answer narrowed to one window — where *this* window ends up once its block has landed.
+//: Carried alone, the block is the window, and this is what it has always been.
 function joinPreview(overId, side, meId) {
-  const r = layout[overId], me = layout[meId];
-  if (!r || !me) return null;
-  if (side === 'right') return { x: r.x + r.w + GAP, y: r.y, w: me.w, h: me.h };
-  if (side === 'left') return { x: Math.max(0, r.x - GAP - me.w), y: r.y, w: me.w, h: me.h };
-  if (side === 'below') return { x: r.x, y: r.y + r.h + GAP, w: me.w, h: me.h };
-  return { x: r.x, y: Math.max(0, r.y - GAP - me.h), w: me.w, h: me.h };
+  const b = joinBlock(overId, side, meId), me = layout[meId];
+  if (!b || !me) return null;
+  return { x: b.x + (me.x - b.blk.x), y: b.y + (me.y - b.blk.y), w: me.w, h: me.h };
 }
 
 //: **Two ways of showing the hold, and the person picks.** `ring` runs a line round the border of the
@@ -2117,8 +2264,23 @@ function place(id, x, y) {
 //: drop displaces is pushed out of the way inside the group by exactly the overlap — the same push
 //: as the canvas — and that is all.
 function dropInto(meId, targetId, side) {
-  const spot = joinPreview(targetId, side || 'right', meId);
-  if (spot) place(meId, spot.x, spot.y);
+  const spot = joinBlock(targetId, side || 'right', meId);
+  //: **A group lands as the group you carried.** This used to place the window in the hand and
+  //: nothing else, so carrying a pair onto an outside window put one of them beside the target and
+  //: left the other wherever the drag had ended — a row came down stacked, and the two were still
+  //: grouped, so it looked as though the group had rearranged itself (user, 2026-09-17: "좌우로
+  //: 붙어있던게 움직이다보면 상하 배치로 바뀔 때도 있어"). The mates are read **before** the join,
+  //: or the target's own group would be carried too, and every one of them moves by the step the
+  //: preview asks of the hand's window. The ghost still shows that window, and it still lands
+  //: exactly there; the rest keep the shape they had when you picked them up.
+  const carried = groupOf(meId);
+  if (spot) {
+    const dx = spot.x - spot.blk.x, dy = spot.y - spot.blk.y;
+    for (const id of carried) {
+      const r = layout[id];
+      if (r) place(id, r.x + dx, r.y + dy);
+    }
+  }
   joinGroups(meId, targetId);
   const ids = groupOf(meId);
   const me = tiles.get(meId);
@@ -2285,6 +2447,7 @@ function paintGroups() {
       groupBoxes.set(g, box);
     }
     box.style.setProperty('--group', 'hsl(' + groupHue(g) + ' 70% 55%)');
+    box.classList.toggle('carried', g === carrying);
     // The wrapper is only a coordinate origin; the shape is the cells inside it.
     box.style.left = '0px'; box.style.top = '0px';
     box.style.width = '0px'; box.style.height = '0px';
@@ -2300,8 +2463,13 @@ function paintGroups() {
       const t = tiles.get(id);
       if (t) t.el.style.setProperty('--group', hue);
       const c = box.children[i];
-      c.style.left = Math.max(0, q.x - GROUP_PAD) + 'px';
-      c.style.top = Math.max(0, q.y - GROUP_PAD) + 'px';
+      // **No floor at zero.** These used to be clamped, from when a window could not be carried past
+      // the origin. Once it could, the frame stopped following its own windows up and to the left and
+      // sat piled at the corner instead — where it looked like it had latched onto whatever window
+      // happened to be there ("백그라운드 색깔이 다른 터미널에 붙게 되", user, 2026-09-17). Pressing
+      // tidy appeared to repair it, because tidy puts everything back on the positive side.
+      c.style.left = (q.x - GROUP_PAD) + 'px';
+      c.style.top = (q.y - GROUP_PAD) + 'px';
       c.style.width = (q.w + GROUP_PAD * 2) + 'px';
       c.style.height = (q.h + GROUP_PAD * 2) + 'px';
     });
@@ -2313,6 +2481,13 @@ function paintGroups() {
   }
 }
 const groupBoxes = new Map();
+//: **The frame does not glide while it is being carried.** A cell slides to its new place on a 350ms
+//: transition, which is right when a group is pushed aside or closes up — and wrong under the hand,
+//: where the windows themselves have their transition off (the `drag` class) and the tint was left
+//: a third of a second behind them: it hung over whatever the group had just left, so a member could
+//: be clear of a window while its colour still covered it (user, 2026-09-17). The group in the hand
+//: is named here for the length of the drag, and paintGroups takes its transition off for that long.
+let carrying = null;
 
 const PUSH_ROUNDS = 20;                 // termcanvas's limit, the number decisions.md names
 
@@ -2793,17 +2968,24 @@ function refreshOff(fromScroll) {
 cvScroll.addEventListener('scroll', () => refreshOff(true), { passive: true });
 
 // ── the world ───────────────────────────────────────────
-//: **How far the canvas scrolls is ours to say.** The rule the user chose (2026-09-17): take the
-//: room the windows actually occupy, call that the middle square, and lay nine of them out three by
-//: three — one square of slack on every side and corner. So any window can be brought to the middle
-//: of the screen, which is where a person puts the one they are looking at.
+//: **How far the canvas scrolls is ours to say.** It runs to where the windows are, and no further.
 //:
-//: **It never shrinks while you are working.** Slack you panned into does not vanish under you; it
-//: goes when the page is reloaded or the daemon restarts, and you pull it out again. That one rule
-//: also fixes the drag: the area cannot shrink mid-drag, so the browser never clamps the scroll, so
-//: the window follows the hand. Freezing it for the length of a gesture — which was the other way to
-//: fix that — would have snapped the view 888px sideways on release (measured).
-const WORLD_SQUARES = 3;                  // three by three: the content, and one square each side
+//: It used to run a whole screen past them on every side — nine squares with the windows in the
+//: middle one, the user's own rule earlier the same day — so that any window could be brought to the
+//: middle of the screen. The cost was the gesture everybody actually makes: dragging the bar to the
+//: bottom to see the bottom window took you a screen past it, into nothing ("여백이 밑에 많고
+//: 스크롤이 존재하니 터미널을 지나치게되네", 2026-09-17). A scrollbar is a promise about where the
+//: content is, and a screen of empty space at the end of it is a broken one.
+//:
+//: **The slack is still there; you take it with your hand.** Grab the bare canvas and pan past the
+//: end and the room appears as you go — exactly as much as you asked for, and kept for the rest of
+//: the session, so the far window can still be brought to the middle of the screen and held there.
+//: tidy gives it back, and so does a reload.
+//:
+//: **And it never shrinks under you.** Room you pulled out stays out until you ask for it to go.
+//: That one rule also fixes the drag: the area cannot shrink mid-drag, so the browser never clamps
+//: the scroll, so the window follows the hand. Freezing it for the length of a gesture — the other
+//: way to fix that — would have snapped the view 888px sideways on release (measured).
 const worldSeen = new Map();              // canvas id → the largest extent that canvas has had this session
 let worldCanvas = null;
 let cvPad = null, cvWorld = null;
@@ -2817,39 +2999,67 @@ cvScroll.appendChild(cvWorld);
 
 //: The room the windows occupy, floored at the viewport — the same number the minimap scales to.
 function contentExtent() {
-  let w = cvScroll.clientWidth, h = cvScroll.clientHeight;
+  // `lx`/`ly` are at most 0 and `hx`/`hy` at least the viewport, so the span is never smaller than
+  // one screen — and a window carried into the slack pulls the near edge negative rather than
+  // being stopped at it.
+  let lx = 0, ly = 0, hx = cvScroll.clientWidth, hy = cvScroll.clientHeight;
   for (const t of tiles.values()) {
     const r = t.visible() && layout[t.id];
     if (!r) continue;
-    w = Math.max(w, r.x + r.w + GAP);
-    h = Math.max(h, r.y + r.h + GAP);
+    lx = Math.min(lx, r.x - GAP);
+    ly = Math.min(ly, r.y - GAP);
+    hx = Math.max(hx, r.x + r.w + GAP);
+    hy = Math.max(hy, r.y + r.h + GAP);
   }
-  return { w, h };
+  return { lx, ly, hx, hy, w: hx - lx, h: hy - ly };
+}
+
+//: **Panning past the end makes the room.** The scroll stops where the windows do, so this is how
+//: the slack is reached: ask for a board position, and if the pad cannot show it, the pad grows by
+//: exactly the shortfall first. Board coordinates, not pad ones — the origin moves underneath while
+//: this runs, and a board coordinate does not.
+function panTo(bx, by) {
+  const seen = worldSeen.get(current) || { ox: 0, oy: 0, w: 0, h: 0 };
+  const ox = Math.max(seen.ox, -bx), oy = Math.max(seen.oy, -by);
+  const w = Math.max(seen.w, ox + bx + cvScroll.clientWidth);
+  const h = Math.max(seen.h, oy + by + cvScroll.clientHeight);
+  if (ox !== seen.ox || oy !== seen.oy || w !== seen.w || h !== seen.h) {
+    worldSeen.set(current, { ox: ox, oy: oy, w: w, h: h });
+    sizeWorld();                 // lays the pad out and carries the scroll along with the origin
+    renderMinimap();
+  }
+  cvScroll.scrollLeft = originX + bx;
+  cvScroll.scrollTop = originY + by;
 }
 
 function sizeWorld() {
   if (!cvPad) return;
   const c = contentExtent();
-  const seen = worldSeen.get(current) || { w: 0, h: 0 };
-  const w = Math.max(seen.w, c.w), h = Math.max(seen.h, c.h);
-  worldSeen.set(current, { w, h });
-  const dx = w - originX, dy = h - originY;
+  const seen = worldSeen.get(current) || { ox: 0, oy: 0, w: 0, h: 0 };
+  // Where board zero sits inside the pad: however far the windows have gone the other side of it,
+  // plus whatever room the hand has pulled out. `c.lx` is negative or zero, so this only ever adds.
+  const ox = Math.max(seen.ox, -c.lx), oy = Math.max(seen.oy, -c.ly);
+  // And it ends at the far edge of them. `c.hx`/`c.hy` are at least one viewport, so the pad is
+  // never smaller than the screen it is shown in.
+  const w = Math.max(seen.w, ox + c.hx), h = Math.max(seen.h, oy + c.hy);
+  worldSeen.set(current, { ox, oy, w, h });
+  const dx = ox - originX, dy = oy - originY;
   const same = worldCanvas === current;
   worldCanvas = current;
-  originX = w; originY = h;
-  cvWorld.style.left = w + 'px';
-  cvWorld.style.top = h + 'px';
-  cvPad.style.width = (w * WORLD_SQUARES) + 'px';
-  cvPad.style.height = (h * WORLD_SQUARES) + 'px';
+  originX = ox; originY = oy;
+  cvWorld.style.left = ox + 'px';
+  cvWorld.style.top = oy + 'px';
+  cvPad.style.width = w + 'px';
+  cvPad.style.height = h + 'px';
   // **Moving the origin must not slide the canvas under the hand.** Everything inside .cv-world
   // shifts by the same amount, so the scroll goes with it and the screen does not change.
   if (same) {
     if (dx) cvScroll.scrollLeft += dx;
     if (dy) cvScroll.scrollTop += dy;
   } else {
-    // A different canvas: start at its top-left corner rather than wherever the last one was left.
-    cvScroll.scrollLeft = w;
-    cvScroll.scrollTop = h;
+    // A different canvas: start where its windows start rather than wherever the last one was left.
+    cvScroll.scrollLeft = ox + c.lx;
+    cvScroll.scrollTop = oy + c.ly;
   }
 }
 
@@ -2861,7 +3071,7 @@ const PAN_SLOP = 3;      // below this much movement it is not a drag — that i
 cvScroll.addEventListener('pointerdown', (ev) => {
   if (ev.button !== 0 || ev.target !== cvScroll) return;   // on the bare floor only
   const x0 = ev.clientX, y0 = ev.clientY;
-  const l0 = cvScroll.scrollLeft, t0 = cvScroll.scrollTop;
+  const b0x = cvScroll.scrollLeft - originX, b0y = cvScroll.scrollTop - originY;
   let on = false;
   const move = (e2) => {
     const dx = e2.clientX - x0, dy = e2.clientY - y0;
@@ -2871,9 +3081,9 @@ cvScroll.addEventListener('pointerdown', (ev) => {
       cvScroll.classList.add('panning');
       try { cvScroll.setPointerCapture(ev.pointerId); } catch (e) {}
     }
-    // Scroll **the other way** so the grabbed point follows the hand. The browser stops at both ends on its own.
-    cvScroll.scrollLeft = l0 - dx;
-    cvScroll.scrollTop = t0 - dy;
+    // Scroll **the other way** so the grabbed point follows the hand. The browser used to stop it at
+    // both ends; now the end moves instead, which is the only way left to reach the slack.
+    panTo(b0x - dx, b0y - dy);
   };
   const up = () => {
     cvScroll.classList.remove('panning');
@@ -3213,13 +3423,14 @@ function tabDrag(tabEl) {
 // the rule, not performance (AGENTS.md "창마다 값을 내리지 말고 스토어에서 직접 읽어라").
 const mmRects = new Map();          // id → minimap rectangle DOM
 let mmK = 1, mmOx = 0, mmOy = 0;    // scale and the centring margins
+let mmLx = 0, mmLy = 0;             // the near edge of what the windows reach — it can be negative
 let cvW = 0, cvH = 0;               // canvas viewport size — held so it is not re-measured during a scroll
 
 function mmSet(id, x, y, w, h) {    // place a rectangle using only values we already know
   const e = mmRects.get(id);
   if (!e) return;
-  e.style.left = (mmOx + x * mmK) + 'px';
-  e.style.top = (mmOy + y * mmK) + 'px';
+  e.style.left = (mmOx + (x - mmLx) * mmK) + 'px';
+  e.style.top = (mmOy + (y - mmLy) * mmK) + 'px';
   e.style.width = Math.max(2, w * mmK) + 'px';
   e.style.height = Math.max(2, h * mmK) + 'px';
 }
@@ -3242,13 +3453,11 @@ function renderMinimap() {
   mmEl.hidden = false;
   cvW = cvScroll.clientWidth; cvH = cvScroll.clientHeight;
   const bw = mmEl.clientWidth - MM_PAD * 2, bh = mmEl.clientHeight - MM_PAD * 2;
-  // The world is as big as the canvas has grown (⑩: no limit) — it never gets smaller than the viewport
-  let worldW = cvW, worldH = cvH;
-  for (const t of list) {
-    const r = layout[t.id];
-    worldW = Math.max(worldW, r.x + r.w + GAP);
-    worldH = Math.max(worldH, r.y + r.h + GAP);
-  }
+  // **What the windows reach, near edge included** — the same span sizeWorld uses, so the two cannot
+  // disagree. It never gets smaller than the viewport (⑩: no limit the other way).
+  const ext = contentExtent();
+  const worldW = ext.w, worldH = ext.h;
+  mmLx = ext.lx; mmLy = ext.ly;
   mmK = Math.min(bw / worldW, bh / worldH);   // one scale for both axes. Stretch them apart and the shapes lie
   mmOx = MM_PAD + (bw - worldW * mmK) / 2;
   mmOy = MM_PAD + (bh - worldH * mmK) / 2;
@@ -3271,8 +3480,8 @@ function mmMove() {
   // otherwise exploring empty space would shrink the scale and push the windows into a corner. The
   // price is that panning into the slack takes this rectangle off the edge, which is the truth.
   mmVpEl.style.transform =
-    'translate(' + (mmOx + (cvScroll.scrollLeft - originX) * mmK) + 'px, ' +
-                   (mmOy + (cvScroll.scrollTop - originY) * mmK) + 'px)';
+    'translate(' + (mmOx + (cvScroll.scrollLeft - originX - mmLx) * mmK) + 'px, ' +
+                   (mmOy + (cvScroll.scrollTop - originY - mmLy) * mmK) + 'px)';
 }
 cvScroll.addEventListener('scroll', mmMove, { passive: true });
 
@@ -3282,8 +3491,8 @@ cvScroll.addEventListener('scroll', mmMove, { passive: true });
   const seek = (ev) => {
     if (!box || !mmK) return;
     // The minimap draws the windows' own room, so what comes out of it is a board coordinate.
-    cvScroll.scrollLeft = Math.max(0, originX + (ev.clientX - box.left - mmOx) / mmK - cvW / 2);
-    cvScroll.scrollTop = Math.max(0, originY + (ev.clientY - box.top - mmOy) / mmK - cvH / 2);
+    cvScroll.scrollLeft = Math.max(0, originX + mmLx + (ev.clientX - box.left - mmOx) / mmK - cvW / 2);
+    cvScroll.scrollTop = Math.max(0, originY + mmLy + (ev.clientY - box.top - mmOy) / mmK - cvH / 2);
   };
   const up = () => {
     box = null;
@@ -3864,12 +4073,29 @@ if (updateBox) {
 //: 2026-09-16: a 1536x912 work area gave 1050x892 — 1.18:1, and `.win` has a min-width of 1120, so
 //: the right rail was cut off and the page scrolled sideways. Dragging it wider did not stick.
 //:
-//: So the page widens itself. **Once**, because doing it every load would undo the size somebody
-//: chose. **Never narrower and never shorter**, because taking room away from a window that has
-//: plenty is not ours to do. **Only in an app window** — a tab ignores resizeTo and then reports the
+//: So the page gives the window palmar's own shape. **Once**, because doing it every load would undo
+//: the size somebody chose. **Only in an app window** — a tab ignores resizeTo and then reports the
 //: size it refused to take, so running it there would change nothing and lie about it afterwards.
+//:
+//: **It is the height that is wrong, not only the width** (user, 2026-09-17). The first version set
+//: the width and passed `outerHeight` straight back, so a window that was already wide enough was
+//: left exactly as square as Chromium had made it: 1280x1029 on a 2560x1392 work area, 1.24:1, and
+//: 1302x893 on Windows. Worse, the guard read `want > outerWidth`, so on both of those it declined to
+//: do anything at all. Width alone was never the shape that was wrong.
+//:
+//: So: **never narrower** than Chromium gave it and never wider than the work area — taking width
+//: away from someone with the screen for it is not ours to do — and the height follows from that
+//: width at the proportions palmar's own window opens at. "Never shorter" was the rule before and it
+//: is gone on purpose: on the one load this runs, nobody has chosen a height yet, so there is no
+//: choice to take away, and keeping it was the whole reason the square window survived the fix.
 const LS_SIZED = 'palmar.sized';
-const FIRST_W = 1280;        // what palmar's own window opens at (app/src/main.rs)
+const FIRST_W = 1280, FIRST_H = 820;   // what palmar's own window opens at (app/src/main.rs)
+// The rule on its own, away from the screen and the window, because the arithmetic is the part that
+// has been wrong both times and it is the part a test can hold on to.
+function firstWindowSize(availW, availH, outerW) {
+  const w = Math.min(availW - 40, Math.max(FIRST_W, outerW));
+  return { w: w, h: Math.min(availH - 40, Math.round(w * FIRST_H / FIRST_W)) };
+}
 function sizeWindowOnce() {
   try {
     if (localStorage.getItem(LS_SIZED) === '1') return;
@@ -3877,8 +4103,8 @@ function sizeWindowOnce() {
   } catch (e) { return; }    // cannot remember having done it, so do not do it at all
   try {
     if (!matchMedia('(display-mode: standalone)').matches) return;
-    const want = Math.min(FIRST_W, screen.availWidth - 40);
-    if (want > outerWidth) resizeTo(want, outerHeight);
+    const want = firstWindowSize(screen.availWidth, screen.availHeight, outerWidth);
+    if (want.w !== outerWidth || want.h !== outerHeight) resizeTo(want.w, want.h);
   } catch (e) {}
 }
 
@@ -4490,16 +4716,18 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   removeCanvas, watchInput, newTerminal, newCanvas, switchCanvas, openViewer, viewerId, toast,
                   // Auto-tidy only runs on a pane disappearing, and that moment is hard to create from outside.
                   // Expose **the same function** the button calls, unchanged.
-                  tidyCanvas,
+                  // paintTidy with it: the button's enabled state is what a person actually sees,
+                  // and a test that writes the board directly has to be able to bring it up to date.
+                  tidyCanvas, paintTidy,
                   // Push-aside. A test drives the real drag with mouse events; these are here so the geometry
                   // can also be asked directly — the cascade and the round limit need more windows than a
                   // hand can comfortably drag into place one at a time.
-                  pushAside, applyPush, hits, firstFree,
+                  pushAside, applyPush, hits, firstFree, firstWindowSize, focusTile, panTo,
                   // The world: how far the canvas scrolls and where the board's origin sits. A test
                   // has to be able to ask both, because the bug they fix was arithmetic nobody could see.
                   sizeWorld, contentExtent, origin: () => ({ x: originX, y: originY }),
                   // Groups: the model is testable without a hand, the gesture needs one.
-                  groupOf, groupRect, joinGroups, leaveGroup, paneOver, joinPreview, setGauge, compactGroup, dropInto, settle, paintGroups,
+                  groupOf, groupRect, joinGroups, leaveGroup, paneOver, joinPreview, joinBlock, setGauge, compactGroup, dropInto, settle, paintGroups,
                   // Undo: one way back for everything that moves a window.
                   undoMark, undoLast, undoDepth: () => undoStack.length,
                   // Path joining is platform-shaped and the platform it gets wrong has no Chrome
@@ -4841,7 +5069,9 @@ function boot() {
     }
   }
   const tidyBtn = document.getElementById('tidy');
-  if (tidyBtn) tidyBtn.addEventListener('click', () => { undoMark('tidying up'); tidyCanvas(current); });
+  // `byHand`: a person pressed it, so the view is allowed to go where the windows went. Auto-tidy
+  // (the two calls above, on a pane disappearing) must not — nobody asked for that one.
+  if (tidyBtn) tidyBtn.addEventListener('click', () => { undoMark('tidying up'); tidyCanvas(current, true); });
   // The floating new-terminal button. Folding the right rail took "Open terminal here" with it and
   // left no way to open one by hand (user, 2026-09-15); this one shows only while that rail is folded
   // and does what Ctrl/⌘⏎ does — a terminal in the folder of the one you are on.

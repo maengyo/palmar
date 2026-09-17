@@ -821,6 +821,8 @@ body.ui-mono { --ui: var(--mono); }
   transition: left .35s cubic-bezier(.2,.8,.2,1), top .35s cubic-bezier(.2,.8,.2,1),
               width .35s cubic-bezier(.2,.8,.2,1), height .35s cubic-bezier(.2,.8,.2,1);
 }
+/* Under the hand the windows have no transition, so neither has their colour — see `carrying`. */
+.gbox.carried .gcell { transition: none; }
 /* The member keeps its own border — the frame says "group", the border still says "window". A hair
    of the group's colour is enough to tell you which frame a window belongs to when two overlap. */
 .tile.grouped { border-color: color-mix(in srgb, var(--group) 30%, var(--line)); }
