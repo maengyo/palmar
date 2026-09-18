@@ -73,7 +73,8 @@ class Credentials(unittest.TestCase):
     def test_reads_need_the_token_too(self):
         """Origin and Host pass when the header is absent — they stop a browser being aimed at the
         daemon, they do not identify a caller. Without this, `curl /api/dirs` walked the home tree."""
-        for path in ("/api/sessions", "/api/canvases", "/api/dirs", "/api/dirs?find=x"):
+        for path in ("/api/sessions", "/api/canvases", "/api/dirs", "/api/dirs?find=x",
+                     "/api/files?name=x"):
             st, _ = self.d.raw("GET", path, token=False)
             self.assertEqual(st, 403, path)
             st, _ = self.d.raw("GET", path)
@@ -285,6 +286,109 @@ class Directories(unittest.TestCase):
         self.assertEqual(row[0]["git_branch"], None)
 
 
+
+class FindingAFileSomebodyDropped(unittest.TestCase):
+    """A page is never told where a dropped file is. `text/uri-list` carries a `file://` URL on macOS
+    and is simply not there on Windows, and `dataTransfer.files` gives a name, a size, a modification
+    time and the bytes — never a location. The bytes are what an upload wants; a viewer here is a
+    window onto the file **on disk** and saves back to it, so palmar goes and finds it instead."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.deep = os.path.join(cls.d.home, "a", "b", "papers")
+        os.makedirs(cls.deep)
+        with open(os.path.join(cls.deep, "quarterly report.csv"), "w") as fh:
+            fh.write("a,b\n1,2\n")
+        os.makedirs(os.path.join(cls.d.home, "node_modules", "pkg"))
+        with open(os.path.join(cls.d.home, "node_modules", "pkg", "hidden.csv"), "w") as fh:
+            fh.write("x\n")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.d.stop()
+
+    def test_it_finds_the_file_by_name_with_its_size_and_time(self):
+        """Name, size and modification time are the three facts that do come over, and the page opens
+        a file only when exactly one agrees on all three."""
+        got = self.d.get("/api/files?name=" + urllib.parse.quote("quarterly report.csv"))["files"]
+        self.assertEqual(len(got), 1, "expected one hit: %r" % (got,))
+        want = os.path.join(self.deep, "quarterly report.csv")
+        self.assertEqual(os.path.realpath(got[0]["path"]), os.path.realpath(want))
+        self.assertEqual(got[0]["size"], os.path.getsize(want))
+        self.assertAlmostEqual(got[0]["mtime"], os.path.getmtime(want), places=3)
+
+    def test_a_name_with_a_separator_in_it_finds_nothing(self):
+        """The name is a name. Anything with a path in it is a way of asking for somewhere else, and
+        the answer to that is nothing at all — the roots are the floor here as everywhere."""
+        for bad in ("../../etc/passwd", "/etc/passwd", "a/b.csv", "..", "."):
+            got = self.d.get("/api/files?name=" + urllib.parse.quote(bad))["files"]
+            self.assertEqual(got, [], "%r came back with %r" % (bad, got))
+
+    def test_the_places_the_folder_sweep_skips_are_skipped_here_too(self):
+        """node_modules and its kind are not where somebody's document is, and they are very wide."""
+        got = self.d.get("/api/files?name=hidden.csv")["files"]
+        self.assertEqual(got, [], "it swept a folder the rail does not: %r" % (got,))
+
+    def test_a_folder_outside_home_is_searched_once_a_file_there_is_open(self):
+        """**Reading is not acting.** The roots are the floor for what acts on the machine — opening a
+        shell, saving an edit — and `/api/file` reads anywhere this uid can read, so a file on a work
+        drive opens fine by walking to it in the rail. Searching only the roots made a drop narrower
+        than that for no reason (user, 2026-09-18: "home 아래에 없으면 안열려?").
+
+        A pane's own folder would have been the obvious thing to add and adds nothing — a pane cannot
+        be opened outside the roots at all. A **viewer** is not floored that way, so the folders files
+        were opened from are the ones that widen it."""
+        out = tempfile.mkdtemp(prefix="palmar-elsewhere-")
+        try:
+            docs = os.path.join(out, "docs")
+            os.makedirs(docs)
+            opened = os.path.join(docs, "already open.csv")
+            beside = os.path.join(docs, "dropped beside it.csv")
+            for f, text in ((opened, "a,b\n1,2\n"), (beside, "c,d\n3,4\n")):
+                with open(f, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            name = "/api/files?name=" + urllib.parse.quote("dropped beside it.csv")
+            self.assertEqual(self.d.get(name)["files"], [],
+                             "it searched outside home before anything pointed it there")
+            st, _ = self.d.raw("PUT", "/api/layout", {"layout": {"v:aaaa11": {
+                "x": 10, "y": 10, "w": 400, "h": 300, "kind": "file", "path": opened, "canvas": "c1"}}})
+            self.assertEqual(st, 200)
+            got = self.d.get(name)["files"]
+            self.assertEqual(len(got), 1, "the folder of an open file was not searched: %r" % (got,))
+            self.assertEqual(os.path.realpath(got[0]["path"]), os.path.realpath(beside))
+        finally:
+            self.d.raw("PUT", "/api/layout", {"layout": {}})
+            shutil.rmtree(out, ignore_errors=True)
+
+    def test_handing_a_file_to_the_system_stops_at_home(self):
+        """**Reading is not acting.** The viewer reads anywhere this uid can read and the search
+        behind a drop now reaches every drive, but handing a file to the system's own program starts
+        a program on the person's behalf, so it keeps the same floor as opening a shell — the user
+        chose to leave it there (2026-09-18). The refusal has to say *that*, though: the same 400
+        used to cover "that is not a file", and somebody reading it about a file goes looking for a
+        fault that is not there."""
+        out = tempfile.mkdtemp(prefix="palmar-outside-")
+        try:
+            f = os.path.join(out, "outside.txt")
+            with open(f, "w", encoding="utf-8") as fh:
+                fh.write("hello\n")
+            # It can be read from there — that is the rule this one is different from.
+            st, _ = self.d.raw("GET", "/api/file?path=" + urllib.parse.quote(f))
+            self.assertEqual(st, 200, "a file outside home stopped being readable")
+            st, body = self.d.raw("POST", "/api/open", {"path": f})
+            self.assertEqual(st, 400)
+            said = body.decode("utf-8", "replace")
+            self.assertIn("under your home", said, "it refused without saying why: %r" % (said,))
+            self.assertNotIn("must be an absolute file", said,
+                             "it called a real file not a file: %r" % (said,))
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+
+    def test_a_name_nobody_has_is_no_error(self):
+        self.assertEqual(self.d.get("/api/files?name=nothing-like-this.csv")["files"], [])
+
+
 class Restore(unittest.TestCase):
     """A daemon dies and the shells die with it. What comes back is where you were."""
 
@@ -328,6 +432,88 @@ class Restore(unittest.TestCase):
             # offered once
             st, _ = d.raw("POST", "/api/restore")
             self.assertEqual(st, 409)
+
+    def test_the_rail_follows_a_cd_too(self):
+        """The restore file has followed a `cd` since the day it was written. **What a browser is told
+        never did** — `to_json` handed out the folder the pane was created with and nothing ever
+        changed it, so the left rail named the opening folder for the life of the session, on every
+        platform (measured 2026-09-17: a Mac, a cd, eleven seconds, still the old name). The live
+        value was already being read every ten seconds for the snapshot and thrown away."""
+        from palmar import daemon as D
+        if D.cwd_of(os.getpid()) is None:
+            self.skipTest("cwd_of is not implemented on %s" % sys.platform)
+        with Daemon() as d:
+            deep = os.path.join(d.home, "somewhere", "deep")
+            os.makedirs(deep)
+            sid = d.open_pane(d.home, name="wanderer")["id"]
+            time.sleep(1.0)
+            w = WS(d, "/pty/%s?token=%s&cols=80&rows=24" % (sid, d.token))
+            w.recv_json()
+            said = lambda: [r for r in d.panes() if r["id"] == sid][0]["cwd"]
+            self.assertEqual(os.path.realpath(said()), os.path.realpath(d.home))
+            w.send(("cd %s\r" % deep).encode(), opcode=0x2)
+            end = time.time() + D.RESTORE_EVERY_S + 6
+            while time.time() < end and os.path.realpath(said()) != os.path.realpath(deep):
+                time.sleep(0.5)
+            w.close()
+            self.assertEqual(os.path.realpath(said()), os.path.realpath(deep),
+                             "the rail is still naming the folder the pane opened in")
+
+    def test_a_pane_can_say_where_it_is_when_nobody_can_read_it(self):
+        """The Windows route, driven here from a shell that could have been read anyway — because the
+        thing under test is the daemon's side of it. PowerShell's `Set-Location` never touches the
+        process working directory, so `cwd_of` answers with where the shell started however correctly
+        it reads; palmar's preamble has the prompt write `palmar:cwd:<path>` into the title instead."""
+        with Daemon() as d:
+            from palmar import daemon as D
+            elsewhere = os.path.join(d.home, "elsewhere")
+            os.makedirs(elsewhere)
+            sid = d.open_pane(d.home, name="quiet")["id"]
+            time.sleep(1.0)
+            w = WS(d, "/pty/%s?token=%s&cols=80&rows=24" % (sid, d.token))
+            w.recv_json()
+            row = lambda: [r for r in d.panes() if r["id"] == sid][0]
+            w.send(("printf '\\033]2;%s%s\\007'\r" % (D.TITLE_CWD, elsewhere)).encode(), opcode=0x2)
+            end = time.time() + 8
+            while time.time() < end and os.path.realpath(row()["cwd"]) != os.path.realpath(elsewhere):
+                time.sleep(0.25)
+            w.close()
+            self.assertEqual(os.path.realpath(row()["cwd"]), os.path.realpath(elsewhere),
+                             "the pane said where it was and was not believed")
+            self.assertNotEqual(row()["status"], "working",
+                                "palmar's own marker was read as the agent working")
+
+    def test_a_shell_that_says_it_outright_is_believed(self):
+        """OSC 133, through a real pane: the whole path from the pty to what a browser is told. The
+        marks are driven by hand here because no shell palmar ships to yet emits them — the Windows
+        preamble does, and zsh and bash are still to come."""
+        with Daemon() as d:
+            sid = d.open_pane(d.home, name="talker")["id"]
+            time.sleep(1.0)
+            w = WS(d, "/pty/%s?token=%s&cols=80&rows=24" % (sid, d.token))
+            w.recv_json()
+            status = lambda: [r for r in d.panes() if r["id"] == sid][0]["status"]
+            osc = lambda m: ("printf '\\033]133;%s\\007'\r" % m).encode()
+            w.send(osc("C"), opcode=0x2)
+            end = time.time() + 6
+            while time.time() < end and status() != "working":
+                time.sleep(0.2)
+            self.assertEqual(status(), "working", "the shell said a command had started")
+            w.send(b"echo something\r", opcode=0x2)
+            time.sleep(0.8)
+            w.send(osc("D"), opcode=0x2)
+            end = time.time() + 6
+            while time.time() < end and status() != "done":
+                time.sleep(0.2)
+            self.assertEqual(status(), "done", "the shell said it had finished")
+            # And the prompt coming back does not take that away. palmar's preamble writes `D` and
+            # `A` in one go, and while `A` set idle the done light was erased in the same breath it
+            # was set — nobody could ever see it (user, 2026-09-18).
+            w.send(osc("A"), opcode=0x2)
+            w.send(osc("B"), opcode=0x2)
+            time.sleep(1.5)
+            self.assertEqual(status(), "done", "the prompt wrote over the light the command earned")
+            w.close()
 
     def test_a_cd_is_what_gets_remembered(self):
         """Not the folder the pane opened at — the one the person moved to."""

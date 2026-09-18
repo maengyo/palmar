@@ -62,9 +62,10 @@ if sys.platform == "win32" and not os.environ.get("PALMAR_WINDOWS_ANYWAY"):
         "\n"
         "  The port is far enough along to try, if you want to help find what is missing:\n"
         "      $env:PALMAR_WINDOWS_ANYWAY=1 ; palmar\n"
-        "  A daemon comes up and serves the page (measured on a runner, 2026-09-14). What is not\n"
-        "  there yet: it stays attached to the terminal (no fork on Windows), and the hook shim is\n"
-        "  shell scripts, so status comes from window titles only. docs/windows.md has the list."
+        "  A daemon comes up and serves the page, terminals open, the hooks attach through a\n"
+        "  PowerShell preamble, and a pane says where it is and what it is doing (2026-09-18).\n"
+        "  What is not there yet: it stays attached to the terminal (no fork on Windows), and a\n"
+        "  pane opened with cmd.exe gets no hooks. docs/windows.md has the list."
     )
 if sys.version_info < (3, 9):
     raise SystemExit("palmar: Python 3.9 or newer is required (/usr/bin/python3 is 3.9.6)")
@@ -152,6 +153,12 @@ ALT_OFF = b"\x1b[?1049l"
 #: so a 3-second window covers both. Requiring two is what keeps a one-shot title change (Claude Code
 #: renames the window to the turn's words when a turn starts) from reading as "it is spinning".
 OSC_TITLE = re.compile(rb"\x1b\][012];([^\x07\x1b]{0,255})(?:\x07|\x1b\\)")
+#: **The two things palmar reads out of the byte stream**, in one pass so the carry cannot disagree
+#: with itself. Group 2 is a window title; group 3 is a shell integration mark (OSC 133).
+OSC_SEEN = re.compile(
+    rb"\x1b\](?:([012]);([^\x07\x1b]{0,255})|133;([A-D])(?:;[^\x07\x1b]{0,255})?)(?:\x07|\x1b\\)")
+#: A title that begins with this is palmar's preamble saying where the pane is, not an agent at work.
+TITLE_CWD = "palmar:cwd:"
 TITLE_WINDOW_S = 3.0
 TITLE_BUSY_N = 2
 #: **The count alone is not enough — how far it spreads matters too.** A shell that swaps the title on
@@ -225,6 +232,8 @@ CONTENT_FAST = 512      # bigger than this and there is content, no need to chec
 HOME = Path.home().resolve()
 PALMAR_DIR = Path.home() / ".palmar"        # must be the same spelling as the shim's "$HOME/.palmar"
 BIN_DIR = PALMAR_DIR / "bin"
+PWSH_DIR = PALMAR_DIR / "pwsh"                 # the Windows half of the shim (#30)
+PWSH_FILE = PWSH_DIR / "preamble.ps1"
 ZDOT_DIR = PALMAR_DIR / "zsh"      # zsh wrapper rc
 BASHRC = PALMAR_DIR / "bash" / "bashrc"   # bash wrapper rc (hooked in with --rcfile)      # rc that wraps zsh. Puts PATH back at the front after the user's rc
 RUN_DIR = PALMAR_DIR / "run"
@@ -409,6 +418,124 @@ case ":$PATH:" in
   *) PATH="$HOME/.palmar/bin:$PATH"; export PATH ;;
 esac
 """
+
+#: **The separator is the platform's, and it was not.** This read `f"{BIN_DIR}:{PATH}"` with the colon
+#: written in, so on Windows the first entry came out as `C:\\Users\\…\\.palmar\\bin;C:\\Windows\\system32`
+#: — one path that does not exist — and `.palmar\\bin` was **never on PATH at all**. Nothing there could
+#: ever be found, which is half of why the lights do not move on Windows (#30). On POSIX `os.pathsep`
+#: is the same colon, so this changes nothing there.
+#:
+#: The fallback is only reached when the environment has no PATH, which on Windows would be a broken
+#: machine rather than a bare one — but answering with `/usr/bin:/bin` there is answering in the wrong
+#: language, so it says what that platform would have said.
+def front_of_path(bin_dir, current: str, sep: str = os.pathsep, fallback: str = "") -> str:
+    """`bin_dir` first, then whatever was already there."""
+    return sep.join([str(bin_dir), current or fallback or DEFAULT_PATH[0]])
+
+
+DEFAULT_PATH = [r"C:\Windows\system32;C:\Windows" if sys.platform == "win32" else "/usr/bin:/bin"]
+
+# ── PowerShell preamble ───────────────────────────────────────────────────────────────
+#: **The Windows half of the shim** (#30). POSIX puts a shell script in front of `claude` on PATH;
+#: Windows cannot run that file at all — no shebang, and an extension-less name is not in PATHEXT —
+#: so a `claude` opened in a palmar pane got no `--settings`, no hooks, and a light that never moved.
+#:
+#: **A function, not a file.** PowerShell resolves a function before anything on PATH, so this shadows
+#: `claude` without a second process in the way. A `.cmd` wrapper would have been the closer analogue
+#: and it brings `Terminate batch job (Y/N)?` to every Ctrl-C, which in a pane running an agent is not
+#: a cost worth paying. The price of a function is that it is only in this shell: a claude started by
+#: a script, from `cmd.exe`, or in a nested shell does not see it, and those still get no hooks.
+#:
+#: **It runs after the user's profile** — PowerShell loads profiles and *then* runs `-Command`, so the
+#: whole rc-wrapping dance POSIX needs (ZDOTDIR, --rcfile) is an argument order here. User files are
+#: never read or written.
+#:
+#: **And the prompt says where the pane is.** `cwd_of` reads the process working directory, and
+#: PowerShell's `Set-Location` never touches it — it moves PowerShell's own location and nothing
+#: else — so however correctly that is read it answers with the folder the shell started in. Only the
+#: shell can say, so the prompt says: `palmar:cwd:<path>` in the window title, which the daemon
+#: already watches and now understands (`_title_cwd`).
+#:
+#: **Written beside the prompt, not inside it.** The escape goes out with `[Console]::Write` before
+#: the prompt string is returned, so PSReadLine never measures it. A zero-width sequence inside the
+#: returned string is exactly the mistake that breaks line wrapping in zsh when `%{...%}` is
+#: forgotten, and there is no reason to make it here. The user's prompt runs first, so if it sets a
+#: title of its own, ours is the one that lands.
+#:
+#: `-CommandType Application` is what stops the function finding itself. The POSIX shim does the same
+#: job by taking its own directory out of PATH as a fixed string, which went wrong once (#12: the `.`
+#: in `.palmar` read as a regex). Asking for a type cannot go wrong that way.
+PWSH_PREAMBLE = """# palmar 가 만든 것. 고치지 마라 — 데몬이 뜰 때마다 다시 쓴다.
+# 사용자 프로필이 먼저 돌고, 그다음 이 파일이 온다.
+
+function global:claude {
+  $real = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue |
+          Select-Object -First 1
+  if (-not $real) {
+    Write-Error 'palmar: claude not found on PATH'
+    return
+  }
+  $f = $null
+  if ($env:PALMAR_PANE) {
+    $f = Join-Path '{run}' ("{0}.json" -f $env:PALMAR_PANE)
+  }
+  if ($f -and (Test-Path -LiteralPath $f)) { & $real.Source --settings $f @args }
+  else { & $real.Source @args }
+}
+
+# 이 pane 이 어느 폴더에 있는지 프롬프트가 직접 말한다. PowerShell 의 Set-Location 은
+# 프로세스 작업 디렉터리를 안 바꿔서, 밖에서는 읽을 방법이 없다 (#30).
+if (-not $global:PalmarUserPrompt) {
+  # 감싸기 전에 감쌀 것이 있어야 한다. -Command 가 도는 시점에 prompt 가 아직 없을 수 있고,
+  # 그러면 래퍼가 $null 을 부르다 매번 throw 해서 D 가 영영 안 나간다 — 초록불만 남는다.
+  $p = $function:prompt
+  if (-not $p) { $p = { "PS $($PWD.ProviderPath)> " } }
+  $global:PalmarUserPrompt = $p
+  function global:prompt {
+    # 사용자 것이 먼저 — 제목을 건드린다면 우리가 뒤에 온다. 남의 프롬프트가 던져도
+    # 우리 표식은 나가야 한다.
+    $out = $null
+    try { $out = & $global:PalmarUserPrompt } catch { $out = "PS $($PWD.ProviderPath)> " }
+    try {
+      $e = [char]27; $b = [char]7
+      # 어디에 있는지, 그리고 "직전 명령이 끝났다 · 프롬프트다" (OSC 133).
+      [Console]::Write("$e]2;palmar:cwd:$($PWD.ProviderPath)$b$e]133;D$b$e]133;A$b")
+    } catch {}
+    $out
+  }
+}
+
+# "명령이 시작됐다" (OSC 133;C). PSReadLine 이 한 줄을 다 받아 돌려주는 바로 그 자리다 —
+# 프롬프트 문자열이 아니라 그 옆이라, 줄 길이 계산에 끼어들지 않는다.
+if (-not $global:PalmarReadLine -and (Get-Command PSConsoleHostReadLine -ErrorAction SilentlyContinue)) {
+  $global:PalmarReadLine = $function:PSConsoleHostReadLine
+  function global:PSConsoleHostReadLine {
+    $line = & $global:PalmarReadLine
+    try {
+      $e = [char]27; $b = [char]7
+      [Console]::Write("$e]133;B$b")
+      if ($line -and $line.Trim()) { [Console]::Write("$e]133;C$b") }
+    } catch {}
+    $line
+  }
+}
+"""
+
+
+#: How the preamble is reached. **Not `-File`** — that is not interactive, and not a dot-source of the
+#: path either: running a `.ps1` goes through the execution policy, which is `Restricted` by default on
+#: a client and would refuse it. Text turned into a script block is not a script file, so the policy
+#: does not apply, and `.` in front runs it in this scope so the function survives. `-EncodedCommand`
+#: would also dodge the policy and turns the command line into a base64 blob nobody can read.
+#:
+#: A path may hold a single quote — a person's name with an apostrophe is enough — and in a PowerShell
+#: single-quoted string that is escaped by doubling it.
+def pwsh_argv(shell_argv, preamble) -> list:
+    lit = str(preamble).replace("'", "''")
+    return list(shell_argv) + [
+        "-NoExit", "-Command",
+        ". ([scriptblock]::Create((Get-Content -Raw -LiteralPath '%s')))" % lit]
+
 
 SHIM = """#!/bin/sh
 # palmar shim: attaches hooks to a claude started inside a palmar terminal. Nothing else.
@@ -673,6 +800,9 @@ class Session:
         self.title_hits = []         # recent title-change times (monotonic). Anything outside TITLE_WINDOW_S is dropped
         self.title_timer = None
         self.osc_carry = b""         # an OSC candidate straddling a chunk boundary
+        self.cwd_told = False        # has this shell ever said where it is — then we stop reading it
+        self.shell_marks = False     # has this shell ever spoken OSC 133 — then the guesses stand down
+        self.cmd_start = None        # monotonic time of the last 133;C, or None between commands
         self.derived = "idle"        # status read from title and output when there are no hooks
         #: Has this pane's title **actually spun**. Not "was it ever set" — a shell setting the title on
         #: every prompt is very common (that is bash's default on WSL: `\e]0;\u@\h: \w\a`), and taking that
@@ -742,7 +872,7 @@ class Session:
         env = {k: v for k, v in os.environ.items()
                if k in KEEP_ENV_EXACT
                or (not k.startswith(STRIP_ENV_PREFIXES) and k not in STRIP_ENV_EXACT)}
-        env["PATH"] = f"{BIN_DIR}:{env.get('PATH', '/usr/bin:/bin')}"   # shim at the front
+        env["PATH"] = front_of_path(BIN_DIR, env.get("PATH"))          # shim at the front
         # Putting ourselves at the front of PATH is not enough — the user's rc runs later and puts its own back first
         # (measured: one `export PATH="$HOME/.local/bin:$PATH"` line in ~/.zshrc pushed the shim out).
         # For zsh, wrap it with ZDOTDIR so our rc runs **last**. User files are never touched.
@@ -751,6 +881,8 @@ class Session:
         if base == "zsh" and (ZDOT_DIR / ".zshrc").exists():
             env["PALMAR_USER_ZDOTDIR"] = env.get("ZDOTDIR") or str(HOME)
             env["ZDOTDIR"] = str(ZDOT_DIR)
+        elif base.lower() in ("pwsh.exe", "powershell.exe") and PWSH_FILE.exists():
+            argv = pwsh_argv(argv0, PWSH_FILE)
         elif base == "bash" and BASHRC.exists():
             # bash has no ZDOTDIR. --rcfile replaces an interactive shell's rc —
             # ours sources the user's first and then puts PATH back (measured 2026-09-08).
@@ -775,6 +907,12 @@ class Session:
             "status": self.eff_status(), "agent": self.agent, "alt": self.alt,
             "title": self.title or None,
             "fg": self.fg,               # what is running, by name (comm_of); the page labels an unnamed pane with it
+            # **Which layer is speaking for this pane.** `--doctor` says how each light was worked
+            # out, and with a new layer under it that line would otherwise say something untrue.
+            # "shell" is on once this pane has emitted an OSC 133 mark; "running" is on between C
+            # and D, which is when the layers that watch the agent are the ones still talking.
+            "shell": self.shell_marks or None,
+            "running": (self.cmd_start is not None) or None,
             "created": self.created, "last_event": self.last_event,
             "canvas": self.canvas, "name": self.name,
             # True when this pane's last wait ended with nobody typing here (#14). The browser reads
@@ -935,16 +1073,21 @@ class Session:
         if alt_changed:
             registry.changed(self)   # when alt flips, send session over /events
 
-    # ── Reading status from the title (#38) ──────────────
+    # ── Reading status out of the bytes (#38) ────────────
     def _scan_title(self, data: bytes) -> None:
-        """Only counts title sequences. It removes them neither from the ring nor from the frame going to
-        the browser — xterm must receive them as-is and do its job (unlike the alt markers)."""
+        """Only counts. It removes nothing from the ring or from the frame going to the browser —
+        xterm must receive these as-is and do its job (unlike the alt markers)."""
         buf = self.osc_carry + data
         last = 0
         hit = False
-        for m in OSC_TITLE.finditer(buf):
+        for m in OSC_SEEN.finditer(buf):
             last = m.end()
-            t = m.group(1).decode("utf-8", "replace")
+            if m.group(3):             # OSC 133 — the shell saying it plainly
+                self._shell_mark(m.group(3).decode())
+                continue
+            t = m.group(2).decode("utf-8", "replace")
+            if self._title_cwd(t):     # palmar's own marker — a place, not a heartbeat
+                continue
             if t != self.title:        # setting the same title again is not a change
                 self.title = t
                 self.title_hits.append(time.monotonic())
@@ -975,9 +1118,53 @@ class Session:
             return False
         return self.title_hits[-1] - self.title_hits[0] >= TITLE_MIN_S
 
+    #: **OSC 133 — the shell saying it, instead of us guessing.** `A` a prompt is being drawn, `B` it
+    #: is waiting for typing, `C` a command has started, `D` it finished. Every layer above this one
+    #: is inference: the title spinning is a heartbeat we hope means work, and the output rule is
+    #: "printing on and on = working, printing then stopping = done", which calls a long quiet think
+    #: finished and a chatty log busy. A shell that emits these is telling us, and once one does the
+    #: guessing stops for that pane — the same rule as hooks over the title (`eff_status`).
+    #:
+    #: **Done means something ran and said something.** `C` then `D` with nothing printed between is
+    #: an empty line and an Enter, and lighting "finished" for that would be a light nobody asked
+    #: for — the same discipline `_out_tick` and `_title_tick` already keep.
+    #:
+    #: **And it does not silence the layers above it — it bounds them.** The first version stood the
+    #: title and output layers down for good the moment a shell spoke, which was wrong in the case
+    #: that matters most: the shell knows *a command is running*, and an agent is one long command.
+    #: Running aelix, the light went green and stayed green for the whole session, because the one
+    #: layer that watches **the agent** rather than the shell had been switched off (user,
+    #: 2026-09-18). So: **at a prompt the shell is the last word** — nothing may paint green over a
+    #: `D`. **Between `C` and `D` the agent-watching layers speak**, because the shell has nothing
+    #: more to say until the command ends and they are all there is.
+    #:
+    #: Hooks still win. This only ever writes `derived`, which `eff_status` reads when the hooks are
+    #: silent.
+    def _shell_mark(self, mark: str) -> None:
+        self.shell_marks = True
+        if mark == "C":
+            self.cmd_start = time.monotonic()
+            want = "working"
+        elif mark == "D":
+            started, self.cmd_start = self.cmd_start, None
+            said = started is not None and self.last_out >= started
+            want = "done" if said else "idle"
+        else:
+            # **A and B say nothing the D before them did not.** They used to set idle, and the
+            # preamble writes `D` and `A` in one go — so "finished" was erased in the same breath it
+            # was set and the done light could never be seen. A prompt appearing is not a state; the
+            # command ending is, and `D` is that.
+            return
+        if want != self.derived:
+            self.derived = want
+            if self.status == "unknown":
+                registry.changed(self)
+
     def _title_tick(self) -> None:
         """Spinning means working; **spinning and then** stopping means done. Nothing becomes done without
         having spun — turning a TUI sitting still (vim, say) into 'finished' leaves the lights always on."""
+        if self.shell_marks and self.cmd_start is None:
+            return                         # at a prompt the shell is the last word — see _shell_mark
         busy = self._title_busy()
         if busy:
             self.title_spun = True         # **only here** does the title layer take the lead
@@ -1051,6 +1238,47 @@ class Session:
         self.fg_varied = self.pty.fg_varied
         return bool(answer)
 
+    #: **The folder a pane is in, not the one it was opened in.** `to_json` handed out the cwd the
+    #: pane was *created* with and nothing ever changed it, so the left rail named the opening folder
+    #: for the life of the session — on every platform, not only Windows (measured 2026-09-17: a `cd`
+    #: into a subfolder, and eleven seconds later the rail still said the folder it started in). The
+    #: restore snapshot had been reading the live one all along with this very call, so the number was
+    #: being fetched every ten seconds and thrown away.
+    #:
+    #: **None is not an answer, it is the absence of one.** `cwd_of` cannot see a PowerShell
+    #: `Set-Location` and returns None on a platform it cannot ask, and the last place we knew about
+    #: is a better answer than no place at all. Windows fills this in through the title instead.
+    def sample_cwd(self) -> None:
+        # **A pane that has said where it is is not corrected from outside.** These two were fighting
+        # on Windows: the prompt writes the right folder into the title, and ten seconds later this
+        # read the PEB — which `Set-Location` never updates — and put the folder the pane *opened* in
+        # back. From the outside it looked like running an agent sent the rail home and kept it there
+        # (user, 2026-09-18: "aelix 실행하면 ~ 로 바뀌고 … 돌아와도 ~ 로 유지되네"). It was the tick,
+        # not the agent. Same rule as hooks over the title, and OSC 133 over the guesses: the one who
+        # knows wins, and the one who infers stops.
+        if self.cwd_told:
+            return
+        live = cwd_of(self.pid)
+        if live and live != self.cwd:
+            self.cwd = live
+            registry.changed(self)
+
+    #: The pane telling us where it is, because we cannot see it: `palmar:cwd:<path>` in the window
+    #: title. PowerShell's `Set-Location` moves PowerShell's own location and never calls
+    #: SetCurrentDirectory, so the process working directory — which is all `cwd_of` can read — stays
+    #: where the shell started (#30). Only a shell that says so can be followed, and palmar's preamble
+    #: makes the prompt say so. **It is not a title spin**: it changes when the folder does, once,
+    #: which is nothing like an agent working, and counting it as one would be a lie in the lights.
+    def _title_cwd(self, t: str) -> bool:
+        if not t.startswith(TITLE_CWD):
+            return False
+        path = t[len(TITLE_CWD):].strip()
+        self.cwd_told = True
+        if path and path != self.cwd and os.path.isdir(path):
+            self.cwd = path
+            registry.changed(self)
+        return True
+
     def sample_fg(self) -> None:
         """Read who is in front and, when that changed, tell every browser. Called on every output tick
         and every ten seconds from the restore timer, so a command that prints nothing is still seen."""
@@ -1066,6 +1294,8 @@ class Session:
         """At a prompt: idle. Something running and printing **on and on**: working. Printing then stopping:
         done — nothing becomes done without ever having printed (same discipline as the title side)."""
         self.sample_fg()
+        if self.shell_marks and self.cmd_start is None:
+            return                          # at a prompt the shell is the last word — see _shell_mark
         now = time.monotonic()
         if self._at_prompt():
             want = "idle"
@@ -1846,12 +2076,24 @@ _LAST_SNAP = [None]
 
 def snapshot() -> dict:
     """What is worth having back after this daemon is gone: the canvases, and each pane's name and
-    **the folder it is in now** — not the one it opened at."""
+    **the folder it is in now** — not the one it opened at.
+
+    **It asks the panes to look first.** This used to read `cwd_of(pid)` here and hand the answer
+    straight to the file, which was right for the file and left the browser with the folder the pane
+    opened in for the life of the session. Now one call answers both: each pane samples itself, and
+    this reads what the panes say. Sampling **here** rather than only on the ten-second tick is what
+    keeps a clean stop honest — it saves on the way out, seconds after a `cd`, and the tick would not
+    have come round yet (measured 2026-09-17: the first version of this lost exactly that case)."""
+    for x in registry.list():
+        try:
+            x.sample_cwd()
+        except Exception:
+            pass
     return {
         "v": 1,
         "canvases": [{"id": c.id, "name": c.name} for c in registry.canvas_list()],
         "sessions": [{"name": s.name, "canvas": s.canvas,
-                      "cwd": cwd_of(s.pid) or s.cwd}
+                      "cwd": s.cwd}          # kept live by sample_cwd / the title marker
                      for s in registry.list()],
     }
 
@@ -2345,7 +2587,16 @@ def setup_palmar_dir() -> str:
     KEY[0] = load_or_make_key()      # inside the lock — so two cannot make one and overwrite each other
     token = secrets.token_urlsafe(32)
     write_private(TOKEN_FILE, token.encode() + b"\n", 0o600)
-    write_private(BIN_DIR / "claude", SHIM.encode(), 0o755)
+    # **Not on Windows.** It is a `#!/bin/sh` script under an extension-less name: no shebang there,
+    # and PATHEXT does not list "" — so it is a file that can never be run, sitting first on PATH.
+    # The preamble below is what stands in its place.
+    if POSIX_PERMS:
+        write_private(BIN_DIR / "claude", SHIM.encode(), 0o755)
+    else:
+        ensure_private_dir(PWSH_DIR)
+        # Doubled, because it lands inside a single-quoted PowerShell string — see pwsh_argv.
+        write_private(PWSH_FILE,
+                      PWSH_PREAMBLE.replace("{run}", str(RUN_DIR).replace("'", "''")).encode(), 0o600)
     ensure_private_dir(ZDOT_DIR)
     ensure_private_dir(BASHRC.parent)
     write_private(BASHRC, BASH_RC.encode(), 0o600)
@@ -2598,6 +2849,170 @@ async def build_find_index() -> list:
                         if len(out) >= FIND_MAX:
                             break
                         stack.append((e.path, depth + 1))
+            except OSError:
+                continue
+    return out
+
+
+#: **Finding the file somebody dragged in from Finder or Explorer.**
+#:
+#: A page is never told where a dropped file is. `text/uri-list` carries a `file://` URL on macOS and
+#: is simply absent on Windows (user, 2026-09-18), and `dataTransfer.files` gives a name, a size, a
+#: modification time and the bytes — never a location. The bytes are what an upload wants; palmar
+#: wants the file **where it is**, because a viewer here is a window onto the file on disk and saves
+#: back to it. So the three facts that did come over are used to find it.
+#:
+#: **Only an exact name, and only where palmar is already looking.** The first version searched the
+#: roots and stopped there, which is narrower than palmar's own rule for *reading* a file: the roots
+#: are the floor for things that **act** on the machine — opening a shell, saving an edit — while
+#: `/api/file` reads anywhere this uid can read, because looking is looking. A file on a work drive
+#: could be opened by walking to it in the rail and not by dropping it, which is a difference with no
+#: reason behind it (user, 2026-09-18: "home 아래에 없으면 안열려?").
+#:
+#: So the search also covers **the folders the files already open came from.** A pane's own directory
+#: would have been the obvious thing to add and adds nothing: a pane cannot be opened outside the
+#: roots in the first place (measured — `POST /api/sessions` refuses it), so every one of them is
+#: already covered. A **viewer** is not floored that way, because reading is not acting: walk to a
+#: work drive in the rail, open a file, and that folder is somewhere this person opens files from.
+#: From then on a drop out of it finds its way home.
+#:
+#: **And the other drives.** A home on C: and the file on D: is the ordinary shape of a Windows
+#: machine, and the rail already walks there and opens it — so a drop that could not was the same
+#: inconsistency one level out (user, 2026-09-18). Every attached volume is a top: drive letters on
+#: Windows, `/Volumes` on a Mac, the usual mount points on Linux.
+#:
+#: **Except the ones with no end worth waiting for.** A network drive is skipped, by asking the
+#: system what kind it is rather than by guessing from the name. And every top gets its own budget of
+#: entries so a wide home cannot starve the drive the file is actually on, with a deadline over the
+#: whole search, because this runs while somebody watches a window not open yet. What is found when
+#: the time is up is what is returned; the page says it looked and did not find it, and the rail
+#: still reaches anywhere.
+FIND_FILE_SECONDS = 4.0
+#:
+#: Size and modification time are matched by the caller; two files agreeing on all three is not
+#: something to guess between, and the page then opens neither and says so.
+#:
+#: Deeper than the folder index (that one labels places to open a terminal; this one looks for one
+#: file) and capped both ways, with the same yield so a sweep does not stop every pane's bytes.
+FIND_FILE_DEPTH = 8
+FIND_FILE_HITS = 24
+FIND_FILE_NODES = 120_000
+
+
+#: Every volume that is attached and is not somebody else's machine. **The kind is asked, not
+#: guessed**: a mapped network drive looks exactly like a local one by its letter, and sweeping one is
+#: how a search stops being a search. Anything that cannot be asked is left out.
+def volume_tops(platform=None, bases=None) -> list:
+    platform = sys.platform if platform is None else platform
+    out = []
+    if platform == "win32":
+        try:
+            import ctypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            mask = k32.GetLogicalDrives()
+            for i in range(26):
+                if not (mask >> i) & 1:
+                    continue
+                d = "%s:\\" % chr(ord("A") + i)
+                # 2 removable · 3 fixed · 6 RAM disk. 4 is a network drive and 5 a disc.
+                if k32.GetDriveTypeW(ctypes.c_wchar_p(d)) in (2, 3, 6):
+                    out.append(d)
+        except Exception:
+            return []
+        return out
+    if bases is None:
+        bases = ["/Volumes"] if platform == "darwin" else ["/media", "/mnt", "/run/media"]
+    for base in bases:
+        try:
+            with os.scandir(base) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False) and not e.name.startswith("."):
+                            out.append(e.path)
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return out
+
+
+def search_tops() -> list:
+    """The roots, the folder of every file window on the board, and every attached volume — with
+    anything already covered by an earlier top dropped, so a home and a folder inside it are swept
+    once, and in that order because that is how often each one holds the answer."""
+    tops = [str(r) for r in roots()]
+
+    def add(c):
+        if not c:
+            return
+        if any(c == t or c.startswith(t.rstrip(os.sep) + os.sep) for t in tops):
+            return
+        try:
+            if os.path.isdir(c):
+                tops.append(c)
+        except OSError:
+            pass
+
+    for r in (registry.layout or {}).values():
+        if isinstance(r, dict) and r.get("kind") == "file" and isinstance(r.get("path"), str):
+            add(os.path.dirname(r["path"]))
+    for v in volume_tops():
+        add(v)
+    return tops
+
+
+async def find_files(name: str) -> list:
+    out: list = []
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
+        return out
+    want = name.lower()
+    tops = search_tops()
+    # **Every top gets a turn.** With one deadline over the whole search, a home big enough to spend it
+    # is a home that hides every other drive — the budget in entries already guards against that and
+    # the clock did not (user, 2026-09-18: a file on D: with the home on C:, still not found). So the
+    # time is shared out as well, with a floor so a machine with many volumes does not give each one
+    # too little to be worth starting.
+    share = max(0.6, FIND_FILE_SECONDS / max(1, len(tops)))
+    deadline = time.monotonic() + FIND_FILE_SECONDS
+    # **It stops at the nearest place that has an answer.** The tops are in the order each one holds
+    # the answer — home, then the folders files were opened from, then the other drives — and going on
+    # past a hit means sweeping an external disk to ask whether your own home is lying to you. The
+    # caller's rule against guessing between identical files still holds where it matters: within the
+    # place the file was found. Only a name that is nowhere pays for the whole search.
+    for root in tops:
+        if out or time.monotonic() > deadline:
+            break
+        n = 0                                   # its own budget: a wide home cannot starve a drive
+        until = min(deadline, time.monotonic() + share)
+        stack = [(str(root), 0)]
+        while stack and len(out) < FIND_FILE_HITS and n < FIND_FILE_NODES:
+            d, depth = stack.pop()
+            try:
+                with os.scandir(d) as it:
+                    for e in it:
+                        n += 1
+                        if n % FIND_YIELD == 0:
+                            await asyncio.sleep(0)
+                            if time.monotonic() > until:
+                                n = FIND_FILE_NODES     # this top's turn is over; the next one begins
+                                break
+                        if n >= FIND_FILE_NODES:
+                            break
+                        if e.name.startswith(".") or e.name in FIND_SKIP or e.name.endswith(FIND_SKIP_SUFFIX):
+                            continue
+                        try:
+                            if e.is_dir(follow_symlinks=False):
+                                if depth + 1 < FIND_FILE_DEPTH:
+                                    stack.append((e.path, depth + 1))
+                                continue
+                            if e.name.lower() != want or not e.is_file(follow_symlinks=False):
+                                continue
+                            st = e.stat()
+                        except OSError:
+                            continue
+                        out.append({"path": e.path, "size": st.st_size, "mtime": st.st_mtime})
+                        if len(out) >= FIND_FILE_HITS:
+                            break
             except OSError:
                 continue
     return out
@@ -3443,7 +3858,15 @@ async def handle_request(reader, writer) -> None:
         obj = parse_json_body(body) or {}
         target = resolve_file(obj.get("path"))
         if target is None or not under_roots(target):
-            writer.write(http_error(400, "path must be a file under your home"))
+            # **Say which of the two it is.** The same 400 covered "that is not a file" and "that file
+            # is outside your home", and the second one is a rule somebody chose rather than a mistake
+            # somebody made — a person who reads "must be a file" about a file goes looking for a
+            # fault that is not there (user chose to keep the limit, 2026-09-18).
+            if target is None:
+                writer.write(http_error(400, "path must be an absolute file"))
+            else:
+                writer.write(http_error(400, "opening a file starts a program, and palmar keeps that "
+                                             "under your home — this one is outside it"))
             return
         # **Open, never run.** The system opener executes some things instead of showing them: an
         # executable script goes to Terminal on a Mac, .bat/.vbs/.lnk run outright on Windows, a
@@ -3576,6 +3999,14 @@ async def handle_request(reader, writer) -> None:
         STOP_NOW[0] and STOP_NOW[0]()
         return
 
+    if path == "/api/files":
+        # Where is the file that was dragged in? See find_files — a name is all a page is given.
+        if method != "GET":
+            writer.write(http_error(405, "GET"))
+            return
+        writer.write(http_json(200, {"files": await find_files(qget(q, "name", "").strip())}))
+        return
+
     if path == "/api/dirs":
         if method == "GET":
             find = qget(q, "find", "").strip()
@@ -3679,6 +4110,12 @@ async def handle_request(reader, writer) -> None:
             writer.write(http(403))
             return
         body = json.dumps({
+            # **Who this app is, said out loud.** With no `id`, the browser takes `start_url` as the
+            # app's identity — and start_url carries the key. Rotate the key, or come back on another
+            # port, and the same palmar installs a second time beside the first, with the shortcut
+            # somebody pinned still pointing at the old one. `id` is resolved against the origin and
+            # never carries a secret, so it stays the same however the address moves.
+            "id": "/",
             "name": "palmar", "short_name": "palmar",
             "description": "Many terminals, one place, and each one keeps where you put it.",
             "start_url": f"/?k={KEY[0]}", "scope": "/", "display": "standalone",
@@ -4845,6 +5282,8 @@ async def main(port: int, open_page: bool = True, web: bool = False, new: bool =
     # in, which changes with a `cd` that may print nothing and fire no event. Ten seconds is the most
     # that can be lost to a kill -9; a clean stop saves on the way out.
     def tick():
+        # save_restore asks every pane where it is, so a `cd` that printed nothing reaches the rail
+        # on this same ten seconds — and on a clean stop, which also saves.
         save_restore()
         for x in registry.list():
             try:
@@ -5000,6 +5439,20 @@ def doctor(port: int) -> int:
         out("  locale    %s%s" % (loc or "(none)", "" if utf8 else "   <- not UTF-8"))
         out("  panes get %s" % ("this, unchanged" if utf8 else "LC_CTYPE=" + (UTF8_CTYPE[0] or pick_utf8_locale())))
     out("  home      %s" % PALMAR_DIR)
+    # **Is the thing that makes the lights work actually attached?** AGENTS principle 3: a pane with
+    # no hooks must not be left quietly grey. On Windows every one of these was missing at once and
+    # the only way to find out was to read the source (2026-09-17), so it says which, by name.
+    if POSIX_PERMS:
+        shim = BIN_DIR / "claude"
+        out("  hooks     %s%s" % (shim, "" if shim.exists() else "   <- MISSING; `claude` gets no --settings"))
+        out("            zsh %s · bash %s" % (
+            "ok" if (ZDOT_DIR / ".zshrc").exists() else "MISSING",
+            "ok" if BASHRC.exists() else "MISSING"))
+    else:
+        out("  hooks     %s%s" % (PWSH_FILE, "" if PWSH_FILE.exists() else "   <- MISSING"))
+        out("            PowerShell panes only — one opened with cmd.exe gets no hooks (#30)")
+    out("  PATH      panes get %s first" % BIN_DIR)
+    out("  shell     %s" % " ".join(Pty_default_shell()))
     out("")
 
     # **Is a daemon running** — screened by the lock. The token file outlives a dead daemon, so it is no evidence.
@@ -5123,10 +5576,21 @@ def doctor(port: int) -> int:
         else:
             out("      folder    %s\n                -> %s   <- it followed a cd" % (was, now))
         out("      now       status=%s" % s.get("status"))
-        out("      read from %s" % (
-            "hooks — %s reports it directly (the most exact)" % s.get("agent") if s.get("agent")
-            else ("the window title — this pane sets one: %r" % title if title
-                  else "output activity — this pane sets no window title")))
+        # **Which layer, in the order they actually win.** Saying "output activity" while OSC 133 is
+        # driving would be a diagnostic that lies, which is worse than none.
+        if s.get("agent"):
+            src = "hooks — %s reports it directly (the most exact)" % s.get("agent")
+        elif s.get("shell") and not s.get("running"):
+            src = "the shell (OSC 133) — it says it is at a prompt, and that is the last word"
+        elif s.get("shell"):
+            src = ("the shell (OSC 133) says a command is running; what the agent inside it is "
+                   "doing comes from %s" % ("the window title: %r" % title if title
+                                            else "output activity — this pane sets no window title"))
+        elif title:
+            src = "the window title — this pane sets one: %r" % title
+        else:
+            src = "output activity — this pane sets no window title"
+        out("      read from %s" % src)
         out("      %s" % ("the agent field is filled by hooks. With an agent that has none it is "
                           "correctly empty, and it says nothing about the status."
                           if not s.get("agent") else "hooks are attached."))

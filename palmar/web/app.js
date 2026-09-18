@@ -423,7 +423,7 @@ function paintClosing(id) {
 
 let toastTimer = null;
 function toast(parts) {
-  // parts: [{b:'bold'}, 'plain', {d:'dim'}, {a:'undo', on:fn}], or a string.
+  // parts: [{b:'bold'}, 'plain', {d:'dim'}, {a:'undo', on:fn}, {spin:1}], or a string.
   // **The toast is one line of prose.** Parts are laid end to end with a space between, and the
   // punctuation is the caller's — a dash before a second clause, a colon before an error. It used to
   // be a flex row with a gap, and two plain strings in a row merged into one item with no gap at all
@@ -436,6 +436,8 @@ function toast(parts) {
     if (typeof p === 'string') toastEl.appendChild(document.createTextNode(p));
     else if (p.b != null) toastEl.appendChild(el('b', null, p.b));
     else if (p.d != null) toastEl.appendChild(el('span', 'd', p.d));
+    // A ring going round, for a line that is saying "still working" rather than telling you a result.
+    else if (p.spin) toastEl.appendChild(el('span', 'spin'));
     else if (p.a != null) {
       // A real button, so it is reachable by keyboard. The toast is pointer-events:none until .show,
       // which is what keeps a faded-out one from swallowing clicks on the canvas underneath.
@@ -917,6 +919,7 @@ class Tile {
     this.fitted = false;
     this.fitTries = 0;
     if (this.visible()) requestAnimationFrame(() => { if (!this.closed) this.refit(); });
+    this.watchFit();
 
     // Push out the character not committed yet. Called wherever the IME lets go.
     this.imeFlush = () => {
@@ -1034,6 +1037,31 @@ class Tile {
     this.ws.send(JSON.stringify({ t: 'resize', cols: this.term.cols, rows: this.term.rows }));
   }
 
+  //: Is the terminal standing taller than the box holding it — which means its bottom rows, and the
+  //: prompt among them, are clipped with no way to scroll to them.
+  overflows() {
+    const scr = this.termEl && this.termEl.querySelector('.xterm-screen');
+    return !!scr && scr.offsetHeight > this.termEl.clientHeight + 1;
+  }
+
+  //: **A pane checks itself for a while after it opens, and stops.** The cell size can change under a
+  //: fit after the fit is over — the real font arriving after boot gave up waiting for it, the WebGL
+  //: renderer settling on dimensions of its own (it floors the cell to device pixels, which is a real
+  //: change at a scale factor like Windows' 1.125 and none at all at 1) — and then nothing calls
+  //: `refit` again, so nothing notices. Two guesses at *when* that happens were both wrong (user,
+  //: 2026-09-18: the boot-time `document.fonts.ready` sweep does not reach a pane opened later, and
+  //: the check inside `refit` needs somebody to call `refit`). So it stops guessing at the moment and
+  //: watches for the state instead — four reads of two numbers over six seconds, and then never
+  //: again. Running the repair by hand in the console is what proved this was the whole of it.
+  watchFit() {
+    FIT_CHECKS.forEach((ms) => setTimeout(() => {
+      if (this.closed || !this.visible() || !this.overflows()) return;
+      remeasure(this.term);
+      this.fitted = false;
+      this.refit();
+    }, ms));
+  }
+
   refit() {
     if (!this.visible()) return;            // another canvas — cannot measure (display:none)
     const d = this.fit.proposeDimensions();
@@ -1050,6 +1078,27 @@ class Tile {
       return;
     }
     this.fitTries = 0;
+    // **A fit is only as good as the cell it measured.** `fit()` divides the box by a cell size the
+    // renderer has already worked out, so if that changes afterwards — a font arriving late, the
+    // WebGL renderer handing over to the DOM one — the row count stays and the rows get taller. The
+    // terminal then stands taller than the box holding it and the bottom rows are **clipped with no
+    // way to scroll to them**: the prompt is down there (user, 2026-09-18, measured in their pane:
+    // 24 rows, screen 403px, box 328px, scrollHeight == clientHeight). Whatever the cause, the same
+    // sentence is true every time — a terminal must never be taller than its box — so that is what
+    // is checked, rather than one more cause guessed at.
+    if (this.overflows()) {
+      if (++this.fitTries <= 8) {
+        // **And fitting again is not enough.** `fit()` divides the box by the cell size the terminal
+        // has **cached**, so a second pass on a stale cell hands back the same wrong row count, calls
+        // it fitted, and nothing changes however often it runs (user, 2026-09-18: still 24 rows,
+        // 408px in a 328px box, after the refit added here). It has to be told to measure again.
+        remeasure(this.term);
+        this.fitted = false;
+        requestAnimationFrame(() => { if (!this.closed) this.refit(); });
+        return;
+      }
+      this.fitTries = 0;
+    }
     this.sendResize();   // "this is the only thing that changes rows·columns" — sent only when the window size changed
     this.showSize();
   }
@@ -1705,27 +1754,134 @@ function openViewer(path, canvas, at) {
   v.el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
   return v;
 }
-// **Drag a file out of the rail and let go on the canvas**: it opens where it was dropped. The drop
-// point is in canvas coordinates, so it lands under the hand rather than in the first free slot.
+//: **A path out of a `file://` URL.** Finder and Explorer hand a drag over as `text/uri-list`, which
+//: is the only part of a dropped file a page is allowed to see as a path at all — `dataTransfer.files`
+//: gives a name and bytes and no location, and the daemon opens files by path.
+//:
+//: Windows spells it `file:///C:/x/y`, which is a leading slash and forward slashes over a path that
+//: has neither, and a share is `file://server/share/x`. Percent-decoding is not optional: one space in
+//: a folder name and the path is wrong.
+function fileUrlToPath(s) {
+  if (!/^file:/i.test(s)) return (s[0] === '/' || /^[A-Za-z]:[\\/]/.test(s)) ? s : null;
+  let u;
+  try { u = new URL(s); } catch (e) { return null; }
+  let p;
+  try { p = decodeURIComponent(u.pathname); } catch (e) { return null; }
+  if (u.host && u.host !== 'localhost') return '\\\\' + u.host + p.replace(/\//g, '\\');
+  if (/^\/[A-Za-z]:/.test(p)) return p.slice(1).replace(/\//g, '\\');
+  return p;
+}
+function droppedPaths(dt) {
+  let raw = '';
+  try { raw = (dt && dt.getData('text/uri-list')) || ''; } catch (e) {}
+  if (!raw) { try { raw = (dt && dt.getData('text/plain')) || ''; } catch (e) {} }
+  const out = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t[0] === '#') continue;        // a uri-list may carry comments
+    const p = fileUrlToPath(t);
+    if (p && out.indexOf(p) < 0) out.push(p);
+  }
+  return out;
+}
+function carriesFiles(dt) {
+  if (!dt || !dt.types) return false;
+  const t = Array.prototype.slice.call(dt.types);
+  return t.indexOf('Files') >= 0 || t.indexOf('text/uri-list') >= 0;
+}
+
+// **Drag a file out of the rail and let go on the canvas**, or in from Finder or Explorer: it opens
+// where it was dropped. The drop point is in canvas coordinates, so it lands under the hand rather
+// than in the first free slot.
 cvScroll.addEventListener('dragover', (ev) => {
-  if (!dragFile) return;
+  if (!dragFile && !carriesFiles(ev.dataTransfer)) return;
   ev.preventDefault();
   try { ev.dataTransfer.dropEffect = 'copy'; } catch (e) {}
   cv.classList.add('dropping');
 });
 cvScroll.addEventListener('dragleave', (ev) => { if (ev.target === cvScroll) cv.classList.remove('dropping'); });
 cvScroll.addEventListener('drop', (ev) => {
-  const path = dragFile || (ev.dataTransfer && ev.dataTransfer.getData('text/plain'));
   cv.classList.remove('dropping');
-  if (!path) return;
-  ev.preventDefault();
-  const box = cvScroll.getBoundingClientRect();
-  // The board's coordinates start at the world's origin, not the scroller's (see "the world").
-  const at = { x: Math.round(ev.clientX - box.left + cvScroll.scrollLeft - originX - 60),
-               y: Math.round(ev.clientY - box.top + cvScroll.scrollTop - originY - 15) };
-  openViewer(path, current, at);
+  const paths = dragFile ? [dragFile] : droppedPaths(ev.dataTransfer);
   dragFile = null;
+  // **Take the drop even when there is nothing in it we can open.** Left to the browser, a file let go
+  // on a page it does not accept is *navigated to* — palmar replaced by a PDF, and the board with it.
+  if (!carriesFiles(ev.dataTransfer) && !paths.length) return;
+  ev.preventDefault();
+  if (!paths.length) { openDropped(ev.dataTransfer, at0(ev)); return; }
+  const at = at0(ev);
+  // Several at once land in a short cascade rather than exactly on top of one another.
+  paths.forEach((p, i) => openViewer(p, current, { x: at.x + i * GAP * 2, y: at.y + i * GAP * 2 }));
 });
+
+// The board's coordinates start at the world's origin, not the scroller's (see "the world").
+function at0(ev) {
+  const box = cvScroll.getBoundingClientRect();
+  return { x: Math.round(ev.clientX - box.left + cvScroll.scrollLeft - originX - 60),
+           y: Math.round(ev.clientY - box.top + cvScroll.scrollTop - originY - 15) };
+}
+
+//: **When the drop came without a location.** Which is Windows, every time: `text/uri-list` is not
+//: there and `dataTransfer.files` gives a name, a size, a modification time and the bytes — never a
+//: path. The bytes are what an upload wants, and an upload is not what this is: a viewer here is a
+//: window onto the file **on disk**, and text and Markdown save back to it. A copy in a temporary
+//: folder would look identical and quietly stop being the file you dropped.
+//:
+//: So palmar looks for it, by the three facts it was given, under the same roots everything else is
+//: floored by. **Only when exactly one file agrees on all three does it open** — two files sharing a
+//: name, a byte count and a modification time is not something to guess between, and opening the
+//: wrong one silently is worse than opening nothing.
+async function openDropped(dt, at) {
+  const files = dt && dt.files ? Array.prototype.slice.call(dt.files) : [];
+  if (!files.length) {
+    toast(['nothing in that drop palmar can open']);
+    return;
+  }
+  let i = 0;
+  // **Say that something is happening.** Finding a dropped file means sweeping disks, which takes as
+  // long as it takes — and until it finished, letting go of a file did nothing you could see (user,
+  // 2026-09-18). The canvas shows the busy cursor and the toast names the file being looked for; both
+  // are cleared by whatever the search turns out to say.
+  cv.classList.add('finding');
+  try {
+    for (const f of files) {
+      toast([{ spin: 1 }, 'looking for', { b: f.name }, '—',
+             { d: 'a dropped file carries no path, so palmar searches your drives' }]);
+      let hits = [];
+      try {
+        const r = await api('GET', '/api/files?name=' + encodeURIComponent(f.name));
+        hits = (r && r.files) || [];
+      } catch (e) {
+        toast(['could not look for ' + f.name + ' —', { d: String(e.message || e) }]);
+        return;
+      }
+      // Modification time to the second: a file system keeps it more coarsely than the browser reports it.
+      const same = hits.filter((h) => h.size === f.size &&
+                                      Math.abs(h.mtime * 1000 - f.lastModified) < 2000);
+      if (same.length === 1) {
+        openViewer(same[0].path, current, { x: at.x + i * GAP * 2, y: at.y + i * GAP * 2 });
+        toast([{ b: f.name }, '—', { d: shortPath(same[0].path) }]);
+        i++;
+      } else if (same.length > 1) {
+        toast([{ b: f.name }, 'is in ' + same.length + ' places and they are identical —',
+               { d: 'open it from the folder rail so palmar knows which' }]);
+      } else if (hits.length) {
+        // **Found the name and not the file.** Saying "not found" for this sent the search looking
+        // for a fault it did not have (2026-09-18). Size and time are what tell two files of a name
+        // apart, so when they disagree the numbers are the answer, not a guess at which was meant.
+        const h = hits[0];
+        toast([{ b: f.name }, 'is on disk but not the one that was dropped —',
+               { d: 'dropped ' + f.size + ' bytes at ' + new Date(f.lastModified).toLocaleString() +
+                    ' · found ' + h.size + ' at ' + new Date(h.mtime * 1000).toLocaleString() }]);
+      } else {
+        toast([{ b: f.name }, 'was not found on your drives —',
+               { d: 'a dropped file carries no path; open it from the folder rail, which reaches anywhere' }]);
+      }
+    }
+  } finally {
+    cv.classList.remove('finding');
+  }
+}
 
 // After the board arrives: every viewer it names comes back, on the canvas it was on.
 function restoreViewers() {
@@ -2544,15 +2700,25 @@ function shove(p, r, dir) {
     { d: 'l', x: L, y: r.y, by: Math.abs(L - r.x) },
     { d: 't', x: r.x, y: T, by: Math.abs(T - r.y) },
   ].filter((w) => isFinite(w.x) && isFinite(w.y));
-  // **Keep going the way it was already going.** A row of windows slides over as a row instead of
-  // scattering, and every step of a cascade then leads away from the window that started it — which is
-  // what makes it stop. Re-choosing the nearest way at each hop lets two windows trade places forever.
-  const same = dir && ways.find((w) => w.d === dir);
-  if (same && same.x >= 0 && same.y >= 0) return same;
   // The canvas grows right and down without limit but is pinned at 0 on the other two sides, so left and
   // up can run out of room; right and down never do, so there is always a way out. Ties go to the two
   // directions the canvas grows in, which is why those are first in the list.
-  return ways.filter((w) => w.x >= 0 && w.y >= 0).reduce((m, w) => (w.by < m.by ? w : m));
+  const open = ways.filter((w) => w.x >= 0 && w.y >= 0);
+  const best = open.reduce((m, w) => (w.by < m.by ? w : m));
+  // **Keep going the way it was already going — when it is barely further.** A row of windows slides
+  // over as a row instead of scattering, and every step of a cascade leads away from the window that
+  // started it, which is what makes it stop. That rule came in because a neighbour *a few pixels*
+  // closer to the bottom than to the right went under a window that had grown sideways, breaking the
+  // row that the gesture meant to keep.
+  //
+  // **A few pixels is the whole of it, and it was taken as any number at all.** Two grouped windows
+  // side by side, and growing the left one downward left three pixels of shared column with the one
+  // beside it — three pixels out to the right, or four hundred and sixteen down past the bottom it
+  // had just grown. It went down, every time, and each further resize sent it down again (user,
+  // 2026-09-18, measured: b moved from y=200 to y=616). So the preference wins a tie or near enough
+  // to one, and never a landslide.
+  const same = dir && open.find((w) => w.d === dir);
+  return (same && same.by - best.by <= GAP) ? same : best;
 }
 
 // Resolve every overlap on one canvas while holding `anchorId` still — the window the hand just placed is
@@ -2740,6 +2906,19 @@ function sendSeen(id) {
 }
 
 let prevScroll = null;
+//: **What a maximised window fills is the viewport, and nothing it sits inside measures that.** The
+//: CSS said `calc(100% - 20px)`, which worked while tiles were children of the scroller; they live in
+//: `.cv-world` now, which is 0x0 on purpose because it is only an origin — so 100% was 0 and pressing
+//: expand turned the window into a dot (user, 2026-09-18). The view is scrolled to the pad's corner
+//: first, so the visible region starts at pad zero; a tile inside `.cv-world` renders at
+//: `origin + left`, which is why the margin has the origin taken off it.
+const MAX_PAD = 10;
+function maxBox(tile) {
+  tile.el.style.setProperty('--max-l', (MAX_PAD - originX) + 'px');
+  tile.el.style.setProperty('--max-t', (MAX_PAD - originY) + 'px');
+  tile.el.style.setProperty('--max-w', (cvScroll.clientWidth - MAX_PAD * 2) + 'px');
+  tile.el.style.setProperty('--max-h', (cvScroll.clientHeight - MAX_PAD * 2) + 'px');
+}
 function setMax(tile, on) {
   for (const t of tiles.values()) t.el.classList.remove('max');
   const was = maxed; maxed = null;
@@ -2748,6 +2927,7 @@ function setMax(tile, on) {
     prevScroll = { l: cvScroll.scrollLeft, t: cvScroll.scrollTop };
     cvScroll.scrollTo(0, 0);
     tile.el.classList.add('max');
+    maxBox(tile);                  // after the class, so the scrollbars are already gone from clientWidth
     maxed = tile;
     focusTile(tile.id, { user: true });
   } else if (prevScroll) {
@@ -2787,7 +2967,7 @@ addEventListener('resize', () => {
   // When the window narrows, the current rail widths can push the canvas below its minimum — clamp again here.
   // **Fix only the widths and do the cleanup once below** — using setRail would repaint the minimap three times.
   railSync('l'); railSync('r');
-  if (maxed) maxed.refit(); renderMinimap(); refreshOff();
+  if (maxed) { maxBox(maxed); maxed.refit(); } renderMinimap(); refreshOff();
 });
 
 // ── rail width (#19) ───────────────────────────────────────
@@ -2845,7 +3025,7 @@ function railSync(side) {
 function setRail(side, px, save) {
   railPut(side, px);
   if (save !== false) saveRails();
-  if (maxed) maxed.refit();
+  if (maxed) { maxBox(maxed); maxed.refit(); }
   renderMinimap();
   refreshOff();
 }
@@ -2871,7 +3051,7 @@ function applyFold(side) {
   const fold = $('#fold-' + side), open = $('#open-' + side);
   if (open) open.hidden = !folded;
   if (fold) fold.setAttribute('aria-expanded', String(!folded));
-  if (maxed) maxed.refit();
+  if (maxed) { maxBox(maxed); maxed.refit(); }
   renderMinimap();
   refreshOff();
 }
@@ -2996,6 +3176,23 @@ cvPad = el('div', 'cv-pad');
 cvWorld = el('div', 'cv-world');
 cvScroll.appendChild(cvPad);
 cvScroll.appendChild(cvWorld);
+
+//: **Make the terminal measure a character again.** It caches the cell size and re-measures only
+//: when a font option *changes* — the options service fires on `rawOptions[k] !== v`, so writing the
+//: same value back is nothing at all. When the cell changes underneath it for any other reason — the
+//: font arriving after boot gave up waiting for it, a renderer handing over — the cache is stale and
+//: every `fit()` after that divides the box by a number that is no longer true. A hair up and back
+//: is two real changes, so it measures twice and settles on what is actually there, and the option
+//: ends where it began.
+//: When a pane looks itself over after opening — see `watchFit`. Four reads, then it stops.
+const FIT_CHECKS = [250, 900, 2500, 6000];
+function remeasure(term) {
+  try {
+    const f = term.options.fontSize;
+    term.options.fontSize = f + 0.01;
+    term.options.fontSize = f;
+  } catch (e) {}
+}
 
 //: The room the windows occupy, floored at the viewport — the same number the minimap scales to.
 function contentExtent() {
@@ -3758,6 +3955,17 @@ setInterval(() => {
     it._ago.nodeValue = agoText(id);
     const s = sessions.get(id);
     if (s && it._msg) it._msg.textContent = msgText(s);   // makes "quiet 6m" run without rebuilding the list
+  }
+  // **And the net under `watchFit`.** That one runs for six seconds after a pane opens, which is
+  // where the cell has been seen to change under a fit — but a pane lives much longer than that, and
+  // a terminal standing taller than its box has its prompt somewhere you cannot scroll to. Two
+  // numbers per visible pane on a clock that was already running, and only a pane that is actually
+  // wrong costs anything after that.
+  for (const t of tiles.values()) {
+    if (t.closed || !t.visible() || !t.overflows || !t.overflows()) continue;
+    remeasure(t.term);
+    t.fitted = false;
+    t.refit();
   }
 }, 10000);
 
@@ -4714,6 +4922,8 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // switchCanvas because the frames are drawn into the scroller rather than into a
                   // canvas, so what happens to them on a switch is a thing a test has to be able to ask.
                   removeCanvas, watchInput, newTerminal, newCanvas, switchCanvas, openViewer, viewerId, toast,
+                  // Dropping a file in from Finder or Explorer: the path parsing is the part with edges.
+                  fileUrlToPath, droppedPaths,
                   // Auto-tidy only runs on a pane disappearing, and that moment is hard to create from outside.
                   // Expose **the same function** the button calls, unchanged.
                   // paintTidy with it: the button's enabled state is what a person actually sees,
@@ -5153,4 +5363,15 @@ const fontWait = document.fonts && document.fonts.load
   ? Promise.race([document.fonts.load(FONT_PX + 'px "JetBrains Mono"').catch(() => null), new Promise((r) => setTimeout(r, 1500))])
   : Promise.resolve();
 fontWait.then(boot, boot);
+// **And if it turns up after that, everything measured with the wrong cell.** The race above gives
+// up at 1.5s and boots on the fallback face, which is right — a page that never opens is worse than
+// one with the wrong column count. But nothing used to happen when the real font then arrived: every
+// pane kept the row count it had worked out from a cell of a different size, and a terminal standing
+// taller than its box has its bottom rows clipped with nowhere to scroll (user, 2026-09-18). This
+// costs nothing when the font was already there — `ready` has resolved and every fit is a no-op.
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => {
+    for (const t of tiles.values()) if (t.visible()) { remeasure(t.term); t.refit(); }
+  }).catch(() => {});
+}
 })();

@@ -765,6 +765,24 @@ body.ui-mono { --ui: var(--mono); }
 .cv-scroll::-webkit-scrollbar-thumb:hover { background: var(--ink-3); background-clip: padding-box; }
 .cv-scroll::-webkit-scrollbar-thumb:active { background: var(--accent); background-clip: padding-box; }
 .cv.has-max .cv-scroll { overflow: hidden; }
+/* Looking for a dropped file means sweeping disks, which takes as long as it takes. The cursor says
+   so — on everything, because the hand is somewhere over a window as often as over the floor.
+   **`wait`, not `progress`**: progress is the pointer *with* a busy mark beside it, which Windows
+   still draws as an hourglass on the older cursor sets, and the ring going round is the one people
+   read as "it is working" (user, 2026-09-18). */
+.cv.finding, .cv.finding * { cursor: wait !important; }
+/* And palmar draws one of its own, so the sign is the same on every machine whatever the cursor set
+   is. currentColor, so it belongs to the toast's text rather than to a palette entry of its own. */
+.toast .spin {
+  display: inline-block; width: 11px; height: 11px; vertical-align: -1px;
+  border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%;
+  animation: palmar-spin .8s linear infinite;
+}
+@keyframes palmar-spin { to { transform: rotate(360deg); } }
+/* Standing still it still has to read as "waiting", so it stays a ring and stops going round. */
+@media (prefers-reduced-motion: reduce) {
+  .toast .spin { animation: none; border-top-color: currentColor; opacity: .45; }
+}
 /* The cursor says first that empty space can be grabbed and dragged. Over a tile, the tile's cursor wins. */
 .cv-scroll { cursor: grab; }
 .cv-scroll.panning { cursor: grabbing; user-select: none; }
@@ -896,7 +914,16 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
 /* A tile from another canvas. **The session and the websocket are both alive; it is only off the screen** —
    principle 2 ("sessions outlive the UI"). */
 .tile.other { display: none; }
-.tile.max { left: 10px !important; top: 10px !important; width: calc(100% - 20px) !important; height: calc(100% - 20px) !important; z-index: 1000 !important; }
+/* **Not `100%` any more.** The tiles moved inside `.cv-world` when the canvas got room around it,
+   and that layer is 0x0 on purpose — it is only an origin. `calc(100% - 20px)` against a zero-width
+   parent is -20px, clamped to nothing, so pressing expand turned the window into a dot (user,
+   2026-09-18). What a maximised window should fill is the **viewport**, which no ancestor of it
+   measures, so `maxBox()` works the four numbers out and writes them here. */
+.tile.max {
+  left: var(--max-l, 10px) !important; top: var(--max-t, 10px) !important;
+  width: var(--max-w, 200px) !important; height: var(--max-h, 200px) !important;
+  z-index: 1000 !important;
+}
 .tb {
   display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px 0 11px;
   background: var(--tile-bar); border-bottom: 1px solid var(--line); cursor: grab; user-select: none; flex: none;

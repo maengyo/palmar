@@ -243,6 +243,359 @@ class Startup(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), str(D.PROTOCOL))
 
 
+class TheShimOnWindows(unittest.TestCase):
+    """What palmar puts in front of `claude` so the hooks come back — and why none of it reached
+    Windows (#30). The lights there do not move, and this is the half of the reason that is not a
+    missing feature but two plain mistakes."""
+
+    def test_the_path_separator_is_the_platforms(self):
+        """It was a colon, written in. On Windows that made the first entry
+        `C:\\Users\\…\\.palmar\\bin;C:\\Windows\\system32` — one path, and not one that exists — so
+        `.palmar\\bin` was **never on PATH** and nothing in it could be found."""
+        got = D.front_of_path(r"C:\Users\x\.palmar\bin", r"C:\Windows\system32;C:\Windows", sep=";")
+        self.assertEqual(got.split(";")[0], r"C:\Users\x\.palmar\bin", "the shim is not first: " + got)
+        self.assertEqual(got.split(";")[1:], [r"C:\Windows\system32", r"C:\Windows"],
+                         "it did not leave the rest of PATH alone: " + got)
+
+    def test_posix_is_left_exactly_as_it_was(self):
+        """The fix is `os.pathsep`, which on POSIX is the colon that was written in — so the one
+        platform where this all works today must come out character for character the same."""
+        self.assertEqual(D.front_of_path("/h/.palmar/bin", "/usr/local/bin:/usr/bin"),
+                         "/h/.palmar/bin:/usr/local/bin:/usr/bin")
+        self.assertEqual(D.front_of_path("/h/.palmar/bin", None),
+                         "/h/.palmar/bin:" + D.DEFAULT_PATH[0])
+
+    def test_the_sh_shim_is_not_written_where_it_cannot_run(self):
+        """`~/.palmar/bin/claude` is a `#!/bin/sh` script under an extension-less name. Windows has no
+        shebang and PATHEXT does not list "", so it is a file that can never be run — and once the
+        separator above is fixed it would be sitting first on PATH."""
+        self.assertTrue(D.SHIM.startswith("#!/bin/sh"), "the shim stopped being a shell script")
+        src = pathlib.Path(D.__file__).read_text(encoding="utf-8")
+        self.assertIn('if POSIX_PERMS:\n        write_private(BIN_DIR / "claude"', src,
+                      "the sh shim is written on every platform again")
+
+    def test_the_preamble_cannot_find_itself(self):
+        """The POSIX shim keeps out of its own way by taking its directory out of PATH as a fixed
+        string, which went wrong once — the `.` in `.palmar` read as a regex (#12) — and exec'd itself
+        forever. The PowerShell side asks for a **type** instead, which cannot go wrong that way."""
+        body = D.PWSH_PREAMBLE
+        self.assertIn("-CommandType Application", body, "the function would find itself")
+        self.assertIn("--settings", body, "it does not attach the hooks, which is its whole job")
+        self.assertIn("@args", body, "it drops the arguments the person typed")
+        self.assertIn("$env:PALMAR_PANE", body, "it does not know which pane it is in")
+        self.assertNotIn("#!/bin/sh", body)
+
+    def test_the_preamble_knows_where_the_pane_files_are(self):
+        """The run directory is written in when the file is made, rather than rebuilt from $HOME in
+        PowerShell — one place decides where palmar keeps things, and it is the daemon."""
+        rendered = D.PWSH_PREAMBLE.replace("{run}", "/tmp/h/.palmar/run")
+        self.assertIn("Join-Path '/tmp/h/.palmar/run'", rendered)
+        self.assertNotIn("{run}", rendered)
+
+    def test_the_prompt_says_where_the_pane_is(self):
+        """The two halves have to agree: the preamble writes a marker and the daemon reads one. If
+        anybody edits either spelling alone, this is what notices."""
+        body = D.PWSH_PREAMBLE
+        self.assertIn("palmar:cwd:", body, "the prompt does not say where the pane is")
+        self.assertIn(D.TITLE_CWD, body, "the preamble and the daemon disagree on the marker")
+        self.assertIn("$PWD.ProviderPath", body,
+                      "a PSDrive path would be sent where a folder is meant")
+        self.assertIn("$global:PalmarUserPrompt", body, "it replaced the user's prompt instead of wrapping it")
+        # The user's prompt is called first, so if it sets a title of its own ours is the one that lands.
+        self.assertLess(body.index("& $global:PalmarUserPrompt"), body.index("palmar:cwd:"),
+                        "palmar's title is written before the user's prompt has had its turn")
+        # Beside the prompt, not inside it: a zero-width sequence in the returned string is the
+        # mistake that breaks line wrapping in zsh when %{...%} is forgotten.
+        self.assertIn("[Console]::Write(", body, "the escape is going through the prompt string")
+
+    def test_the_profile_runs_and_the_policy_does_not_refuse(self):
+        """Three things the arguments have to get right at once. **The user's profile still runs** —
+        no `-NoProfile` — and because PowerShell loads it before `-Command`, palmar's part comes
+        after it, which is the whole rc-wrapping dance POSIX needs. **The window stays** (`-NoExit`).
+        And it is not `-File`: running a `.ps1` goes through the execution policy, `Restricted` by
+        default on a client, which would refuse it — text made into a script block is not a script
+        file, so the policy has nothing to say."""
+        argv = D.pwsh_argv(["C:/pwsh.exe", "-NoLogo"], "C:/Users/x/.palmar/pwsh/preamble.ps1")
+        self.assertEqual(argv[:2], ["C:/pwsh.exe", "-NoLogo"], "it lost the shell's own arguments")
+        self.assertIn("-NoExit", argv, "the pane would close as soon as the preamble finished")
+        self.assertIn("-Command", argv)
+        self.assertNotIn("-File", argv, "a .ps1 file is what the execution policy refuses")
+        self.assertNotIn("-NoProfile", argv, "it would be skipping the user's own profile")
+        self.assertIn("scriptblock]::Create", argv[-1], "it is dot-sourcing the path after all")
+        self.assertTrue(argv[-1].startswith(". "), "not dot-sourced — the function would not survive")
+
+    def test_an_apostrophe_in_the_path_does_not_end_the_string(self):
+        """A person's name is enough to put one there. In a single-quoted PowerShell string it is
+        escaped by doubling, and both places that write a path into one have to do it."""
+        argv = D.pwsh_argv(["pwsh"], "C:/Users/O'Brien/.palmar/pwsh/preamble.ps1")
+        self.assertIn("C:/Users/O''Brien/", argv[-1], "the quote was left to close the string: " + argv[-1])
+        self.assertEqual(argv[-1].count("'") % 2, 0, "unbalanced quotes: " + argv[-1])
+
+
+class TheFolderAPaneIsIn(unittest.TestCase):
+    """`to_json` handed out the folder a pane was **created** with, and nothing ever changed it — so
+    the left rail named the opening folder for the life of the session. On every platform: measured
+    2026-09-17 on a Mac, a `cd` into a subfolder and eleven seconds later the rail still said the
+    folder it started in. The live value was being read every ten seconds for the restore snapshot
+    and thrown away."""
+
+    def pane(self, cwd="/start"):
+        class F:
+            pass
+        f = F()
+        f.cwd = cwd
+        f.cwd_told = False
+        f.pid = os.getpid()
+        f.title = ""
+        f.title_hits = []
+        f.osc_carry = b""
+        # _scan_title reaches for it through self, and this stand-in is not a Session.
+        f._title_cwd = lambda t: D.Session._title_cwd(f, t)
+        f._title_tick = lambda: None
+        f._arm_settle = lambda: None
+        return f
+
+    def test_the_marker_moves_the_pane(self):
+        """The Windows route. PowerShell's `Set-Location` never touches the process working
+        directory, so `cwd_of` answers with where the shell started however correctly it reads — only
+        a shell that says so can be followed, and palmar's preamble makes the prompt say so."""
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            took = D.Session._title_cwd(f, D.TITLE_CWD + tempfile.gettempdir())
+        self.assertTrue(took, "the marker was not recognised as palmar's own")
+        self.assertEqual(f.cwd, tempfile.gettempdir())
+
+    def test_a_folder_that_is_not_there_is_not_believed(self):
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            took = D.Session._title_cwd(f, D.TITLE_CWD + "/no/such/place/at/all")
+        self.assertTrue(took, "it is still palmar's marker, and still not a title spin")
+        self.assertEqual(f.cwd, "/start", "it believed a folder that does not exist")
+
+    def test_once_a_pane_has_said_where_it_is_we_stop_reading_it(self):
+        """**The two were fighting.** The prompt writes the right folder into the title, and ten
+        seconds later the tick read the process working directory and put the folder the pane
+        *opened* in back — because PowerShell's `Set-Location` never touches it. From the outside it
+        looked like running an agent sent the rail home and kept it there (user, 2026-09-18). It was
+        the tick, not the agent. The one who knows wins; the one who reads from outside stops."""
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._title_cwd(f, D.TITLE_CWD + tempfile.gettempdir())
+            self.assertTrue(f.cwd_told)
+            D.Session.sample_cwd(f)           # the ten-second tick, reading this very process
+        self.assertEqual(f.cwd, tempfile.gettempdir(),
+                         "the tick put the folder the pane opened in back")
+
+    def test_a_pane_that_has_never_said_is_still_read(self):
+        """The other three quarters of the world: a shell that says nothing, where reading the
+        process is the only way to follow a cd — and it works there."""
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session.sample_cwd(f)
+        self.assertEqual(os.path.realpath(f.cwd), os.path.realpath(os.getcwd()),
+                         "a silent pane stopped being read")
+
+    def test_an_ordinary_title_is_left_alone(self):
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            self.assertFalse(D.Session._title_cwd(f, "~/work — claude"))
+        self.assertEqual(f.cwd, "/start")
+
+    def test_the_marker_is_not_a_heartbeat(self):
+        """It changes when the folder does, once, which is nothing like an agent working. Counting it
+        as a spin would put "working" in the lights for a `cd`."""
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._scan_title(f, b"\x1b]2;" + (D.TITLE_CWD + tempfile.gettempdir()).encode() + b"\x07")
+        self.assertEqual(f.title_hits, [], "palmar's own marker was counted as the agent working")
+        self.assertEqual(f.cwd, tempfile.gettempdir())
+
+
+class WhenTheShellSaysItOutright(unittest.TestCase):
+    """OSC 133. Every other layer under the hooks is inference: the title spinning is a heartbeat we
+    hope means work, and the output rule — printing on and on is working, printing then stopping is
+    done — calls a long quiet think finished and a chatty log busy. A shell that emits these marks is
+    telling us, and there is nothing left to guess."""
+
+    def pane(self):
+        class F:
+            pass
+        f = F()
+        f.derived, f.status = "idle", "unknown"
+        f.shell_marks, f.cmd_start = False, None
+        f.last_out = 0.0
+        f.title, f.title_hits, f.title_spun, f.osc_carry = "", [], False, b""
+        f.cwd, f.pid = "/start", os.getpid()
+        f._title_cwd = lambda t: D.Session._title_cwd(f, t)
+        f._shell_mark = lambda m: D.Session._shell_mark(f, m)
+        f._title_tick = lambda: D.Session._title_tick(f)
+        f._title_busy = lambda: D.Session._title_busy(f)
+        f._arm_settle = lambda: None
+        return f
+
+    def mark(self, f, *marks):
+        with mock.patch.object(D.registry, "changed"):
+            for m in marks:
+                D.Session._shell_mark(f, m)
+        return f.derived
+
+    def test_a_command_starting_is_working(self):
+        self.assertEqual(self.mark(self.pane(), "C"), "working")
+
+    def test_a_command_that_said_something_is_done(self):
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._shell_mark(f, "C")
+            f.last_out = time.monotonic()      # it printed
+            D.Session._shell_mark(f, "D")
+        self.assertEqual(f.derived, "done")
+
+    def test_an_empty_line_and_an_enter_is_not_finished_work(self):
+        """`C` then `D` with nothing printed between is a person pressing Enter on an empty line.
+        Lighting "finished" for that is a light nobody asked for."""
+        self.assertEqual(self.mark(self.pane(), "C", "D"), "idle")
+
+    def test_the_prompt_appearing_does_not_erase_what_just_finished(self):
+        """**The bug the user saw first.** The preamble writes `D` and `A` in one go, and `A` used to
+        set idle — so "finished" was erased in the same breath it was set and the done light could
+        never be seen at all (2026-09-18). A prompt appearing is not a state of its own; the command
+        ending is, and `D` is that."""
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._shell_mark(f, "C")
+            f.last_out = time.monotonic()
+            D.Session._shell_mark(f, "D")
+            self.assertEqual(f.derived, "done")
+            D.Session._shell_mark(f, "A")
+            D.Session._shell_mark(f, "B")
+        self.assertEqual(f.derived, "done", "the prompt wrote over the light the command had earned")
+
+    def test_a_command_that_said_nothing_ends_at_idle(self):
+        f = self.pane()
+        f.derived = "working"
+        self.assertEqual(self.mark(f, "D"), "idle")
+
+    def test_a_prompt_redrawn_mid_command_means_nothing(self):
+        """Ctrl-L, a window resize, a progress line that repaints — the prompt can be written again
+        while a command is still running, and that is not the command ending."""
+        f = self.pane()
+        self.assertEqual(self.mark(f, "C", "A"), "working")
+        self.assertIsNotNone(f.cmd_start, "the mid-command mark forgot a command was running")
+
+    def test_at_a_prompt_the_shell_has_the_last_word(self):
+        """Nothing may paint green over a `D`. The shell has said there is no command running, and a
+        title still twitching afterwards is a leftover, not work."""
+        f = self.pane()
+        self.mark(f, "C", "D")
+        f.title_hits = [time.monotonic() - g for g in (2.0, 1.0, 0.0)]   # a spinner, on any other day
+        f.title_spun = True
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._title_tick(f)
+        self.assertEqual(f.derived, "idle", "the title layer painted over what the shell said")
+
+    def test_while_a_command_runs_the_layers_that_watch_the_agent_still_speak(self):
+        """**The regression that mattered.** Standing them down for good the moment a shell spoke was
+        wrong in exactly the case palmar is for: the shell knows *a command is running*, and an agent
+        is one long command. Running aelix, the light went green and stayed green for the whole
+        session, because the one layer that watches **the agent** rather than the shell had been
+        switched off (user, 2026-09-18). Between C and D they are all there is."""
+        f = self.pane()
+        self.mark(f, "C")
+        f.title_spun = True
+        f.title_hits = [time.monotonic() - g for g in (2.0, 1.0, 0.0)]   # the agent, spinning
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._title_tick(f)
+        self.assertEqual(f.derived, "working")
+        f.title_hits = []                                                # and it stopped — it wants you
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._title_tick(f)
+        self.assertEqual(f.derived, "done",
+                         "the agent stopped and nothing could say so while its command was running")
+
+    def test_hooks_still_win(self):
+        """This only ever writes `derived`. A pane the hooks speak for reads its status from them."""
+        f = self.pane()
+        f.status = "waiting"
+        self.mark(f, "C")
+        self.assertEqual(D.Session.eff_status(f), "waiting")
+
+    def test_the_marks_are_found_in_the_stream_and_are_not_titles(self):
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._scan_title(f, b"hello\x1b]133;C\x07world\x1b]0;vim\x07")
+        self.assertEqual(f.derived, "working", "the mark was not seen in the stream")
+        self.assertEqual(f.title, "vim", "the title beside it was lost")
+        self.assertEqual(len(f.title_hits), 1, "the mark was counted as a title change")
+
+    def test_a_mark_split_across_two_chunks_is_still_one_mark(self):
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._scan_title(f, b"\x1b]133")
+            self.assertEqual(f.derived, "idle", "half a sequence was acted on")
+            D.Session._scan_title(f, b";C\x07")
+        self.assertEqual(f.derived, "working", "the carry lost the mark at the chunk boundary")
+
+
+class WhereADroppedFileIsLookedFor(unittest.TestCase):
+    """A page is never told where a dropped file is, so palmar goes and finds it by the name, size and
+    time that *did* come over. Where it looks is the whole question: too narrow and the same file
+    opens from the rail and not from a drop, too wide and a search never ends."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="palmar-tops-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def make(self, *parts, text="x\n"):
+        p = os.path.join(self.tmp, *parts)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return p
+
+    def test_a_mounted_volume_is_a_place_to_look(self):
+        """A home on C: and the file on D: is the ordinary shape of a Windows machine — and the rail
+        already walks there and opens it, so a drop that could not was the same inconsistency one
+        level out (user, 2026-09-18)."""
+        os.makedirs(os.path.join(self.tmp, "Elements", "docs"))
+        os.makedirs(os.path.join(self.tmp, ".hidden"))
+        with open(os.path.join(self.tmp, "a file"), "w") as fh:
+            fh.write("not a volume")
+        got = D.volume_tops(platform="darwin", bases=[self.tmp])
+        self.assertEqual(got, [os.path.join(self.tmp, "Elements")],
+                         "volumes came out as %r" % (got,))
+
+    def test_a_network_drive_is_not_swept(self):
+        """The kind is asked of the system, not guessed from the letter: a mapped network drive looks
+        exactly like a local one, and sweeping one is how a search stops being a search. Nothing to
+        ask means nothing to sweep, which is why a machine that is not Windows gets an empty list from
+        the Windows branch rather than a guess."""
+        self.assertEqual(D.volume_tops(platform="win32"), [],
+                         "it invented drive letters on a machine that has none")
+
+    def test_it_finds_the_file_on_the_other_drive(self):
+        import asyncio
+        want = self.make("Elements", "papers", "on the other drive.pdf")
+        with mock.patch.object(D, "roots", lambda: [pathlib.Path(self.tmp, "home")]), \
+             mock.patch.object(D, "volume_tops", lambda: [os.path.join(self.tmp, "Elements")]):
+            os.makedirs(os.path.join(self.tmp, "home"), exist_ok=True)
+            got = asyncio.run(D.find_files("on the other drive.pdf"))
+        self.assertEqual([h["path"] for h in got], [want], "it did not reach the other drive: %r" % (got,))
+
+    def test_a_wide_home_does_not_starve_the_drive_the_file_is_on(self):
+        """Each top gets its own budget of entries. With one shared between them, a home big enough to
+        spend it is a home that hides every other drive."""
+        for i in range(40):
+            self.make("home", "deep%d" % i, "filler.txt")
+        want = self.make("Elements", "the one.pdf")
+        with mock.patch.object(D, "roots", lambda: [pathlib.Path(self.tmp, "home")]), \
+             mock.patch.object(D, "volume_tops", lambda: [os.path.join(self.tmp, "Elements")]), \
+             mock.patch.object(D, "FIND_FILE_NODES", 8):     # a budget the home alone would eat
+            import asyncio
+            got = asyncio.run(D.find_files("the one.pdf"))
+        self.assertEqual([h["path"] for h in got], [want],
+                         "the home ate the whole search: %r" % (got,))
+
+
 URL = "http://127.0.0.1:8801/?k=abc123"
 
 

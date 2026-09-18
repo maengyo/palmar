@@ -11,6 +11,7 @@ in software, so the drag trail in #17 is invisible to this file by construction,
 from __future__ import annotations
 
 import json
+import urllib.parse
 import os
 import sys
 import shutil
@@ -859,6 +860,91 @@ class TheWorldAroundTheWindows(unittest.TestCase):
         self.assertGreater(r["pulled"][0], r["tight"][0], "panning past the end made no room: " + repr(r))
         self.assertGreater(r["pulled"][1], r["tight"][1], "panning past the end made no room: " + repr(r))
         self.assertEqual(r["after"], r["tight"], "tidy did not give the room back: " + repr(r))
+
+    def test_expand_fills_the_screen_and_not_a_dot(self):
+        """**A maximised window fills the viewport, and nothing it sits inside measures that.** The CSS
+        said `calc(100% - 20px)`, which was right while tiles were children of the scroller; they live
+        in `.cv-world` now, and that layer is 0x0 on purpose because it is only an origin. 100% of
+        zero is zero, so pressing expand turned the window into a dot (user, 2026-09-18). The second
+        half of this test is the one a naive fix fails: panned into the slack the origin is not zero,
+        and a tile's `left` is measured from it."""
+        for where in ("at the corner", "panned into the slack"):
+            self.js("put('far', 40, 40, 520, 360); return 1;")
+            if where != "at the corner":
+                self.js("P.panTo(-400, -300); return 1;")
+                time.sleep(0.4)
+            r = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+              t.xpEl.click(); return 1;})()""")
+            time.sleep(1.0)
+            got = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+              const q=t.el.getBoundingClientRect(), S=document.getElementById('cv-scroll');
+              const b=S.getBoundingClientRect();
+              return {w:Math.round(q.width), h:Math.round(q.height),
+                      l:Math.round(q.left-b.left), t:Math.round(q.top-b.top),
+                      vw:S.clientWidth, vh:S.clientHeight};})()""")
+            self.b.ev("(()=>{[...window.palmar.tiles.values()][0].xpEl.click(); return 1;})()")
+            time.sleep(0.6)
+            self.assertEqual([got["w"], got["h"]], [got["vw"] - 20, got["vh"] - 20],
+                             "expanded window does not fill the screen, %s: %r" % (where, got))
+            self.assertEqual([got["l"], got["t"]], [10, 10],
+                             "expanded window is not at the screen's corner, %s: %r" % (where, got))
+
+    def test_a_terminal_that_outgrew_its_box_climbs_back_into_it(self):
+        """**The prompt was below the bottom of the pane with no way to scroll to it.** `fit()` divides
+        the box by the cell size xterm has cached, and xterm re-measures that only when a font option
+        *changes* — so when the cell changes for any other reason (the real font arriving after boot
+        gave up waiting 1.5s for it; the WebGL renderer settling on dimensions of its own, which
+        floors the cell to device pixels and so is a real change at Windows' 1.125 and none at 1),
+        every later fit divides by a number that is no longer true and agrees with itself.
+
+        Two guesses at *when* were both wrong: a boot-time `document.fonts.ready` sweep does not reach
+        a pane opened afterwards, and the check inside `refit` needs somebody to call `refit`. So this
+        does not test a cause or a moment. It breaks the state — the terminal ends up with more rows
+        than fit, which is all the user could ever see — and asks only that palmar climb back out of
+        it **with nobody calling anything.**"""
+        self.js("put('far', 40, 40, 520, 360); return 1;")
+        read = """(()=>{const t=[...window.palmar.tiles.values()][0];
+          const s=t.el.querySelector('.xterm-screen');
+          return {rows:t.term.rows, screen:Math.round(s.offsetHeight),
+                  box:Math.round(t.termEl.clientHeight)};})()"""
+        was = self.b.ev(read)
+        self.assertLessEqual(was["screen"], was["box"], "it did not start out fitting: %r" % (was,))
+        self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+          t.term.resize(t.term.cols, t.term.rows + 8); return 1;})()""")
+        time.sleep(0.4)
+        broke = self.b.ev(read)
+        self.assertGreater(broke["screen"], broke["box"],
+                           "it did not actually break — this test proves nothing: %r" % (broke,))
+        end = time.time() + 14
+        now = broke
+        while time.time() < end:
+            time.sleep(1.0)
+            now = self.b.ev(read)
+            if now["screen"] <= now["box"]:
+                break
+        self.assertLessEqual(now["screen"], now["box"],
+                             "nobody noticed the prompt was off the bottom: %r" % (now,))
+
+    def test_writing_a_font_option_back_unchanged_measures_nothing(self):
+        """Why `remeasure` moves the value at all. This is xterm's rule, not ours, and the whole fix
+        above rests on it — if a future version starts firing on an identical write, the hair up and
+        back can go."""
+        r = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+          let fired = 0;
+          const off = t.term.onResize(() => fired++);
+          const before = t.term._core._renderService.dimensions.css.cell.height;
+          t.term._core._renderService.dimensions.css.cell.height = 13.67;
+          const f = t.term.options.fontSize;
+          t.term.options.fontSize = f;                       // the same value: nothing happens
+          const same = t.term._core._renderService.dimensions.css.cell.height;
+          t.term.options.fontSize = f + 0.01;
+          t.term.options.fontSize = f;                       // moved and back: it measures
+          const moved = t.term._core._renderService.dimensions.css.cell.height;
+          off.dispose();
+          return {before: before, afterSame: same, afterMoved: moved};})()""")
+        self.assertEqual(r["afterSame"], 13.67, "an identical write re-measured after all: %r" % (r,))
+        self.assertAlmostEqual(r["afterMoved"], r["before"], places=1,
+                               msg="moving the value and back did not re-measure: %r" % (r,))
 
     def test_the_world_does_not_shrink_while_the_page_is_open(self):
         """The slack you panned into does not vanish under you. It goes on a reload, not before."""
@@ -1725,6 +1811,12 @@ class Grouping(unittest.TestCase):
           return {x:r.left+r.width/2, y:r.top+r.height/2};})()""" % json.dumps(name))
         return box["x"], box["y"]
 
+    def grip(self, name):
+        g = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name===%s);
+          const r=t.el.querySelector('.grip').getBoundingClientRect();
+          return {x:r.left+r.width/2, y:r.top+r.height/2};})()""" % json.dumps(name))
+        return g["x"], g["y"]
+
     def send(self, **kw):
         self.b.ws.call("Input.dispatchMouseEvent", dict(button="left", **kw))
 
@@ -2443,6 +2535,32 @@ class Grouping(unittest.TestCase):
             .sort((a, b) => a[0] - b[0]);""")
         self.assertEqual(r, [[-210, -160], [42, -160]],
                          "the tint did not go where its windows went: %r" % (r,))
+
+    def test_growing_one_member_does_not_send_its_neighbour_down_the_diagonal(self):
+        """**The way it grew wins a tie, not a landslide.** A resize tells push-aside which way the
+        window grew, so that a neighbour a few pixels closer to the bottom than to the right does not
+        go *under* a window that grew sideways — the row broken by the gesture meant to keep it. That
+        preference was then taken as any distance at all: two grouped windows side by side, grow the
+        left one **downward**, and three pixels of shared column become four hundred and sixteen down
+        past the bottom it had just grown. Every further resize sent it down again (user, 2026-09-18,
+        measured: 200 to 616). Three pixels out to the right was always there."""
+        self.bench("""put('g1',200,200,300,200); put('g2',512,200,300,200);
+                      P.joinGroups(by('g1').id, by('g2').id); return 1;""")
+        rowY = self.bench("return at('g2')[1];")
+        for grew, wide, tall in (("sideways", 120, 4), ("downward", 3, 200), ("downward again", 3, 150)):
+            x, y = self.grip("g1")
+            self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+            for i in (1, 2, 3, 4):
+                self.send(type="mouseMoved", x=x + wide * i / 4, y=y + tall * i / 4, buttons=1)
+                time.sleep(0.03)
+            self.send(type="mouseReleased", x=x + wide, y=y + tall, clickCount=1, buttons=0)
+            time.sleep(1.2)
+            now = self.bench("""const A=L[by('g1').id], B=L[by('g2').id];
+              return {a:[A.x,A.y,A.w,A.h], b:[B.x,B.y,B.w,B.h]};""")
+            self.assertEqual(now["b"][1], rowY,
+                             "growing %s took the neighbour off the row: %r" % (grew, now))
+            self.assertGreaterEqual(now["b"][0], now["a"][0] + now["a"][2],
+                                    "the neighbour ended up on top of it: %r" % (now,))
 
     def test_taking_one_out_of_the_middle_closes_the_hole(self):
         """Closing the middle window closed the group up; taking it out with Alt-drag left its hole
@@ -3565,6 +3683,158 @@ class ViewerModes(unittest.TestCase):
             if got:
                 return path
         self.fail("the viewer never loaded " + name)
+
+    def test_a_file_url_becomes_a_path_on_either_platform(self):
+        """Finder and Explorer hand a drag over as `text/uri-list`, which is the only part of a dropped
+        file a page may see as a location at all — `dataTransfer.files` gives a name and bytes and no
+        path, and the daemon opens files by path. Windows spells it `file:///C:/x`, a leading slash and
+        forward slashes over a path that has neither, and a share is `file://server/share/x`.
+        Percent-decoding is not optional: one space in a folder name and the path is wrong."""
+        for uri, want in [
+            ("file:///Users/x/a%20file.pdf", "/Users/x/a file.pdf"),
+            ("file:///C:/Users/x/note.csv", "C:\\Users\\x\\note.csv"),
+            ("file://server/share/report.pdf", "\\\\server\\share\\report.pdf"),
+            ("file:///tmp/%ED%95%9C%EA%B8%80.txt", "/tmp/한글.txt"),
+            ("https://example.com/x.pdf", None),          # not a file: nothing to open
+            ("/plain/path.txt", "/plain/path.txt"),
+        ]:
+            got = self.b.ev("window.palmar.fileUrlToPath(%s)" % json.dumps(uri))
+            self.assertEqual(got, want, "%s came out as %r" % (uri, got))
+        two = self.b.ev("""(()=>{const dt={types:['text/uri-list'],
+          getData:(t)=>t==='text/uri-list'?'file:///tmp/one.txt\\r\\n# comment\\r\\nfile:///tmp/two.pdf\\r\\n':''};
+          return window.palmar.droppedPaths(dt);})()""")
+        self.assertEqual(two, ["/tmp/one.txt", "/tmp/two.pdf"], "a uri-list of two: %r" % (two,))
+
+    def test_a_file_dragged_in_from_the_desktop_opens_in_a_viewer(self):
+        """Asked for 2026-09-18. **And the page must take the drop even when it cannot use it** — left
+        to the browser, a file let go on a page that does not accept it is *navigated to*: palmar
+        replaced by the PDF, and the board with it."""
+        path = self.write("dragged in.csv", "a,b\n1,2\n")
+        uri = "file://" + urllib.parse.quote(path)
+        self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').forEach(v=>v.close()); 1")
+        r = self.b.ev("""(()=>{
+          const S=document.getElementById('cv-scroll'), b=S.getBoundingClientRect();
+          const dt=new DataTransfer(); dt.setData('text/uri-list', %s);
+          const at={clientX:b.left+300, clientY:b.top+200, dataTransfer:dt, bubbles:true, cancelable:true};
+          const over=new DragEvent('dragover', at); S.dispatchEvent(over);
+          const drop=new DragEvent('drop', at); S.dispatchEvent(drop);
+          return {over: over.defaultPrevented, drop: drop.defaultPrevented};})()""" % json.dumps(uri))
+        self.assertTrue(r["over"], "the canvas did not offer to take the file")
+        self.assertTrue(r["drop"], "the drop was left to the browser, which navigates away from palmar")
+        got = None
+        for _ in range(40):
+            time.sleep(0.2)
+            got = self.b.ev("""(()=>{const v=[...window.palmar.tiles.values()].find(t=>t.s.kind==='file');
+              return v ? {path:(window.palmar.layout()[v.id]||{}).path, mode:v.mode||null} : null;})()""")
+            if got and got["mode"]:
+                break
+        self.assertEqual(got and got["path"], path, "it did not open what was dropped: %r" % (got,))
+        self.assertEqual(got["mode"], "csv", "it opened, but not as the kind of file it is: %r" % (got,))
+        self.assertEqual(self.b.ev("location.pathname"), "/", "the page navigated away from palmar")
+
+    def test_a_drop_with_no_path_in_it_is_found_on_disk(self):
+        """**Windows, every time.** `text/uri-list` is not there and `dataTransfer.files` gives a name,
+        a size, a modification time and the bytes — never a location (user, 2026-09-18). The bytes are
+        what an upload wants, and an upload is not what this is: a viewer here is a window onto the
+        file **on disk**, and text and Markdown save back to it, so a copy in a temporary folder would
+        look identical and quietly stop being the file that was dropped. palmar goes and finds it by
+        the three facts it was given. The drop built here carries no uri-list at all."""
+        path = self.write("found by name.csv", "a,b\n1,2\n")
+        mtime = int(os.path.getmtime(path) * 1000)
+        self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').forEach(v=>v.close()); 1")
+        r = self.b.ev("""(()=>{
+          const S=document.getElementById('cv-scroll'), b=S.getBoundingClientRect();
+          const dt=new DataTransfer();
+          dt.items.add(new File([%s], %s, {type:'text/csv', lastModified: %d}));
+          const at={clientX:b.left+320, clientY:b.top+210, dataTransfer:dt, bubbles:true, cancelable:true};
+          S.dispatchEvent(new DragEvent('dragover', at));
+          const drop=new DragEvent('drop', at); S.dispatchEvent(drop);
+          return {types:[...dt.types], uri:dt.getData('text/uri-list'), taken:drop.defaultPrevented};})()"""
+          % (json.dumps("a,b\n1,2\n"), json.dumps("found by name.csv"), mtime))
+        self.assertEqual(r["uri"], "", "this drop was supposed to carry no path — it proves nothing")
+        self.assertTrue(r["taken"], "the drop was left to the browser, which navigates away")
+        # **Wait for the file that was dropped, not for any file window.** Asking for the first one
+        # open reads whatever a neighbouring test left behind (measured: 'text' from another file,
+        # only inside a full run).
+        got, seen = None, []
+        for _ in range(60):
+            time.sleep(0.2)
+            seen = self.b.ev("""(()=>[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file')
+              .map(v=>({path:(window.palmar.layout()[v.id]||{}).path, mode:v.mode||null})))()""")
+            got = next((v for v in seen if v["path"] and
+                        os.path.realpath(v["path"]) == os.path.realpath(path)), None)
+            if got and got["mode"]:
+                break
+        self.assertTrue(got, "the dropped file never opened — what did: %r" % (seen,))
+        self.assertEqual(got["mode"], "csv", "it opened, but not as the kind of file it is: %r" % (got,))
+
+    def test_while_it_looks_the_canvas_says_so(self):
+        """Finding a dropped file means sweeping disks, which takes as long as it takes — and until it
+        finished, letting go of a file did nothing you could see (user, 2026-09-18). Read while the
+        search is still out: the cursor is the busy one and the toast names the file."""
+        self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').forEach(v=>v.close()); 1")
+        self.b.ev("""(()=>{
+          const S=document.getElementById('cv-scroll'), b=S.getBoundingClientRect();
+          const dt=new DataTransfer();
+          dt.items.add(new File(['x'], 'nowhere at all.csv', {type:'text/csv'}));
+          const at={clientX:b.left+300, clientY:b.top+200, dataTransfer:dt, bubbles:true, cancelable:true};
+          S.dispatchEvent(new DragEvent('dragover', at));
+          S.dispatchEvent(new DragEvent('drop', at)); return 1;})()""")
+        busy, said, spun = False, "", False
+        for _ in range(40):
+            time.sleep(0.1)
+            r = self.b.ev("""(()=>{const sp=document.querySelector('.toast .spin');
+              return {busy: document.getElementById('cv').classList.contains('finding'),
+                cursor: getComputedStyle(document.getElementById('cv-scroll')).cursor,
+                spin: !!sp && getComputedStyle(sp).animationName !== 'none',
+                said: (document.querySelector('.toast')||{}).textContent||''};})()""")
+            if r["spin"]:
+                spun = True
+            if r["busy"]:
+                busy = True
+                self.assertEqual(r["cursor"], "wait", "the canvas is busy and does not look it")
+            if "nowhere at all.csv" in r["said"]:
+                said = r["said"]
+            if busy and said and not r["busy"]:
+                break
+        self.assertTrue(busy, "nothing said the search was running")
+        self.assertIn("nowhere at all.csv", said, "it did not say what it was looking for")
+        self.assertTrue(spun, "no ring was going round — the cursor set is the platform's, this is ours")
+        self.assertFalse(self.b.ev("document.getElementById('cv').classList.contains('finding')"),
+                         "the busy cursor was left on after the search ended")
+
+    def test_two_files_it_cannot_tell_apart_open_neither(self):
+        """Same name, same bytes, same time in two places. Opening one of them silently is worse than
+        opening nothing — the person is the only one who knows which they meant."""
+        body = "same,file\n9,9\n"
+        a = self.write("twin.csv", body)
+        other = os.path.join(self.dir, "elsewhere")
+        if not os.path.isdir(other):
+            os.makedirs(other)
+        b = os.path.join(other, "twin.csv")
+        with open(b, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        os.utime(b, (os.path.getatime(a), os.path.getmtime(a)))
+        self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').forEach(v=>v.close()); 1")
+        self.b.ev("""(()=>{
+          const S=document.getElementById('cv-scroll'), b=S.getBoundingClientRect();
+          const dt=new DataTransfer();
+          dt.items.add(new File([%s], 'twin.csv', {type:'text/csv', lastModified: %d}));
+          const at={clientX:b.left+320, clientY:b.top+210, dataTransfer:dt, bubbles:true, cancelable:true};
+          S.dispatchEvent(new DragEvent('dragover', at));
+          S.dispatchEvent(new DragEvent('drop', at)); return 1;})()"""
+          % (json.dumps(body), int(os.path.getmtime(a) * 1000)))
+        # The search has a deadline of its own and may sweep a drive before giving up, so wait for the
+        # word rather than for a guess at how long it takes.
+        said = ""
+        for _ in range(60):
+            time.sleep(0.25)
+            said = self.b.ev("(document.querySelector('.toast')||{}).textContent||''")
+            if "twin.csv" in said:
+                break
+        open_now = self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').length")
+        self.assertEqual(open_now, 0, "it guessed between two files it cannot tell apart")
+        self.assertIn("twin.csv", said, "it opened nothing and said nothing: %r" % (said,))
 
     def test_text_shows_with_line_numbers_and_says_it_can_be_edited(self):
         # Its own file: the editing test writes notes.md, and these two share a browser.
