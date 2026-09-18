@@ -429,6 +429,7 @@ class WhenTheShellSaysItOutright(unittest.TestCase):
         f._title_cwd = lambda t: D.Session._title_cwd(f, t)
         f._shell_mark = lambda m: D.Session._shell_mark(f, m)
         f._title_tick = lambda: D.Session._title_tick(f)
+        f._title_busy = lambda: D.Session._title_busy(f)
         f._arm_settle = lambda: None
         return f
 
@@ -481,20 +482,35 @@ class WhenTheShellSaysItOutright(unittest.TestCase):
         self.assertEqual(self.mark(f, "C", "A"), "working")
         self.assertIsNotNone(f.cmd_start, "the mid-command mark forgot a command was running")
 
-    def test_the_guessing_stands_down_once_the_shell_speaks(self):
-        """The same rule as hooks over the title: the exact source wins and the inferring one stops,
-        rather than the two of them taking turns writing the light."""
+    def test_at_a_prompt_the_shell_has_the_last_word(self):
+        """Nothing may paint green over a `D`. The shell has said there is no command running, and a
+        title still twitching afterwards is a leftover, not work."""
         f = self.pane()
-        self.mark(f, "C")
+        self.mark(f, "C", "D")
         f.title_hits = [time.monotonic() - g for g in (2.0, 1.0, 0.0)]   # a spinner, on any other day
         f.title_spun = True
         with mock.patch.object(D.registry, "changed"):
             D.Session._title_tick(f)
-        self.assertEqual(f.derived, "working")
-        self.mark(f, "D")
+        self.assertEqual(f.derived, "idle", "the title layer painted over what the shell said")
+
+    def test_while_a_command_runs_the_layers_that_watch_the_agent_still_speak(self):
+        """**The regression that mattered.** Standing them down for good the moment a shell spoke was
+        wrong in exactly the case palmar is for: the shell knows *a command is running*, and an agent
+        is one long command. Running aelix, the light went green and stayed green for the whole
+        session, because the one layer that watches **the agent** rather than the shell had been
+        switched off (user, 2026-09-18). Between C and D they are all there is."""
+        f = self.pane()
+        self.mark(f, "C")
+        f.title_spun = True
+        f.title_hits = [time.monotonic() - g for g in (2.0, 1.0, 0.0)]   # the agent, spinning
         with mock.patch.object(D.registry, "changed"):
             D.Session._title_tick(f)
-        self.assertEqual(f.derived, "idle", "the title layer wrote over what the shell said")
+        self.assertEqual(f.derived, "working")
+        f.title_hits = []                                                # and it stopped — it wants you
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._title_tick(f)
+        self.assertEqual(f.derived, "done",
+                         "the agent stopped and nothing could say so while its command was running")
 
     def test_hooks_still_win(self):
         """This only ever writes `derived`. A pane the hooks speak for reads its status from them."""

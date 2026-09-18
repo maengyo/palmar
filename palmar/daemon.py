@@ -906,6 +906,12 @@ class Session:
             "status": self.eff_status(), "agent": self.agent, "alt": self.alt,
             "title": self.title or None,
             "fg": self.fg,               # what is running, by name (comm_of); the page labels an unnamed pane with it
+            # **Which layer is speaking for this pane.** `--doctor` says how each light was worked
+            # out, and with a new layer under it that line would otherwise say something untrue.
+            # "shell" is on once this pane has emitted an OSC 133 mark; "running" is on between C
+            # and D, which is when the layers that watch the agent are the ones still talking.
+            "shell": self.shell_marks or None,
+            "running": (self.cmd_start is not None) or None,
             "created": self.created, "last_event": self.last_event,
             "canvas": self.canvas, "name": self.name,
             # True when this pane's last wait ended with nobody typing here (#14). The browser reads
@@ -1122,6 +1128,15 @@ class Session:
     #: an empty line and an Enter, and lighting "finished" for that would be a light nobody asked
     #: for — the same discipline `_out_tick` and `_title_tick` already keep.
     #:
+    #: **And it does not silence the layers above it — it bounds them.** The first version stood the
+    #: title and output layers down for good the moment a shell spoke, which was wrong in the case
+    #: that matters most: the shell knows *a command is running*, and an agent is one long command.
+    #: Running aelix, the light went green and stayed green for the whole session, because the one
+    #: layer that watches **the agent** rather than the shell had been switched off (user,
+    #: 2026-09-18). So: **at a prompt the shell is the last word** — nothing may paint green over a
+    #: `D`. **Between `C` and `D` the agent-watching layers speak**, because the shell has nothing
+    #: more to say until the command ends and they are all there is.
+    #:
     #: Hooks still win. This only ever writes `derived`, which `eff_status` reads when the hooks are
     #: silent.
     def _shell_mark(self, mark: str) -> None:
@@ -1147,8 +1162,8 @@ class Session:
     def _title_tick(self) -> None:
         """Spinning means working; **spinning and then** stopping means done. Nothing becomes done without
         having spun — turning a TUI sitting still (vim, say) into 'finished' leaves the lights always on."""
-        if self.shell_marks:
-            return                         # the shell says it outright — see _shell_mark
+        if self.shell_marks and self.cmd_start is None:
+            return                         # at a prompt the shell is the last word — see _shell_mark
         busy = self._title_busy()
         if busy:
             self.title_spun = True         # **only here** does the title layer take the lead
@@ -1278,8 +1293,8 @@ class Session:
         """At a prompt: idle. Something running and printing **on and on**: working. Printing then stopping:
         done — nothing becomes done without ever having printed (same discipline as the title side)."""
         self.sample_fg()
-        if self.shell_marks:
-            return                          # the shell says it outright — see _shell_mark
+        if self.shell_marks and self.cmd_start is None:
+            return                          # at a prompt the shell is the last word — see _shell_mark
         now = time.monotonic()
         if self._at_prompt():
             want = "idle"
@@ -5374,10 +5389,21 @@ def doctor(port: int) -> int:
         else:
             out("      folder    %s\n                -> %s   <- it followed a cd" % (was, now))
         out("      now       status=%s" % s.get("status"))
-        out("      read from %s" % (
-            "hooks — %s reports it directly (the most exact)" % s.get("agent") if s.get("agent")
-            else ("the window title — this pane sets one: %r" % title if title
-                  else "output activity — this pane sets no window title")))
+        # **Which layer, in the order they actually win.** Saying "output activity" while OSC 133 is
+        # driving would be a diagnostic that lies, which is worse than none.
+        if s.get("agent"):
+            src = "hooks — %s reports it directly (the most exact)" % s.get("agent")
+        elif s.get("shell") and not s.get("running"):
+            src = "the shell (OSC 133) — it says it is at a prompt, and that is the last word"
+        elif s.get("shell"):
+            src = ("the shell (OSC 133) says a command is running; what the agent inside it is "
+                   "doing comes from %s" % ("the window title: %r" % title if title
+                                            else "output activity — this pane sets no window title"))
+        elif title:
+            src = "the window title — this pane sets one: %r" % title
+        else:
+            src = "output activity — this pane sets no window title"
+        out("      read from %s" % src)
         out("      %s" % ("the agent field is filled by hooks. With an agent that has none it is "
                           "correctly empty, and it says nothing about the status."
                           if not s.get("agent") else "hooks are attached."))
