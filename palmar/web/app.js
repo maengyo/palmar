@@ -917,6 +917,7 @@ class Tile {
     this.fitted = false;
     this.fitTries = 0;
     if (this.visible()) requestAnimationFrame(() => { if (!this.closed) this.refit(); });
+    this.watchFit();
 
     // Push out the character not committed yet. Called wherever the IME lets go.
     this.imeFlush = () => {
@@ -1034,6 +1035,31 @@ class Tile {
     this.ws.send(JSON.stringify({ t: 'resize', cols: this.term.cols, rows: this.term.rows }));
   }
 
+  //: Is the terminal standing taller than the box holding it — which means its bottom rows, and the
+  //: prompt among them, are clipped with no way to scroll to them.
+  overflows() {
+    const scr = this.termEl && this.termEl.querySelector('.xterm-screen');
+    return !!scr && scr.offsetHeight > this.termEl.clientHeight + 1;
+  }
+
+  //: **A pane checks itself for a while after it opens, and stops.** The cell size can change under a
+  //: fit after the fit is over — the real font arriving after boot gave up waiting for it, the WebGL
+  //: renderer settling on dimensions of its own (it floors the cell to device pixels, which is a real
+  //: change at a scale factor like Windows' 1.125 and none at all at 1) — and then nothing calls
+  //: `refit` again, so nothing notices. Two guesses at *when* that happens were both wrong (user,
+  //: 2026-09-18: the boot-time `document.fonts.ready` sweep does not reach a pane opened later, and
+  //: the check inside `refit` needs somebody to call `refit`). So it stops guessing at the moment and
+  //: watches for the state instead — four reads of two numbers over six seconds, and then never
+  //: again. Running the repair by hand in the console is what proved this was the whole of it.
+  watchFit() {
+    FIT_CHECKS.forEach((ms) => setTimeout(() => {
+      if (this.closed || !this.visible() || !this.overflows()) return;
+      remeasure(this.term);
+      this.fitted = false;
+      this.refit();
+    }, ms));
+  }
+
   refit() {
     if (!this.visible()) return;            // another canvas — cannot measure (display:none)
     const d = this.fit.proposeDimensions();
@@ -1058,8 +1084,7 @@ class Tile {
     // 24 rows, screen 403px, box 328px, scrollHeight == clientHeight). Whatever the cause, the same
     // sentence is true every time — a terminal must never be taller than its box — so that is what
     // is checked, rather than one more cause guessed at.
-    const scr = this.termEl.querySelector('.xterm-screen');
-    if (scr && scr.offsetHeight > this.termEl.clientHeight + 1) {
+    if (this.overflows()) {
       if (++this.fitTries <= 8) {
         // **And fitting again is not enough.** `fit()` divides the box by the cell size the terminal
         // has **cached**, so a second pass on a stale cell hands back the same wrong row count, calls
@@ -2566,15 +2591,25 @@ function shove(p, r, dir) {
     { d: 'l', x: L, y: r.y, by: Math.abs(L - r.x) },
     { d: 't', x: r.x, y: T, by: Math.abs(T - r.y) },
   ].filter((w) => isFinite(w.x) && isFinite(w.y));
-  // **Keep going the way it was already going.** A row of windows slides over as a row instead of
-  // scattering, and every step of a cascade then leads away from the window that started it — which is
-  // what makes it stop. Re-choosing the nearest way at each hop lets two windows trade places forever.
-  const same = dir && ways.find((w) => w.d === dir);
-  if (same && same.x >= 0 && same.y >= 0) return same;
   // The canvas grows right and down without limit but is pinned at 0 on the other two sides, so left and
   // up can run out of room; right and down never do, so there is always a way out. Ties go to the two
   // directions the canvas grows in, which is why those are first in the list.
-  return ways.filter((w) => w.x >= 0 && w.y >= 0).reduce((m, w) => (w.by < m.by ? w : m));
+  const open = ways.filter((w) => w.x >= 0 && w.y >= 0);
+  const best = open.reduce((m, w) => (w.by < m.by ? w : m));
+  // **Keep going the way it was already going — when it is barely further.** A row of windows slides
+  // over as a row instead of scattering, and every step of a cascade leads away from the window that
+  // started it, which is what makes it stop. That rule came in because a neighbour *a few pixels*
+  // closer to the bottom than to the right went under a window that had grown sideways, breaking the
+  // row that the gesture meant to keep.
+  //
+  // **A few pixels is the whole of it, and it was taken as any number at all.** Two grouped windows
+  // side by side, and growing the left one downward left three pixels of shared column with the one
+  // beside it — three pixels out to the right, or four hundred and sixteen down past the bottom it
+  // had just grown. It went down, every time, and each further resize sent it down again (user,
+  // 2026-09-18, measured: b moved from y=200 to y=616). So the preference wins a tie or near enough
+  // to one, and never a landslide.
+  const same = dir && open.find((w) => w.d === dir);
+  return (same && same.by - best.by <= GAP) ? same : best;
 }
 
 // Resolve every overlap on one canvas while holding `anchorId` still — the window the hand just placed is
@@ -3040,6 +3075,8 @@ cvScroll.appendChild(cvWorld);
 //: every `fit()` after that divides the box by a number that is no longer true. A hair up and back
 //: is two real changes, so it measures twice and settles on what is actually there, and the option
 //: ends where it began.
+//: When a pane looks itself over after opening — see `watchFit`. Four reads, then it stops.
+const FIT_CHECKS = [250, 900, 2500, 6000];
 function remeasure(term) {
   try {
     const f = term.options.fontSize;
@@ -3809,6 +3846,17 @@ setInterval(() => {
     it._ago.nodeValue = agoText(id);
     const s = sessions.get(id);
     if (s && it._msg) it._msg.textContent = msgText(s);   // makes "quiet 6m" run without rebuilding the list
+  }
+  // **And the net under `watchFit`.** That one runs for six seconds after a pane opens, which is
+  // where the cell has been seen to change under a fit — but a pane lives much longer than that, and
+  // a terminal standing taller than its box has its prompt somewhere you cannot scroll to. Two
+  // numbers per visible pane on a clock that was already running, and only a pane that is actually
+  // wrong costs anything after that.
+  for (const t of tiles.values()) {
+    if (t.closed || !t.visible() || !t.overflows || !t.overflows()) continue;
+    remeasure(t.term);
+    t.fitted = false;
+    t.refit();
   }
 }, 10000);
 

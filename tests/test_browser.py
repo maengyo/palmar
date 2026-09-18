@@ -888,38 +888,41 @@ class TheWorldAroundTheWindows(unittest.TestCase):
             self.assertEqual([got["l"], got["t"]], [10, 10],
                              "expanded window is not at the screen's corner, %s: %r" % (where, got))
 
-    def test_a_terminal_is_never_taller_than_the_box_holding_it(self):
+    def test_a_terminal_that_outgrew_its_box_climbs_back_into_it(self):
         """**The prompt was below the bottom of the pane with no way to scroll to it.** `fit()` divides
-        the box by the cell size the terminal has **cached**, and it re-measures that only when a font
-        option *changes* — the options service fires on `rawOptions[k] !== v`, so writing the same
-        value back is nothing at all. When the cell changes for any other reason — the real font
-        arriving after boot gave up waiting 1.5s for it, a renderer handing over — every fit after
-        that divides by a number that is no longer true, calls the result fitted, and refitting
-        changes nothing however often it runs. Measured in the user's pane, 2026-09-18: 24 rows,
-        screen 403px, box 328px, `scrollHeight == clientHeight`, and unchanged by a refit.
+        the box by the cell size xterm has cached, and xterm re-measures that only when a font option
+        *changes* — so when the cell changes for any other reason (the real font arriving after boot
+        gave up waiting 1.5s for it; the WebGL renderer settling on dimensions of its own, which
+        floors the cell to device pixels and so is a real change at Windows' 1.125 and none at 1),
+        every later fit divides by a number that is no longer true and agrees with itself.
 
-        The stale cache is set here directly, because that is the state and there is no way to make a
-        font arrive late on demand. What is under test is that palmar climbs out of it."""
+        Two guesses at *when* were both wrong: a boot-time `document.fonts.ready` sweep does not reach
+        a pane opened afterwards, and the check inside `refit` needs somebody to call `refit`. So this
+        does not test a cause or a moment. It breaks the state — the terminal ends up with more rows
+        than fit, which is all the user could ever see — and asks only that palmar climb back out of
+        it **with nobody calling anything.**"""
         self.js("put('far', 40, 40, 520, 360); return 1;")
         read = """(()=>{const t=[...window.palmar.tiles.values()][0];
           const s=t.el.querySelector('.xterm-screen');
-          return {rows:t.term.rows, cell:t.term._core._renderService.dimensions.css.cell.height,
-                  propose:(()=>{const p=t.fit.proposeDimensions();return p?p.rows:null})(),
-                  screen:Math.round(s.offsetHeight), box:Math.round(t.termEl.clientHeight)};})()"""
+          return {rows:t.term.rows, screen:Math.round(s.offsetHeight),
+                  box:Math.round(t.termEl.clientHeight)};})()"""
         was = self.b.ev(read)
         self.assertLessEqual(was["screen"], was["box"], "it did not start out fitting: %r" % (was,))
         self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
-          t.term._core._renderService.dimensions.css.cell.height = 13.67; return 1;})()""")
-        stale = self.b.ev(read)
-        self.assertNotEqual(stale["propose"], was["propose"],
-                            "the stale cell changed nothing — this test proves nothing: %r" % (stale,))
-        self.b.ev("(()=>{const t=[...window.palmar.tiles.values()][0]; t.fitted=false; t.refit(); return 1;})()")
-        time.sleep(1.5)
-        now = self.b.ev(read)
+          t.term.resize(t.term.cols, t.term.rows + 8); return 1;})()""")
+        time.sleep(0.4)
+        broke = self.b.ev(read)
+        self.assertGreater(broke["screen"], broke["box"],
+                           "it did not actually break — this test proves nothing: %r" % (broke,))
+        end = time.time() + 14
+        now = broke
+        while time.time() < end:
+            time.sleep(1.0)
+            now = self.b.ev(read)
+            if now["screen"] <= now["box"]:
+                break
         self.assertLessEqual(now["screen"], now["box"],
-                             "rows are still hanging below the box: %r" % (now,))
-        self.assertAlmostEqual(now["cell"], was["cell"], places=1,
-                               msg="it fitted, but still against a cell size that is not real: %r" % (now,))
+                             "nobody noticed the prompt was off the bottom: %r" % (now,))
 
     def test_writing_a_font_option_back_unchanged_measures_nothing(self):
         """Why `remeasure` moves the value at all. This is xterm's rule, not ours, and the whole fix
@@ -1807,6 +1810,12 @@ class Grouping(unittest.TestCase):
           return {x:r.left+r.width/2, y:r.top+r.height/2};})()""" % json.dumps(name))
         return box["x"], box["y"]
 
+    def grip(self, name):
+        g = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name===%s);
+          const r=t.el.querySelector('.grip').getBoundingClientRect();
+          return {x:r.left+r.width/2, y:r.top+r.height/2};})()""" % json.dumps(name))
+        return g["x"], g["y"]
+
     def send(self, **kw):
         self.b.ws.call("Input.dispatchMouseEvent", dict(button="left", **kw))
 
@@ -2525,6 +2534,32 @@ class Grouping(unittest.TestCase):
             .sort((a, b) => a[0] - b[0]);""")
         self.assertEqual(r, [[-210, -160], [42, -160]],
                          "the tint did not go where its windows went: %r" % (r,))
+
+    def test_growing_one_member_does_not_send_its_neighbour_down_the_diagonal(self):
+        """**The way it grew wins a tie, not a landslide.** A resize tells push-aside which way the
+        window grew, so that a neighbour a few pixels closer to the bottom than to the right does not
+        go *under* a window that grew sideways — the row broken by the gesture meant to keep it. That
+        preference was then taken as any distance at all: two grouped windows side by side, grow the
+        left one **downward**, and three pixels of shared column become four hundred and sixteen down
+        past the bottom it had just grown. Every further resize sent it down again (user, 2026-09-18,
+        measured: 200 to 616). Three pixels out to the right was always there."""
+        self.bench("""put('g1',200,200,300,200); put('g2',512,200,300,200);
+                      P.joinGroups(by('g1').id, by('g2').id); return 1;""")
+        rowY = self.bench("return at('g2')[1];")
+        for grew, wide, tall in (("sideways", 120, 4), ("downward", 3, 200), ("downward again", 3, 150)):
+            x, y = self.grip("g1")
+            self.send(type="mousePressed", x=x, y=y, clickCount=1, buttons=1)
+            for i in (1, 2, 3, 4):
+                self.send(type="mouseMoved", x=x + wide * i / 4, y=y + tall * i / 4, buttons=1)
+                time.sleep(0.03)
+            self.send(type="mouseReleased", x=x + wide, y=y + tall, clickCount=1, buttons=0)
+            time.sleep(1.2)
+            now = self.bench("""const A=L[by('g1').id], B=L[by('g2').id];
+              return {a:[A.x,A.y,A.w,A.h], b:[B.x,B.y,B.w,B.h]};""")
+            self.assertEqual(now["b"][1], rowY,
+                             "growing %s took the neighbour off the row: %r" % (grew, now))
+            self.assertGreaterEqual(now["b"][0], now["a"][0] + now["a"][2],
+                                    "the neighbour ended up on top of it: %r" % (now,))
 
     def test_taking_one_out_of_the_middle_closes_the_hole(self):
         """Closing the middle window closed the group up; taking it out with Alt-drag left its hole
