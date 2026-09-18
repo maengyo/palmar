@@ -536,6 +536,66 @@ class WhenTheShellSaysItOutright(unittest.TestCase):
         self.assertEqual(f.derived, "working", "the carry lost the mark at the chunk boundary")
 
 
+class WhereADroppedFileIsLookedFor(unittest.TestCase):
+    """A page is never told where a dropped file is, so palmar goes and finds it by the name, size and
+    time that *did* come over. Where it looks is the whole question: too narrow and the same file
+    opens from the rail and not from a drop, too wide and a search never ends."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="palmar-tops-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def make(self, *parts, text="x\n"):
+        p = os.path.join(self.tmp, *parts)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return p
+
+    def test_a_mounted_volume_is_a_place_to_look(self):
+        """A home on C: and the file on D: is the ordinary shape of a Windows machine — and the rail
+        already walks there and opens it, so a drop that could not was the same inconsistency one
+        level out (user, 2026-09-18)."""
+        os.makedirs(os.path.join(self.tmp, "Elements", "docs"))
+        os.makedirs(os.path.join(self.tmp, ".hidden"))
+        with open(os.path.join(self.tmp, "a file"), "w") as fh:
+            fh.write("not a volume")
+        got = D.volume_tops(platform="darwin", bases=[self.tmp])
+        self.assertEqual(got, [os.path.join(self.tmp, "Elements")],
+                         "volumes came out as %r" % (got,))
+
+    def test_a_network_drive_is_not_swept(self):
+        """The kind is asked of the system, not guessed from the letter: a mapped network drive looks
+        exactly like a local one, and sweeping one is how a search stops being a search. Nothing to
+        ask means nothing to sweep, which is why a machine that is not Windows gets an empty list from
+        the Windows branch rather than a guess."""
+        self.assertEqual(D.volume_tops(platform="win32"), [],
+                         "it invented drive letters on a machine that has none")
+
+    def test_it_finds_the_file_on_the_other_drive(self):
+        import asyncio
+        want = self.make("Elements", "papers", "on the other drive.pdf")
+        with mock.patch.object(D, "roots", lambda: [pathlib.Path(self.tmp, "home")]), \
+             mock.patch.object(D, "volume_tops", lambda: [os.path.join(self.tmp, "Elements")]):
+            os.makedirs(os.path.join(self.tmp, "home"), exist_ok=True)
+            got = asyncio.run(D.find_files("on the other drive.pdf"))
+        self.assertEqual([h["path"] for h in got], [want], "it did not reach the other drive: %r" % (got,))
+
+    def test_a_wide_home_does_not_starve_the_drive_the_file_is_on(self):
+        """Each top gets its own budget of entries. With one shared between them, a home big enough to
+        spend it is a home that hides every other drive."""
+        for i in range(40):
+            self.make("home", "deep%d" % i, "filler.txt")
+        want = self.make("Elements", "the one.pdf")
+        with mock.patch.object(D, "roots", lambda: [pathlib.Path(self.tmp, "home")]), \
+             mock.patch.object(D, "volume_tops", lambda: [os.path.join(self.tmp, "Elements")]), \
+             mock.patch.object(D, "FIND_FILE_NODES", 8):     # a budget the home alone would eat
+            import asyncio
+            got = asyncio.run(D.find_files("the one.pdf"))
+        self.assertEqual([h["path"] for h in got], [want],
+                         "the home ate the whole search: %r" % (got,))
+
+
 URL = "http://127.0.0.1:8801/?k=abc123"
 
 

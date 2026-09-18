@@ -2875,9 +2875,18 @@ async def build_find_index() -> list:
 #: work drive in the rail, open a file, and that folder is somewhere this person opens files from.
 #: From then on a drop out of it finds its way home.
 #:
-#: What is still not searched is the rest of the machine, and that is not a rule about permission but
-#: about time: a sweep has to end, and a network drive has no end worth waiting for. The first file
-#: out of a new place is still opened from the rail, which reaches anywhere; after that, drops work.
+#: **And the other drives.** A home on C: and the file on D: is the ordinary shape of a Windows
+#: machine, and the rail already walks there and opens it — so a drop that could not was the same
+#: inconsistency one level out (user, 2026-09-18). Every attached volume is a top: drive letters on
+#: Windows, `/Volumes` on a Mac, the usual mount points on Linux.
+#:
+#: **Except the ones with no end worth waiting for.** A network drive is skipped, by asking the
+#: system what kind it is rather than by guessing from the name. And every top gets its own budget of
+#: entries so a wide home cannot starve the drive the file is actually on, with a deadline over the
+#: whole search, because this runs while somebody watches a window not open yet. What is found when
+#: the time is up is what is returned; the page says it looked and did not find it, and the rail
+#: still reaches anywhere.
+FIND_FILE_SECONDS = 4.0
 #:
 #: Size and modification time are matched by the caller; two files agreeing on all three is not
 #: something to guess between, and the page then opens neither and says so.
@@ -2889,33 +2898,83 @@ FIND_FILE_HITS = 24
 FIND_FILE_NODES = 120_000
 
 
+#: Every volume that is attached and is not somebody else's machine. **The kind is asked, not
+#: guessed**: a mapped network drive looks exactly like a local one by its letter, and sweeping one is
+#: how a search stops being a search. Anything that cannot be asked is left out.
+def volume_tops(platform=None, bases=None) -> list:
+    platform = sys.platform if platform is None else platform
+    out = []
+    if platform == "win32":
+        try:
+            import ctypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            mask = k32.GetLogicalDrives()
+            for i in range(26):
+                if not (mask >> i) & 1:
+                    continue
+                d = "%s:\\" % chr(ord("A") + i)
+                # 2 removable · 3 fixed · 6 RAM disk. 4 is a network drive and 5 a disc.
+                if k32.GetDriveTypeW(ctypes.c_wchar_p(d)) in (2, 3, 6):
+                    out.append(d)
+        except Exception:
+            return []
+        return out
+    if bases is None:
+        bases = ["/Volumes"] if platform == "darwin" else ["/media", "/mnt", "/run/media"]
+    for base in bases:
+        try:
+            with os.scandir(base) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False) and not e.name.startswith("."):
+                            out.append(e.path)
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return out
+
+
 def search_tops() -> list:
-    """The roots, plus the folder of every file window on the board — with anything already covered by
-    an earlier top dropped, so a home and a folder inside it are swept once."""
+    """The roots, the folder of every file window on the board, and every attached volume — with
+    anything already covered by an earlier top dropped, so a home and a folder inside it are swept
+    once, and in that order because that is how often each one holds the answer."""
     tops = [str(r) for r in roots()]
 
-    def covered(c):
-        return any(c == t or c.startswith(t.rstrip(os.sep) + os.sep) for t in tops)
+    def add(c):
+        if not c:
+            return
+        if any(c == t or c.startswith(t.rstrip(os.sep) + os.sep) for t in tops):
+            return
+        try:
+            if os.path.isdir(c):
+                tops.append(c)
+        except OSError:
+            pass
 
     for r in (registry.layout or {}).values():
-        if not isinstance(r, dict) or r.get("kind") != "file":
-            continue
-        p = r.get("path")
-        if not isinstance(p, str) or not p:
-            continue
-        d = os.path.dirname(p)
-        if d and not covered(d) and os.path.isdir(d):
-            tops.append(d)
+        if isinstance(r, dict) and r.get("kind") == "file" and isinstance(r.get("path"), str):
+            add(os.path.dirname(r["path"]))
+    for v in volume_tops():
+        add(v)
     return tops
 
 
 async def find_files(name: str) -> list:
     out: list = []
-    n = 0
     if not name or "/" in name or "\\" in name or name in (".", ".."):
         return out
     want = name.lower()
+    deadline = time.monotonic() + FIND_FILE_SECONDS
+    # **It stops at the nearest place that has an answer.** The tops are in the order each one holds
+    # the answer — home, then the folders files were opened from, then the other drives — and going on
+    # past a hit means sweeping an external disk to ask whether your own home is lying to you. The
+    # caller's rule against guessing between identical files still holds where it matters: within the
+    # place the file was found. Only a name that is nowhere pays for the whole search.
     for root in search_tops():
+        if out or time.monotonic() > deadline:
+            break
+        n = 0                                   # its own budget: a wide home cannot starve a drive
         stack = [(str(root), 0)]
         while stack and len(out) < FIND_FILE_HITS and n < FIND_FILE_NODES:
             d, depth = stack.pop()
@@ -2925,6 +2984,8 @@ async def find_files(name: str) -> list:
                         n += 1
                         if n % FIND_YIELD == 0:
                             await asyncio.sleep(0)
+                            if time.monotonic() > deadline:
+                                return out
                         if n >= FIND_FILE_NODES:
                             break
                         if e.name.startswith(".") or e.name in FIND_SKIP or e.name.endswith(FIND_SKIP_SUFFIX):

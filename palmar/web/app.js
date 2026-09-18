@@ -1855,7 +1855,7 @@ async function openDropped(dt, at) {
       toast([{ b: f.name }, 'is in ' + same.length + ' places and they are identical —',
              { d: 'open it from the folder rail so palmar knows which' }]);
     } else {
-      toast([{ b: f.name }, 'was not found in your home or the folders palmar is open in —',
+      toast([{ b: f.name }, 'was not found on your drives —',
              { d: 'a dropped file carries no path; open it from the folder rail, which reaches anywhere' }]);
     }
   }

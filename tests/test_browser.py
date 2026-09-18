@@ -3789,10 +3789,16 @@ class ViewerModes(unittest.TestCase):
           S.dispatchEvent(new DragEvent('dragover', at));
           S.dispatchEvent(new DragEvent('drop', at)); return 1;})()"""
           % (json.dumps(body), int(os.path.getmtime(a) * 1000)))
-        time.sleep(2.5)
+        # The search has a deadline of its own and may sweep a drive before giving up, so wait for the
+        # word rather than for a guess at how long it takes.
+        said = ""
+        for _ in range(60):
+            time.sleep(0.25)
+            said = self.b.ev("(document.querySelector('.toast')||{}).textContent||''")
+            if "twin.csv" in said:
+                break
         open_now = self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').length")
         self.assertEqual(open_now, 0, "it guessed between two files it cannot tell apart")
-        said = self.b.ev("(document.querySelector('.toast')||{}).textContent||''")
         self.assertIn("twin.csv", said, "it opened nothing and said nothing: %r" % (said,))
 
     def test_text_shows_with_line_numbers_and_says_it_can_be_edited(self):
