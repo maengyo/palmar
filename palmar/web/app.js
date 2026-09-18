@@ -423,7 +423,7 @@ function paintClosing(id) {
 
 let toastTimer = null;
 function toast(parts) {
-  // parts: [{b:'bold'}, 'plain', {d:'dim'}, {a:'undo', on:fn}], or a string.
+  // parts: [{b:'bold'}, 'plain', {d:'dim'}, {a:'undo', on:fn}, {spin:1}], or a string.
   // **The toast is one line of prose.** Parts are laid end to end with a space between, and the
   // punctuation is the caller's — a dash before a second clause, a colon before an error. It used to
   // be a flex row with a gap, and two plain strings in a row merged into one item with no gap at all
@@ -436,6 +436,8 @@ function toast(parts) {
     if (typeof p === 'string') toastEl.appendChild(document.createTextNode(p));
     else if (p.b != null) toastEl.appendChild(el('b', null, p.b));
     else if (p.d != null) toastEl.appendChild(el('span', 'd', p.d));
+    // A ring going round, for a line that is saying "still working" rather than telling you a result.
+    else if (p.spin) toastEl.appendChild(el('span', 'spin'));
     else if (p.a != null) {
       // A real button, so it is reachable by keyboard. The toast is pointer-events:none until .show,
       // which is what keeps a faded-out one from swallowing clicks on the canvas underneath.
@@ -1843,7 +1845,8 @@ async function openDropped(dt, at) {
   cv.classList.add('finding');
   try {
     for (const f of files) {
-      toast(['looking for', { b: f.name }, '—', { d: 'a dropped file carries no path, so palmar searches your drives' }]);
+      toast([{ spin: 1 }, 'looking for', { b: f.name }, '—',
+             { d: 'a dropped file carries no path, so palmar searches your drives' }]);
       let hits = [];
       try {
         const r = await api('GET', '/api/files?name=' + encodeURIComponent(f.name));

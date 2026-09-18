@@ -361,6 +361,30 @@ class FindingAFileSomebodyDropped(unittest.TestCase):
             self.d.raw("PUT", "/api/layout", {"layout": {}})
             shutil.rmtree(out, ignore_errors=True)
 
+    def test_handing_a_file_to_the_system_stops_at_home(self):
+        """**Reading is not acting.** The viewer reads anywhere this uid can read and the search
+        behind a drop now reaches every drive, but handing a file to the system's own program starts
+        a program on the person's behalf, so it keeps the same floor as opening a shell — the user
+        chose to leave it there (2026-09-18). The refusal has to say *that*, though: the same 400
+        used to cover "that is not a file", and somebody reading it about a file goes looking for a
+        fault that is not there."""
+        out = tempfile.mkdtemp(prefix="palmar-outside-")
+        try:
+            f = os.path.join(out, "outside.txt")
+            with open(f, "w", encoding="utf-8") as fh:
+                fh.write("hello\n")
+            # It can be read from there — that is the rule this one is different from.
+            st, _ = self.d.raw("GET", "/api/file?path=" + urllib.parse.quote(f))
+            self.assertEqual(st, 200, "a file outside home stopped being readable")
+            st, body = self.d.raw("POST", "/api/open", {"path": f})
+            self.assertEqual(st, 400)
+            said = body.decode("utf-8", "replace")
+            self.assertIn("under your home", said, "it refused without saying why: %r" % (said,))
+            self.assertNotIn("must be an absolute file", said,
+                             "it called a real file not a file: %r" % (said,))
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+
     def test_a_name_nobody_has_is_no_error(self):
         self.assertEqual(self.d.get("/api/files?name=nothing-like-this.csv")["files"], [])
 

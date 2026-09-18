@@ -3780,21 +3780,26 @@ class ViewerModes(unittest.TestCase):
           const at={clientX:b.left+300, clientY:b.top+200, dataTransfer:dt, bubbles:true, cancelable:true};
           S.dispatchEvent(new DragEvent('dragover', at));
           S.dispatchEvent(new DragEvent('drop', at)); return 1;})()""")
-        busy, said = False, ""
+        busy, said, spun = False, "", False
         for _ in range(40):
             time.sleep(0.1)
-            r = self.b.ev("""(()=>({busy: document.getElementById('cv').classList.contains('finding'),
-              cursor: getComputedStyle(document.getElementById('cv-scroll')).cursor,
-              said: (document.querySelector('.toast')||{}).textContent||''}))()""")
+            r = self.b.ev("""(()=>{const sp=document.querySelector('.toast .spin');
+              return {busy: document.getElementById('cv').classList.contains('finding'),
+                cursor: getComputedStyle(document.getElementById('cv-scroll')).cursor,
+                spin: !!sp && getComputedStyle(sp).animationName !== 'none',
+                said: (document.querySelector('.toast')||{}).textContent||''};})()""")
+            if r["spin"]:
+                spun = True
             if r["busy"]:
                 busy = True
-                self.assertEqual(r["cursor"], "progress", "the canvas is busy and does not look it")
+                self.assertEqual(r["cursor"], "wait", "the canvas is busy and does not look it")
             if "nowhere at all.csv" in r["said"]:
                 said = r["said"]
             if busy and said and not r["busy"]:
                 break
         self.assertTrue(busy, "nothing said the search was running")
         self.assertIn("nowhere at all.csv", said, "it did not say what it was looking for")
+        self.assertTrue(spun, "no ring was going round — the cursor set is the platform's, this is ours")
         self.assertFalse(self.b.ev("document.getElementById('cv').classList.contains('finding')"),
                          "the busy cursor was left on after the search ended")
 

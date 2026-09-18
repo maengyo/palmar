@@ -3857,7 +3857,15 @@ async def handle_request(reader, writer) -> None:
         obj = parse_json_body(body) or {}
         target = resolve_file(obj.get("path"))
         if target is None or not under_roots(target):
-            writer.write(http_error(400, "path must be a file under your home"))
+            # **Say which of the two it is.** The same 400 covered "that is not a file" and "that file
+            # is outside your home", and the second one is a rule somebody chose rather than a mistake
+            # somebody made — a person who reads "must be a file" about a file goes looking for a
+            # fault that is not there (user chose to keep the limit, 2026-09-18).
+            if target is None:
+                writer.write(http_error(400, "path must be an absolute file"))
+            else:
+                writer.write(http_error(400, "opening a file starts a program, and palmar keeps that "
+                                             "under your home — this one is outside it"))
             return
         # **Open, never run.** The system opener executes some things instead of showing them: an
         # executable script goes to Terminal on a Mac, .bat/.vbs/.lnk run outright on Windows, a
