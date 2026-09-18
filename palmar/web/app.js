@@ -2740,6 +2740,19 @@ function sendSeen(id) {
 }
 
 let prevScroll = null;
+//: **What a maximised window fills is the viewport, and nothing it sits inside measures that.** The
+//: CSS said `calc(100% - 20px)`, which worked while tiles were children of the scroller; they live in
+//: `.cv-world` now, which is 0x0 on purpose because it is only an origin — so 100% was 0 and pressing
+//: expand turned the window into a dot (user, 2026-09-18). The view is scrolled to the pad's corner
+//: first, so the visible region starts at pad zero; a tile inside `.cv-world` renders at
+//: `origin + left`, which is why the margin has the origin taken off it.
+const MAX_PAD = 10;
+function maxBox(tile) {
+  tile.el.style.setProperty('--max-l', (MAX_PAD - originX) + 'px');
+  tile.el.style.setProperty('--max-t', (MAX_PAD - originY) + 'px');
+  tile.el.style.setProperty('--max-w', (cvScroll.clientWidth - MAX_PAD * 2) + 'px');
+  tile.el.style.setProperty('--max-h', (cvScroll.clientHeight - MAX_PAD * 2) + 'px');
+}
 function setMax(tile, on) {
   for (const t of tiles.values()) t.el.classList.remove('max');
   const was = maxed; maxed = null;
@@ -2748,6 +2761,7 @@ function setMax(tile, on) {
     prevScroll = { l: cvScroll.scrollLeft, t: cvScroll.scrollTop };
     cvScroll.scrollTo(0, 0);
     tile.el.classList.add('max');
+    maxBox(tile);                  // after the class, so the scrollbars are already gone from clientWidth
     maxed = tile;
     focusTile(tile.id, { user: true });
   } else if (prevScroll) {
@@ -2787,7 +2801,7 @@ addEventListener('resize', () => {
   // When the window narrows, the current rail widths can push the canvas below its minimum — clamp again here.
   // **Fix only the widths and do the cleanup once below** — using setRail would repaint the minimap three times.
   railSync('l'); railSync('r');
-  if (maxed) maxed.refit(); renderMinimap(); refreshOff();
+  if (maxed) { maxBox(maxed); maxed.refit(); } renderMinimap(); refreshOff();
 });
 
 // ── rail width (#19) ───────────────────────────────────────
@@ -2845,7 +2859,7 @@ function railSync(side) {
 function setRail(side, px, save) {
   railPut(side, px);
   if (save !== false) saveRails();
-  if (maxed) maxed.refit();
+  if (maxed) { maxBox(maxed); maxed.refit(); }
   renderMinimap();
   refreshOff();
 }
@@ -2871,7 +2885,7 @@ function applyFold(side) {
   const fold = $('#fold-' + side), open = $('#open-' + side);
   if (open) open.hidden = !folded;
   if (fold) fold.setAttribute('aria-expanded', String(!folded));
-  if (maxed) maxed.refit();
+  if (maxed) { maxBox(maxed); maxed.refit(); }
   renderMinimap();
   refreshOff();
 }

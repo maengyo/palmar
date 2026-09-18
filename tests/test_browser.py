@@ -860,6 +860,34 @@ class TheWorldAroundTheWindows(unittest.TestCase):
         self.assertGreater(r["pulled"][1], r["tight"][1], "panning past the end made no room: " + repr(r))
         self.assertEqual(r["after"], r["tight"], "tidy did not give the room back: " + repr(r))
 
+    def test_expand_fills_the_screen_and_not_a_dot(self):
+        """**A maximised window fills the viewport, and nothing it sits inside measures that.** The CSS
+        said `calc(100% - 20px)`, which was right while tiles were children of the scroller; they live
+        in `.cv-world` now, and that layer is 0x0 on purpose because it is only an origin. 100% of
+        zero is zero, so pressing expand turned the window into a dot (user, 2026-09-18). The second
+        half of this test is the one a naive fix fails: panned into the slack the origin is not zero,
+        and a tile's `left` is measured from it."""
+        for where in ("at the corner", "panned into the slack"):
+            self.js("put('far', 40, 40, 520, 360); return 1;")
+            if where != "at the corner":
+                self.js("P.panTo(-400, -300); return 1;")
+                time.sleep(0.4)
+            r = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+              t.xpEl.click(); return 1;})()""")
+            time.sleep(1.0)
+            got = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+              const q=t.el.getBoundingClientRect(), S=document.getElementById('cv-scroll');
+              const b=S.getBoundingClientRect();
+              return {w:Math.round(q.width), h:Math.round(q.height),
+                      l:Math.round(q.left-b.left), t:Math.round(q.top-b.top),
+                      vw:S.clientWidth, vh:S.clientHeight};})()""")
+            self.b.ev("(()=>{[...window.palmar.tiles.values()][0].xpEl.click(); return 1;})()")
+            time.sleep(0.6)
+            self.assertEqual([got["w"], got["h"]], [got["vw"] - 20, got["vh"] - 20],
+                             "expanded window does not fill the screen, %s: %r" % (where, got))
+            self.assertEqual([got["l"], got["t"]], [10, 10],
+                             "expanded window is not at the screen's corner, %s: %r" % (where, got))
+
     def test_the_world_does_not_shrink_while_the_page_is_open(self):
         """The slack you panned into does not vanish under you. It goes on a reload, not before."""
         r = self.js("""
