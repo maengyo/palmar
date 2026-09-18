@@ -1050,6 +1050,23 @@ class Tile {
       return;
     }
     this.fitTries = 0;
+    // **A fit is only as good as the cell it measured.** `fit()` divides the box by a cell size the
+    // renderer has already worked out, so if that changes afterwards — a font arriving late, the
+    // WebGL renderer handing over to the DOM one — the row count stays and the rows get taller. The
+    // terminal then stands taller than the box holding it and the bottom rows are **clipped with no
+    // way to scroll to them**: the prompt is down there (user, 2026-09-18, measured in their pane:
+    // 24 rows, screen 403px, box 328px, scrollHeight == clientHeight). Whatever the cause, the same
+    // sentence is true every time — a terminal must never be taller than its box — so that is what
+    // is checked, rather than one more cause guessed at.
+    const scr = this.termEl.querySelector('.xterm-screen');
+    if (scr && scr.offsetHeight > this.termEl.clientHeight + 1) {
+      if (++this.fitTries <= 8) {
+        this.fitted = false;
+        requestAnimationFrame(() => { if (!this.closed) this.refit(); });
+        return;
+      }
+      this.fitTries = 0;
+    }
     this.sendResize();   // "this is the only thing that changes rows·columns" — sent only when the window size changed
     this.showSize();
   }
@@ -5167,4 +5184,15 @@ const fontWait = document.fonts && document.fonts.load
   ? Promise.race([document.fonts.load(FONT_PX + 'px "JetBrains Mono"').catch(() => null), new Promise((r) => setTimeout(r, 1500))])
   : Promise.resolve();
 fontWait.then(boot, boot);
+// **And if it turns up after that, everything measured with the wrong cell.** The race above gives
+// up at 1.5s and boots on the fallback face, which is right — a page that never opens is worse than
+// one with the wrong column count. But nothing used to happen when the real font then arrived: every
+// pane kept the row count it had worked out from a cell of a different size, and a terminal standing
+// taller than its box has its bottom rows clipped with nowhere to scroll (user, 2026-09-18). This
+// costs nothing when the font was already there — `ready` has resolved and every fit is a no-op.
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => {
+    for (const t of tiles.values()) if (t.visible()) t.refit();
+  }).catch(() => {});
+}
 })();

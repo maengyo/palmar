@@ -888,6 +888,38 @@ class TheWorldAroundTheWindows(unittest.TestCase):
             self.assertEqual([got["l"], got["t"]], [10, 10],
                              "expanded window is not at the screen's corner, %s: %r" % (where, got))
 
+    def test_a_terminal_is_never_taller_than_the_box_holding_it(self):
+        """**The prompt was below the bottom of the pane with no way to scroll to it.** `fit()` divides
+        the box by a cell size the renderer worked out, so when that changes afterwards — a font
+        arriving after the 1.5s the boot waits for it, the WebGL renderer handing over to the DOM one
+        — the row count stays and the rows get taller. Measured in the user's own pane, 2026-09-18:
+        24 rows, screen 403px, box 328px, and `scrollHeight == clientHeight`, so the 75px holding the
+        prompt could not be reached at all. The cell is grown here behind the fit's back, which is
+        what a late font does to it."""
+        self.js("put('far', 40, 40, 520, 360); return 1;")
+        read = """(()=>{const t=[...window.palmar.tiles.values()][0];
+          const s=t.el.querySelector('.xterm-screen');
+          return {rows:t.term.rows, screen:Math.round(s.offsetHeight),
+                  box:Math.round(t.termEl.clientHeight)};})()"""
+        was = self.b.ev(read)
+        self.assertLessEqual(was["screen"], was["box"], "it did not start out fitting: %r" % (was,))
+        try:
+            self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+              t.termEl.style.fontSize='19px'; t.term.options.fontSize=19; return 1;})()""")
+            time.sleep(0.7)
+            over = self.b.ev(read)
+            self.assertGreater(over["screen"], over["box"],
+                               "the cell did not actually grow — this test proves nothing: %r" % (over,))
+            self.b.ev("(()=>{[...window.palmar.tiles.values()][0].refit(); return 1;})()")
+            time.sleep(1.2)
+            now = self.b.ev(read)
+            self.assertLessEqual(now["screen"], now["box"],
+                                 "rows are still hanging below the box: %r" % (now,))
+        finally:
+            self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+              t.termEl.style.fontSize=''; t.term.options.fontSize=13; t.refit(); return 1;})()""")
+            time.sleep(1.0)
+
     def test_the_world_does_not_shrink_while_the_page_is_open(self):
         """The slack you panned into does not vanish under you. It goes on a reload, not before."""
         r = self.js("""

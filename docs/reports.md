@@ -11,26 +11,6 @@
 
 ## 열려 있는 것
 
-### `ls` 뒤 입력 줄이 스크롤 맨 아래에서도 안 보인다 — 재현 실패
-
-- **증상** (2026-09-18) 터미널에서 `ls` 처럼 긴 출력을 내면 스크롤 맨 아래로 내려도 입력 줄이
-  안 보인다. 창 크기를 조금이라도 조절하면 생긴다.
-- **전에 한 번 고쳤다.** `c3cf577` — "A new pane was 80x24 in a smaller box, and said it had
-  fitted". 그때 실측: `propose 67×19, term 80×24, screen 384px in a 328px viewport`. 원인은
-  `fit()` 이 크기를 계산만 하고 적용 못 했는데 `fitted` 를 참으로 적어서, "나중에 다시 맞춰라"
-  경로가 영영 안 돈 것. 그 시험은 **지금도 통과한다** — 같은 증상의 **다른 경로**다.
-- **맥에서 재현 안 됨.** 긴 출력 뒤 그립으로 실제 크기 조절까지 몰아봤으나
-  `fitted: True`, 화면이 상자보다 24px **작다**(정상). 사용자는 윈도우.
-- **다음 수:** 그 판에서 아래 한 줄. `screen > box` 면 그 차이만큼이 닿을 수 없는 줄이고,
-  `fitted` 가 참이면 그 플래그가 또 거짓말을 하고 있는 것이다.
-
-  ```js
-  [...palmar.tiles.values()].map(t=>{const s=t.el.querySelector('.xterm-screen'),
-    h=s.closest('.xterm').parentElement;return (t.s.name||t.id.slice(0,4))+' rows='+t.term.rows+
-    ' fitted='+t.fitted+' screen='+Math.round(s.getBoundingClientRect().height)+
-    ' box='+Math.round(h.getBoundingClientRect().height)}).join(' | ')
-  ```
-
 ### 그룹이 여러 번 움직이면 계단식으로 어긋난다 — 재현 실패, 계측기 넣어둠
 
 - **증상** (2026-09-17) 좌우로 나란하던 그룹 멤버가 드래그를 거듭할수록 조금씩 어긋난다.
@@ -75,6 +55,7 @@
 
 | 무엇 | 원인 | 고친 곳 |
 |---|---|---|
+| `ls` 뒤 입력 줄이 스크롤 맨 아래에서도 안 보인다 | 부팅 때 폰트를 **1.5초만** 기다리고, 늦게 오면 대체 폰트 셀로 행 수를 정한 뒤 **다시 안 맞췄다.** 사용자 실측 24행·화면 403px·상자 328px → 맞출 당시 셀 13.7px, 지금 16.8px | `b234c45` |
 | expand 누르면 창이 점이 된다 | `.tile.max` 가 `100%` 인데 부모 `.cv-world` 가 0×0 (여백 작업의 잔해) | `6aca9b1` 다음 |
 | aelix 가 대답해도 불이 안 바뀐다 | OSC 133 이 제목·출력 층을 **통째로** 껐다. 에이전트는 하나의 긴 명령이라, 그 층들이 유일하게 말할 수 있는 시간에 꺼져 있었다 | `6aca9b1` |
 | 초록불만 뜨고 안 바뀐다 | `D` 를 내는 프롬프트 래퍼에 존재 확인이 없어 `& $null` 로 매번 throw | `973b99b` |
