@@ -3929,6 +3929,12 @@ async def handle_request(reader, writer) -> None:
             writer.write(http(403))
             return
         body = json.dumps({
+            # **Who this app is, said out loud.** With no `id`, the browser takes `start_url` as the
+            # app's identity — and start_url carries the key. Rotate the key, or come back on another
+            # port, and the same palmar installs a second time beside the first, with the shortcut
+            # somebody pinned still pointing at the old one. `id` is resolved against the origin and
+            # never carries a secret, so it stays the same however the address moves.
+            "id": "/",
             "name": "palmar", "short_name": "palmar",
             "description": "Many terminals, one place, and each one keeps where you put it.",
             "start_url": f"/?k={KEY[0]}", "scope": "/", "display": "standalone",

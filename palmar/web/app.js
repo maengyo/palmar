@@ -1752,26 +1752,71 @@ function openViewer(path, canvas, at) {
   v.el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
   return v;
 }
-// **Drag a file out of the rail and let go on the canvas**: it opens where it was dropped. The drop
-// point is in canvas coordinates, so it lands under the hand rather than in the first free slot.
+//: **A path out of a `file://` URL.** Finder and Explorer hand a drag over as `text/uri-list`, which
+//: is the only part of a dropped file a page is allowed to see as a path at all — `dataTransfer.files`
+//: gives a name and bytes and no location, and the daemon opens files by path.
+//:
+//: Windows spells it `file:///C:/x/y`, which is a leading slash and forward slashes over a path that
+//: has neither, and a share is `file://server/share/x`. Percent-decoding is not optional: one space in
+//: a folder name and the path is wrong.
+function fileUrlToPath(s) {
+  if (!/^file:/i.test(s)) return (s[0] === '/' || /^[A-Za-z]:[\\/]/.test(s)) ? s : null;
+  let u;
+  try { u = new URL(s); } catch (e) { return null; }
+  let p;
+  try { p = decodeURIComponent(u.pathname); } catch (e) { return null; }
+  if (u.host && u.host !== 'localhost') return '\\\\' + u.host + p.replace(/\//g, '\\');
+  if (/^\/[A-Za-z]:/.test(p)) return p.slice(1).replace(/\//g, '\\');
+  return p;
+}
+function droppedPaths(dt) {
+  let raw = '';
+  try { raw = (dt && dt.getData('text/uri-list')) || ''; } catch (e) {}
+  if (!raw) { try { raw = (dt && dt.getData('text/plain')) || ''; } catch (e) {} }
+  const out = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t[0] === '#') continue;        // a uri-list may carry comments
+    const p = fileUrlToPath(t);
+    if (p && out.indexOf(p) < 0) out.push(p);
+  }
+  return out;
+}
+function carriesFiles(dt) {
+  if (!dt || !dt.types) return false;
+  const t = Array.prototype.slice.call(dt.types);
+  return t.indexOf('Files') >= 0 || t.indexOf('text/uri-list') >= 0;
+}
+
+// **Drag a file out of the rail and let go on the canvas**, or in from Finder or Explorer: it opens
+// where it was dropped. The drop point is in canvas coordinates, so it lands under the hand rather
+// than in the first free slot.
 cvScroll.addEventListener('dragover', (ev) => {
-  if (!dragFile) return;
+  if (!dragFile && !carriesFiles(ev.dataTransfer)) return;
   ev.preventDefault();
   try { ev.dataTransfer.dropEffect = 'copy'; } catch (e) {}
   cv.classList.add('dropping');
 });
 cvScroll.addEventListener('dragleave', (ev) => { if (ev.target === cvScroll) cv.classList.remove('dropping'); });
 cvScroll.addEventListener('drop', (ev) => {
-  const path = dragFile || (ev.dataTransfer && ev.dataTransfer.getData('text/plain'));
   cv.classList.remove('dropping');
-  if (!path) return;
+  const paths = dragFile ? [dragFile] : droppedPaths(ev.dataTransfer);
+  dragFile = null;
+  // **Take the drop even when there is nothing in it we can open.** Left to the browser, a file let go
+  // on a page it does not accept is *navigated to* — palmar replaced by a PDF, and the board with it.
+  if (!carriesFiles(ev.dataTransfer) && !paths.length) return;
   ev.preventDefault();
+  if (!paths.length) {
+    toast(['that did not come with a path palmar can open —',
+           { d: 'drag the file from the folder rail instead' }]);
+    return;
+  }
   const box = cvScroll.getBoundingClientRect();
   // The board's coordinates start at the world's origin, not the scroller's (see "the world").
-  const at = { x: Math.round(ev.clientX - box.left + cvScroll.scrollLeft - originX - 60),
-               y: Math.round(ev.clientY - box.top + cvScroll.scrollTop - originY - 15) };
-  openViewer(path, current, at);
-  dragFile = null;
+  const x0 = Math.round(ev.clientX - box.left + cvScroll.scrollLeft - originX - 60);
+  const y0 = Math.round(ev.clientY - box.top + cvScroll.scrollTop - originY - 15);
+  // Several at once land in a short cascade rather than exactly on top of one another.
+  paths.forEach((p, i) => openViewer(p, current, { x: x0 + i * GAP * 2, y: y0 + i * GAP * 2 }));
 });
 
 // After the board arrives: every viewer it names comes back, on the canvas it was on.
@@ -4813,6 +4858,8 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // switchCanvas because the frames are drawn into the scroller rather than into a
                   // canvas, so what happens to them on a switch is a thing a test has to be able to ask.
                   removeCanvas, watchInput, newTerminal, newCanvas, switchCanvas, openViewer, viewerId, toast,
+                  // Dropping a file in from Finder or Explorer: the path parsing is the part with edges.
+                  fileUrlToPath, droppedPaths,
                   // Auto-tidy only runs on a pane disappearing, and that moment is hard to create from outside.
                   // Expose **the same function** the button calls, unchanged.
                   // paintTidy with it: the button's enabled state is what a person actually sees,

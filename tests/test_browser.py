@@ -11,6 +11,7 @@ in software, so the drag trail in #17 is invisible to this file by construction,
 from __future__ import annotations
 
 import json
+import urllib.parse
 import os
 import sys
 import shutil
@@ -3682,6 +3683,54 @@ class ViewerModes(unittest.TestCase):
             if got:
                 return path
         self.fail("the viewer never loaded " + name)
+
+    def test_a_file_url_becomes_a_path_on_either_platform(self):
+        """Finder and Explorer hand a drag over as `text/uri-list`, which is the only part of a dropped
+        file a page may see as a location at all — `dataTransfer.files` gives a name and bytes and no
+        path, and the daemon opens files by path. Windows spells it `file:///C:/x`, a leading slash and
+        forward slashes over a path that has neither, and a share is `file://server/share/x`.
+        Percent-decoding is not optional: one space in a folder name and the path is wrong."""
+        for uri, want in [
+            ("file:///Users/x/a%20file.pdf", "/Users/x/a file.pdf"),
+            ("file:///C:/Users/x/note.csv", "C:\\Users\\x\\note.csv"),
+            ("file://server/share/report.pdf", "\\\\server\\share\\report.pdf"),
+            ("file:///tmp/%ED%95%9C%EA%B8%80.txt", "/tmp/한글.txt"),
+            ("https://example.com/x.pdf", None),          # not a file: nothing to open
+            ("/plain/path.txt", "/plain/path.txt"),
+        ]:
+            got = self.b.ev("window.palmar.fileUrlToPath(%s)" % json.dumps(uri))
+            self.assertEqual(got, want, "%s came out as %r" % (uri, got))
+        two = self.b.ev("""(()=>{const dt={types:['text/uri-list'],
+          getData:(t)=>t==='text/uri-list'?'file:///tmp/one.txt\\r\\n# comment\\r\\nfile:///tmp/two.pdf\\r\\n':''};
+          return window.palmar.droppedPaths(dt);})()""")
+        self.assertEqual(two, ["/tmp/one.txt", "/tmp/two.pdf"], "a uri-list of two: %r" % (two,))
+
+    def test_a_file_dragged_in_from_the_desktop_opens_in_a_viewer(self):
+        """Asked for 2026-09-18. **And the page must take the drop even when it cannot use it** — left
+        to the browser, a file let go on a page that does not accept it is *navigated to*: palmar
+        replaced by the PDF, and the board with it."""
+        path = self.write("dragged in.csv", "a,b\n1,2\n")
+        uri = "file://" + urllib.parse.quote(path)
+        self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').forEach(v=>v.close()); 1")
+        r = self.b.ev("""(()=>{
+          const S=document.getElementById('cv-scroll'), b=S.getBoundingClientRect();
+          const dt=new DataTransfer(); dt.setData('text/uri-list', %s);
+          const at={clientX:b.left+300, clientY:b.top+200, dataTransfer:dt, bubbles:true, cancelable:true};
+          const over=new DragEvent('dragover', at); S.dispatchEvent(over);
+          const drop=new DragEvent('drop', at); S.dispatchEvent(drop);
+          return {over: over.defaultPrevented, drop: drop.defaultPrevented};})()""" % json.dumps(uri))
+        self.assertTrue(r["over"], "the canvas did not offer to take the file")
+        self.assertTrue(r["drop"], "the drop was left to the browser, which navigates away from palmar")
+        got = None
+        for _ in range(40):
+            time.sleep(0.2)
+            got = self.b.ev("""(()=>{const v=[...window.palmar.tiles.values()].find(t=>t.s.kind==='file');
+              return v ? {path:(window.palmar.layout()[v.id]||{}).path, mode:v.mode||null} : null;})()""")
+            if got and got["mode"]:
+                break
+        self.assertEqual(got and got["path"], path, "it did not open what was dropped: %r" % (got,))
+        self.assertEqual(got["mode"], "csv", "it opened, but not as the kind of file it is: %r" % (got,))
+        self.assertEqual(self.b.ev("location.pathname"), "/", "the page navigated away from palmar")
 
     def test_text_shows_with_line_numbers_and_says_it_can_be_edited(self):
         # Its own file: the editing test writes notes.md, and these two share a browser.
