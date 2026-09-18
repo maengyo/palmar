@@ -3753,17 +3753,20 @@ class ViewerModes(unittest.TestCase):
           % (json.dumps("a,b\n1,2\n"), json.dumps("found by name.csv"), mtime))
         self.assertEqual(r["uri"], "", "this drop was supposed to carry no path — it proves nothing")
         self.assertTrue(r["taken"], "the drop was left to the browser, which navigates away")
-        got = None
+        # **Wait for the file that was dropped, not for any file window.** Asking for the first one
+        # open reads whatever a neighbouring test left behind (measured: 'text' from another file,
+        # only inside a full run).
+        got, seen = None, []
         for _ in range(60):
             time.sleep(0.2)
-            got = self.b.ev("""(()=>{const v=[...window.palmar.tiles.values()].find(t=>t.s.kind==='file');
-              return v ? {path:(window.palmar.layout()[v.id]||{}).path, mode:v.mode||null} : null;})()""")
+            seen = self.b.ev("""(()=>[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file')
+              .map(v=>({path:(window.palmar.layout()[v.id]||{}).path, mode:v.mode||null})))()""")
+            got = next((v for v in seen if v["path"] and
+                        os.path.realpath(v["path"]) == os.path.realpath(path)), None)
             if got and got["mode"]:
                 break
-        self.assertTrue(got, "nothing opened")
-        self.assertEqual(os.path.realpath(got["path"]), os.path.realpath(path),
-                         "it opened something else: %r" % (got,))
-        self.assertEqual(got["mode"], "csv")
+        self.assertTrue(got, "the dropped file never opened — what did: %r" % (seen,))
+        self.assertEqual(got["mode"], "csv", "it opened, but not as the kind of file it is: %r" % (got,))
 
     def test_two_files_it_cannot_tell_apart_open_neither(self):
         """Same name, same bytes, same time in two places. Opening one of them silently is worse than

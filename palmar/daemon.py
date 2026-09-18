@@ -2861,10 +2861,26 @@ async def build_find_index() -> list:
 #: wants the file **where it is**, because a viewer here is a window onto the file on disk and saves
 #: back to it. So the three facts that did come over are used to find it.
 #:
-#: **Only an exact name, and only under the roots** — the same floor every other path check uses, so
-#: this opens nothing that browsing could not already reach. Size and modification time are matched by
-#: the caller; two files agreeing on all three is not something to worry about, and if they do the
-#: page opens neither and says so.
+#: **Only an exact name, and only where palmar is already looking.** The first version searched the
+#: roots and stopped there, which is narrower than palmar's own rule for *reading* a file: the roots
+#: are the floor for things that **act** on the machine — opening a shell, saving an edit — while
+#: `/api/file` reads anywhere this uid can read, because looking is looking. A file on a work drive
+#: could be opened by walking to it in the rail and not by dropping it, which is a difference with no
+#: reason behind it (user, 2026-09-18: "home 아래에 없으면 안열려?").
+#:
+#: So the search also covers **the folders the files already open came from.** A pane's own directory
+#: would have been the obvious thing to add and adds nothing: a pane cannot be opened outside the
+#: roots in the first place (measured — `POST /api/sessions` refuses it), so every one of them is
+#: already covered. A **viewer** is not floored that way, because reading is not acting: walk to a
+#: work drive in the rail, open a file, and that folder is somewhere this person opens files from.
+#: From then on a drop out of it finds its way home.
+#:
+#: What is still not searched is the rest of the machine, and that is not a rule about permission but
+#: about time: a sweep has to end, and a network drive has no end worth waiting for. The first file
+#: out of a new place is still opened from the rail, which reaches anywhere; after that, drops work.
+#:
+#: Size and modification time are matched by the caller; two files agreeing on all three is not
+#: something to guess between, and the page then opens neither and says so.
 #:
 #: Deeper than the folder index (that one labels places to open a terminal; this one looks for one
 #: file) and capped both ways, with the same yield so a sweep does not stop every pane's bytes.
@@ -2873,13 +2889,33 @@ FIND_FILE_HITS = 24
 FIND_FILE_NODES = 120_000
 
 
+def search_tops() -> list:
+    """The roots, plus the folder of every file window on the board — with anything already covered by
+    an earlier top dropped, so a home and a folder inside it are swept once."""
+    tops = [str(r) for r in roots()]
+
+    def covered(c):
+        return any(c == t or c.startswith(t.rstrip(os.sep) + os.sep) for t in tops)
+
+    for r in (registry.layout or {}).values():
+        if not isinstance(r, dict) or r.get("kind") != "file":
+            continue
+        p = r.get("path")
+        if not isinstance(p, str) or not p:
+            continue
+        d = os.path.dirname(p)
+        if d and not covered(d) and os.path.isdir(d):
+            tops.append(d)
+    return tops
+
+
 async def find_files(name: str) -> list:
     out: list = []
     n = 0
     if not name or "/" in name or "\\" in name or name in (".", ".."):
         return out
     want = name.lower()
-    for root in roots():
+    for root in search_tops():
         stack = [(str(root), 0)]
         while stack and len(out) < FIND_FILE_HITS and n < FIND_FILE_NODES:
             d, depth = stack.pop()

@@ -330,6 +330,37 @@ class FindingAFileSomebodyDropped(unittest.TestCase):
         got = self.d.get("/api/files?name=hidden.csv")["files"]
         self.assertEqual(got, [], "it swept a folder the rail does not: %r" % (got,))
 
+    def test_a_folder_outside_home_is_searched_once_a_file_there_is_open(self):
+        """**Reading is not acting.** The roots are the floor for what acts on the machine — opening a
+        shell, saving an edit — and `/api/file` reads anywhere this uid can read, so a file on a work
+        drive opens fine by walking to it in the rail. Searching only the roots made a drop narrower
+        than that for no reason (user, 2026-09-18: "home 아래에 없으면 안열려?").
+
+        A pane's own folder would have been the obvious thing to add and adds nothing — a pane cannot
+        be opened outside the roots at all. A **viewer** is not floored that way, so the folders files
+        were opened from are the ones that widen it."""
+        out = tempfile.mkdtemp(prefix="palmar-elsewhere-")
+        try:
+            docs = os.path.join(out, "docs")
+            os.makedirs(docs)
+            opened = os.path.join(docs, "already open.csv")
+            beside = os.path.join(docs, "dropped beside it.csv")
+            for f, text in ((opened, "a,b\n1,2\n"), (beside, "c,d\n3,4\n")):
+                with open(f, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            name = "/api/files?name=" + urllib.parse.quote("dropped beside it.csv")
+            self.assertEqual(self.d.get(name)["files"], [],
+                             "it searched outside home before anything pointed it there")
+            st, _ = self.d.raw("PUT", "/api/layout", {"layout": {"v:aaaa11": {
+                "x": 10, "y": 10, "w": 400, "h": 300, "kind": "file", "path": opened, "canvas": "c1"}}})
+            self.assertEqual(st, 200)
+            got = self.d.get(name)["files"]
+            self.assertEqual(len(got), 1, "the folder of an open file was not searched: %r" % (got,))
+            self.assertEqual(os.path.realpath(got[0]["path"]), os.path.realpath(beside))
+        finally:
+            self.d.raw("PUT", "/api/layout", {"layout": {}})
+            shutil.rmtree(out, ignore_errors=True)
+
     def test_a_name_nobody_has_is_no_error(self):
         self.assertEqual(self.d.get("/api/files?name=nothing-like-this.csv")["files"], [])
 
