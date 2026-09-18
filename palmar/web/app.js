@@ -1854,6 +1854,14 @@ async function openDropped(dt, at) {
     } else if (same.length > 1) {
       toast([{ b: f.name }, 'is in ' + same.length + ' places and they are identical —',
              { d: 'open it from the folder rail so palmar knows which' }]);
+    } else if (hits.length) {
+      // **Found the name and not the file.** Saying "not found" for this sent the search looking for a
+      // fault it did not have (2026-09-18). Size and time are what tell two files of a name apart, so
+      // when they disagree the numbers are the answer, not a guess at which one was meant.
+      const h = hits[0];
+      toast([{ b: f.name }, 'is on disk but not the one that was dropped —',
+             { d: 'dropped ' + f.size + ' bytes at ' + new Date(f.lastModified).toLocaleString() +
+                  ' · found ' + h.size + ' at ' + new Date(h.mtime * 1000).toLocaleString() }]);
     } else {
       toast([{ b: f.name }, 'was not found on your drives —',
              { d: 'a dropped file carries no path; open it from the folder rail, which reaches anywhere' }]);

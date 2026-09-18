@@ -2965,16 +2965,24 @@ async def find_files(name: str) -> list:
     if not name or "/" in name or "\\" in name or name in (".", ".."):
         return out
     want = name.lower()
+    tops = search_tops()
+    # **Every top gets a turn.** With one deadline over the whole search, a home big enough to spend it
+    # is a home that hides every other drive — the budget in entries already guards against that and
+    # the clock did not (user, 2026-09-18: a file on D: with the home on C:, still not found). So the
+    # time is shared out as well, with a floor so a machine with many volumes does not give each one
+    # too little to be worth starting.
+    share = max(0.6, FIND_FILE_SECONDS / max(1, len(tops)))
     deadline = time.monotonic() + FIND_FILE_SECONDS
     # **It stops at the nearest place that has an answer.** The tops are in the order each one holds
     # the answer — home, then the folders files were opened from, then the other drives — and going on
     # past a hit means sweeping an external disk to ask whether your own home is lying to you. The
     # caller's rule against guessing between identical files still holds where it matters: within the
     # place the file was found. Only a name that is nowhere pays for the whole search.
-    for root in search_tops():
+    for root in tops:
         if out or time.monotonic() > deadline:
             break
         n = 0                                   # its own budget: a wide home cannot starve a drive
+        until = min(deadline, time.monotonic() + share)
         stack = [(str(root), 0)]
         while stack and len(out) < FIND_FILE_HITS and n < FIND_FILE_NODES:
             d, depth = stack.pop()
@@ -2984,8 +2992,9 @@ async def find_files(name: str) -> list:
                         n += 1
                         if n % FIND_YIELD == 0:
                             await asyncio.sleep(0)
-                            if time.monotonic() > deadline:
-                                return out
+                            if time.monotonic() > until:
+                                n = FIND_FILE_NODES     # this top's turn is over; the next one begins
+                                break
                         if n >= FIND_FILE_NODES:
                             break
                         if e.name.startswith(".") or e.name in FIND_SKIP or e.name.endswith(FIND_SKIP_SUFFIX):
