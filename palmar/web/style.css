@@ -765,6 +765,9 @@ body.ui-mono { --ui: var(--mono); }
 .cv-scroll::-webkit-scrollbar-thumb:hover { background: var(--ink-3); background-clip: padding-box; }
 .cv-scroll::-webkit-scrollbar-thumb:active { background: var(--accent); background-clip: padding-box; }
 .cv.has-max .cv-scroll { overflow: hidden; }
+/* Looking for a dropped file means sweeping disks, which takes as long as it takes. The cursor says
+   so — on everything, because the hand is somewhere over a window as often as over the floor. */
+.cv.finding, .cv.finding * { cursor: progress !important; }
 /* The cursor says first that empty space can be grabbed and dragged. Over a tile, the tile's cursor wins. */
 .cv-scroll { cursor: grab; }
 .cv-scroll.panning { cursor: grabbing; user-select: none; }

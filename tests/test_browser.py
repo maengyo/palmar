@@ -3768,6 +3768,36 @@ class ViewerModes(unittest.TestCase):
         self.assertTrue(got, "the dropped file never opened — what did: %r" % (seen,))
         self.assertEqual(got["mode"], "csv", "it opened, but not as the kind of file it is: %r" % (got,))
 
+    def test_while_it_looks_the_canvas_says_so(self):
+        """Finding a dropped file means sweeping disks, which takes as long as it takes — and until it
+        finished, letting go of a file did nothing you could see (user, 2026-09-18). Read while the
+        search is still out: the cursor is the busy one and the toast names the file."""
+        self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').forEach(v=>v.close()); 1")
+        self.b.ev("""(()=>{
+          const S=document.getElementById('cv-scroll'), b=S.getBoundingClientRect();
+          const dt=new DataTransfer();
+          dt.items.add(new File(['x'], 'nowhere at all.csv', {type:'text/csv'}));
+          const at={clientX:b.left+300, clientY:b.top+200, dataTransfer:dt, bubbles:true, cancelable:true};
+          S.dispatchEvent(new DragEvent('dragover', at));
+          S.dispatchEvent(new DragEvent('drop', at)); return 1;})()""")
+        busy, said = False, ""
+        for _ in range(40):
+            time.sleep(0.1)
+            r = self.b.ev("""(()=>({busy: document.getElementById('cv').classList.contains('finding'),
+              cursor: getComputedStyle(document.getElementById('cv-scroll')).cursor,
+              said: (document.querySelector('.toast')||{}).textContent||''}))()""")
+            if r["busy"]:
+                busy = True
+                self.assertEqual(r["cursor"], "progress", "the canvas is busy and does not look it")
+            if "nowhere at all.csv" in r["said"]:
+                said = r["said"]
+            if busy and said and not r["busy"]:
+                break
+        self.assertTrue(busy, "nothing said the search was running")
+        self.assertIn("nowhere at all.csv", said, "it did not say what it was looking for")
+        self.assertFalse(self.b.ev("document.getElementById('cv').classList.contains('finding')"),
+                         "the busy cursor was left on after the search ended")
+
     def test_two_files_it_cannot_tell_apart_open_neither(self):
         """Same name, same bytes, same time in two places. Opening one of them silently is worse than
         opening nothing — the person is the only one who knows which they meant."""

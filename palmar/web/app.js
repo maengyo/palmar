@@ -1836,36 +1836,47 @@ async function openDropped(dt, at) {
     return;
   }
   let i = 0;
-  for (const f of files) {
-    let hits = [];
-    try {
-      const r = await api('GET', '/api/files?name=' + encodeURIComponent(f.name));
-      hits = (r && r.files) || [];
-    } catch (e) {
-      toast(['could not look for ' + f.name + ' —', { d: String(e.message || e) }]);
-      return;
+  // **Say that something is happening.** Finding a dropped file means sweeping disks, which takes as
+  // long as it takes — and until it finished, letting go of a file did nothing you could see (user,
+  // 2026-09-18). The canvas shows the busy cursor and the toast names the file being looked for; both
+  // are cleared by whatever the search turns out to say.
+  cv.classList.add('finding');
+  try {
+    for (const f of files) {
+      toast(['looking for', { b: f.name }, '—', { d: 'a dropped file carries no path, so palmar searches your drives' }]);
+      let hits = [];
+      try {
+        const r = await api('GET', '/api/files?name=' + encodeURIComponent(f.name));
+        hits = (r && r.files) || [];
+      } catch (e) {
+        toast(['could not look for ' + f.name + ' —', { d: String(e.message || e) }]);
+        return;
+      }
+      // Modification time to the second: a file system keeps it more coarsely than the browser reports it.
+      const same = hits.filter((h) => h.size === f.size &&
+                                      Math.abs(h.mtime * 1000 - f.lastModified) < 2000);
+      if (same.length === 1) {
+        openViewer(same[0].path, current, { x: at.x + i * GAP * 2, y: at.y + i * GAP * 2 });
+        toast([{ b: f.name }, '—', { d: shortPath(same[0].path) }]);
+        i++;
+      } else if (same.length > 1) {
+        toast([{ b: f.name }, 'is in ' + same.length + ' places and they are identical —',
+               { d: 'open it from the folder rail so palmar knows which' }]);
+      } else if (hits.length) {
+        // **Found the name and not the file.** Saying "not found" for this sent the search looking
+        // for a fault it did not have (2026-09-18). Size and time are what tell two files of a name
+        // apart, so when they disagree the numbers are the answer, not a guess at which was meant.
+        const h = hits[0];
+        toast([{ b: f.name }, 'is on disk but not the one that was dropped —',
+               { d: 'dropped ' + f.size + ' bytes at ' + new Date(f.lastModified).toLocaleString() +
+                    ' · found ' + h.size + ' at ' + new Date(h.mtime * 1000).toLocaleString() }]);
+      } else {
+        toast([{ b: f.name }, 'was not found on your drives —',
+               { d: 'a dropped file carries no path; open it from the folder rail, which reaches anywhere' }]);
+      }
     }
-    // Modification time to the second: a file system keeps it more coarsely than the browser reports it.
-    const same = hits.filter((h) => h.size === f.size &&
-                                    Math.abs(h.mtime * 1000 - f.lastModified) < 2000);
-    if (same.length === 1) {
-      openViewer(same[0].path, current, { x: at.x + i * GAP * 2, y: at.y + i * GAP * 2 });
-      i++;
-    } else if (same.length > 1) {
-      toast([{ b: f.name }, 'is in ' + same.length + ' places and they are identical —',
-             { d: 'open it from the folder rail so palmar knows which' }]);
-    } else if (hits.length) {
-      // **Found the name and not the file.** Saying "not found" for this sent the search looking for a
-      // fault it did not have (2026-09-18). Size and time are what tell two files of a name apart, so
-      // when they disagree the numbers are the answer, not a guess at which one was meant.
-      const h = hits[0];
-      toast([{ b: f.name }, 'is on disk but not the one that was dropped —',
-             { d: 'dropped ' + f.size + ' bytes at ' + new Date(f.lastModified).toLocaleString() +
-                  ' · found ' + h.size + ' at ' + new Date(h.mtime * 1000).toLocaleString() }]);
-    } else {
-      toast([{ b: f.name }, 'was not found on your drives —',
-             { d: 'a dropped file carries no path; open it from the folder rail, which reaches anywhere' }]);
-    }
+  } finally {
+    cv.classList.remove('finding');
   }
 }
 
