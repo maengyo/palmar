@@ -73,7 +73,8 @@ class Credentials(unittest.TestCase):
     def test_reads_need_the_token_too(self):
         """Origin and Host pass when the header is absent — they stop a browser being aimed at the
         daemon, they do not identify a caller. Without this, `curl /api/dirs` walked the home tree."""
-        for path in ("/api/sessions", "/api/canvases", "/api/dirs", "/api/dirs?find=x"):
+        for path in ("/api/sessions", "/api/canvases", "/api/dirs", "/api/dirs?find=x",
+                     "/api/files?name=x"):
             st, _ = self.d.raw("GET", path, token=False)
             self.assertEqual(st, 403, path)
             st, _ = self.d.raw("GET", path)
@@ -283,6 +284,54 @@ class Directories(unittest.TestCase):
         self.assertLess(time.time() - t, 5.0, "a FIFO outside the roots blocked the listing")
         row = [e for e in got["entries"] if e["name"] == "proj"]
         self.assertEqual(row[0]["git_branch"], None)
+
+
+
+class FindingAFileSomebodyDropped(unittest.TestCase):
+    """A page is never told where a dropped file is. `text/uri-list` carries a `file://` URL on macOS
+    and is simply not there on Windows, and `dataTransfer.files` gives a name, a size, a modification
+    time and the bytes — never a location. The bytes are what an upload wants; a viewer here is a
+    window onto the file **on disk** and saves back to it, so palmar goes and finds it instead."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.deep = os.path.join(cls.d.home, "a", "b", "papers")
+        os.makedirs(cls.deep)
+        with open(os.path.join(cls.deep, "quarterly report.csv"), "w") as fh:
+            fh.write("a,b\n1,2\n")
+        os.makedirs(os.path.join(cls.d.home, "node_modules", "pkg"))
+        with open(os.path.join(cls.d.home, "node_modules", "pkg", "hidden.csv"), "w") as fh:
+            fh.write("x\n")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.d.stop()
+
+    def test_it_finds_the_file_by_name_with_its_size_and_time(self):
+        """Name, size and modification time are the three facts that do come over, and the page opens
+        a file only when exactly one agrees on all three."""
+        got = self.d.get("/api/files?name=" + urllib.parse.quote("quarterly report.csv"))["files"]
+        self.assertEqual(len(got), 1, "expected one hit: %r" % (got,))
+        want = os.path.join(self.deep, "quarterly report.csv")
+        self.assertEqual(os.path.realpath(got[0]["path"]), os.path.realpath(want))
+        self.assertEqual(got[0]["size"], os.path.getsize(want))
+        self.assertAlmostEqual(got[0]["mtime"], os.path.getmtime(want), places=3)
+
+    def test_a_name_with_a_separator_in_it_finds_nothing(self):
+        """The name is a name. Anything with a path in it is a way of asking for somewhere else, and
+        the answer to that is nothing at all — the roots are the floor here as everywhere."""
+        for bad in ("../../etc/passwd", "/etc/passwd", "a/b.csv", "..", "."):
+            got = self.d.get("/api/files?name=" + urllib.parse.quote(bad))["files"]
+            self.assertEqual(got, [], "%r came back with %r" % (bad, got))
+
+    def test_the_places_the_folder_sweep_skips_are_skipped_here_too(self):
+        """node_modules and its kind are not where somebody's document is, and they are very wide."""
+        got = self.d.get("/api/files?name=hidden.csv")["files"]
+        self.assertEqual(got, [], "it swept a folder the rail does not: %r" % (got,))
+
+    def test_a_name_nobody_has_is_no_error(self):
+        self.assertEqual(self.d.get("/api/files?name=nothing-like-this.csv")["files"], [])
 
 
 class Restore(unittest.TestCase):

@@ -1806,18 +1806,60 @@ cvScroll.addEventListener('drop', (ev) => {
   // on a page it does not accept is *navigated to* — palmar replaced by a PDF, and the board with it.
   if (!carriesFiles(ev.dataTransfer) && !paths.length) return;
   ev.preventDefault();
-  if (!paths.length) {
-    toast(['that did not come with a path palmar can open —',
-           { d: 'drag the file from the folder rail instead' }]);
+  if (!paths.length) { openDropped(ev.dataTransfer, at0(ev)); return; }
+  const at = at0(ev);
+  // Several at once land in a short cascade rather than exactly on top of one another.
+  paths.forEach((p, i) => openViewer(p, current, { x: at.x + i * GAP * 2, y: at.y + i * GAP * 2 }));
+});
+
+// The board's coordinates start at the world's origin, not the scroller's (see "the world").
+function at0(ev) {
+  const box = cvScroll.getBoundingClientRect();
+  return { x: Math.round(ev.clientX - box.left + cvScroll.scrollLeft - originX - 60),
+           y: Math.round(ev.clientY - box.top + cvScroll.scrollTop - originY - 15) };
+}
+
+//: **When the drop came without a location.** Which is Windows, every time: `text/uri-list` is not
+//: there and `dataTransfer.files` gives a name, a size, a modification time and the bytes — never a
+//: path. The bytes are what an upload wants, and an upload is not what this is: a viewer here is a
+//: window onto the file **on disk**, and text and Markdown save back to it. A copy in a temporary
+//: folder would look identical and quietly stop being the file you dropped.
+//:
+//: So palmar looks for it, by the three facts it was given, under the same roots everything else is
+//: floored by. **Only when exactly one file agrees on all three does it open** — two files sharing a
+//: name, a byte count and a modification time is not something to guess between, and opening the
+//: wrong one silently is worse than opening nothing.
+async function openDropped(dt, at) {
+  const files = dt && dt.files ? Array.prototype.slice.call(dt.files) : [];
+  if (!files.length) {
+    toast(['nothing in that drop palmar can open']);
     return;
   }
-  const box = cvScroll.getBoundingClientRect();
-  // The board's coordinates start at the world's origin, not the scroller's (see "the world").
-  const x0 = Math.round(ev.clientX - box.left + cvScroll.scrollLeft - originX - 60);
-  const y0 = Math.round(ev.clientY - box.top + cvScroll.scrollTop - originY - 15);
-  // Several at once land in a short cascade rather than exactly on top of one another.
-  paths.forEach((p, i) => openViewer(p, current, { x: x0 + i * GAP * 2, y: y0 + i * GAP * 2 }));
-});
+  let i = 0;
+  for (const f of files) {
+    let hits = [];
+    try {
+      const r = await api('GET', '/api/files?name=' + encodeURIComponent(f.name));
+      hits = (r && r.files) || [];
+    } catch (e) {
+      toast(['could not look for ' + f.name + ' —', { d: String(e.message || e) }]);
+      return;
+    }
+    // Modification time to the second: a file system keeps it more coarsely than the browser reports it.
+    const same = hits.filter((h) => h.size === f.size &&
+                                    Math.abs(h.mtime * 1000 - f.lastModified) < 2000);
+    if (same.length === 1) {
+      openViewer(same[0].path, current, { x: at.x + i * GAP * 2, y: at.y + i * GAP * 2 });
+      i++;
+    } else if (same.length > 1) {
+      toast([{ b: f.name }, 'is in ' + same.length + ' places and they are identical —',
+             { d: 'open it from the folder rail so palmar knows which' }]);
+    } else {
+      toast([{ b: f.name }, 'was not found under your home —',
+             { d: 'a dropped file carries no path; palmar has to go and find it' }]);
+    }
+  }
+}
 
 // After the board arrives: every viewer it names comes back, on the canvas it was on.
 function restoreViewers() {

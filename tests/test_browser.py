@@ -3732,6 +3732,66 @@ class ViewerModes(unittest.TestCase):
         self.assertEqual(got["mode"], "csv", "it opened, but not as the kind of file it is: %r" % (got,))
         self.assertEqual(self.b.ev("location.pathname"), "/", "the page navigated away from palmar")
 
+    def test_a_drop_with_no_path_in_it_is_found_on_disk(self):
+        """**Windows, every time.** `text/uri-list` is not there and `dataTransfer.files` gives a name,
+        a size, a modification time and the bytes — never a location (user, 2026-09-18). The bytes are
+        what an upload wants, and an upload is not what this is: a viewer here is a window onto the
+        file **on disk**, and text and Markdown save back to it, so a copy in a temporary folder would
+        look identical and quietly stop being the file that was dropped. palmar goes and finds it by
+        the three facts it was given. The drop built here carries no uri-list at all."""
+        path = self.write("found by name.csv", "a,b\n1,2\n")
+        mtime = int(os.path.getmtime(path) * 1000)
+        self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').forEach(v=>v.close()); 1")
+        r = self.b.ev("""(()=>{
+          const S=document.getElementById('cv-scroll'), b=S.getBoundingClientRect();
+          const dt=new DataTransfer();
+          dt.items.add(new File([%s], %s, {type:'text/csv', lastModified: %d}));
+          const at={clientX:b.left+320, clientY:b.top+210, dataTransfer:dt, bubbles:true, cancelable:true};
+          S.dispatchEvent(new DragEvent('dragover', at));
+          const drop=new DragEvent('drop', at); S.dispatchEvent(drop);
+          return {types:[...dt.types], uri:dt.getData('text/uri-list'), taken:drop.defaultPrevented};})()"""
+          % (json.dumps("a,b\n1,2\n"), json.dumps("found by name.csv"), mtime))
+        self.assertEqual(r["uri"], "", "this drop was supposed to carry no path — it proves nothing")
+        self.assertTrue(r["taken"], "the drop was left to the browser, which navigates away")
+        got = None
+        for _ in range(60):
+            time.sleep(0.2)
+            got = self.b.ev("""(()=>{const v=[...window.palmar.tiles.values()].find(t=>t.s.kind==='file');
+              return v ? {path:(window.palmar.layout()[v.id]||{}).path, mode:v.mode||null} : null;})()""")
+            if got and got["mode"]:
+                break
+        self.assertTrue(got, "nothing opened")
+        self.assertEqual(os.path.realpath(got["path"]), os.path.realpath(path),
+                         "it opened something else: %r" % (got,))
+        self.assertEqual(got["mode"], "csv")
+
+    def test_two_files_it_cannot_tell_apart_open_neither(self):
+        """Same name, same bytes, same time in two places. Opening one of them silently is worse than
+        opening nothing — the person is the only one who knows which they meant."""
+        body = "same,file\n9,9\n"
+        a = self.write("twin.csv", body)
+        other = os.path.join(self.dir, "elsewhere")
+        if not os.path.isdir(other):
+            os.makedirs(other)
+        b = os.path.join(other, "twin.csv")
+        with open(b, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        os.utime(b, (os.path.getatime(a), os.path.getmtime(a)))
+        self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').forEach(v=>v.close()); 1")
+        self.b.ev("""(()=>{
+          const S=document.getElementById('cv-scroll'), b=S.getBoundingClientRect();
+          const dt=new DataTransfer();
+          dt.items.add(new File([%s], 'twin.csv', {type:'text/csv', lastModified: %d}));
+          const at={clientX:b.left+320, clientY:b.top+210, dataTransfer:dt, bubbles:true, cancelable:true};
+          S.dispatchEvent(new DragEvent('dragover', at));
+          S.dispatchEvent(new DragEvent('drop', at)); return 1;})()"""
+          % (json.dumps(body), int(os.path.getmtime(a) * 1000)))
+        time.sleep(2.5)
+        open_now = self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').length")
+        self.assertEqual(open_now, 0, "it guessed between two files it cannot tell apart")
+        said = self.b.ev("(document.querySelector('.toast')||{}).textContent||''")
+        self.assertIn("twin.csv", said, "it opened nothing and said nothing: %r" % (said,))
+
     def test_text_shows_with_line_numbers_and_says_it_can_be_edited(self):
         # Its own file: the editing test writes notes.md, and these two share a browser.
         self.write("plain.md", "# 메모\nsecond\n")

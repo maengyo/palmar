@@ -2853,6 +2853,64 @@ async def build_find_index() -> list:
     return out
 
 
+#: **Finding the file somebody dragged in from Finder or Explorer.**
+#:
+#: A page is never told where a dropped file is. `text/uri-list` carries a `file://` URL on macOS and
+#: is simply absent on Windows (user, 2026-09-18), and `dataTransfer.files` gives a name, a size, a
+#: modification time and the bytes — never a location. The bytes are what an upload wants; palmar
+#: wants the file **where it is**, because a viewer here is a window onto the file on disk and saves
+#: back to it. So the three facts that did come over are used to find it.
+#:
+#: **Only an exact name, and only under the roots** — the same floor every other path check uses, so
+#: this opens nothing that browsing could not already reach. Size and modification time are matched by
+#: the caller; two files agreeing on all three is not something to worry about, and if they do the
+#: page opens neither and says so.
+#:
+#: Deeper than the folder index (that one labels places to open a terminal; this one looks for one
+#: file) and capped both ways, with the same yield so a sweep does not stop every pane's bytes.
+FIND_FILE_DEPTH = 8
+FIND_FILE_HITS = 24
+FIND_FILE_NODES = 120_000
+
+
+async def find_files(name: str) -> list:
+    out: list = []
+    n = 0
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
+        return out
+    want = name.lower()
+    for root in roots():
+        stack = [(str(root), 0)]
+        while stack and len(out) < FIND_FILE_HITS and n < FIND_FILE_NODES:
+            d, depth = stack.pop()
+            try:
+                with os.scandir(d) as it:
+                    for e in it:
+                        n += 1
+                        if n % FIND_YIELD == 0:
+                            await asyncio.sleep(0)
+                        if n >= FIND_FILE_NODES:
+                            break
+                        if e.name.startswith(".") or e.name in FIND_SKIP or e.name.endswith(FIND_SKIP_SUFFIX):
+                            continue
+                        try:
+                            if e.is_dir(follow_symlinks=False):
+                                if depth + 1 < FIND_FILE_DEPTH:
+                                    stack.append((e.path, depth + 1))
+                                continue
+                            if e.name.lower() != want or not e.is_file(follow_symlinks=False):
+                                continue
+                            st = e.stat()
+                        except OSError:
+                            continue
+                        out.append({"path": e.path, "size": st.st_size, "mtime": st.st_mtime})
+                        if len(out) >= FIND_FILE_HITS:
+                            break
+            except OSError:
+                continue
+    return out
+
+
 async def find_dirs(qs: str) -> list:
     """Searches the labels. **A path typed out in full comes first** — pasting a path you already know is
     the most common use, and it can be answered even when it is not in the labels (outside the depth)."""
@@ -3824,6 +3882,14 @@ async def handle_request(reader, writer) -> None:
         writer.write(http_json(200, {"stopping": True}))
         await writer.drain()
         STOP_NOW[0] and STOP_NOW[0]()
+        return
+
+    if path == "/api/files":
+        # Where is the file that was dragged in? See find_files — a name is all a page is given.
+        if method != "GET":
+            writer.write(http_error(405, "GET"))
+            return
+        writer.write(http_json(200, {"files": await find_files(qget(q, "name", "").strip())}))
         return
 
     if path == "/api/dirs":
