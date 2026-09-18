@@ -890,35 +890,57 @@ class TheWorldAroundTheWindows(unittest.TestCase):
 
     def test_a_terminal_is_never_taller_than_the_box_holding_it(self):
         """**The prompt was below the bottom of the pane with no way to scroll to it.** `fit()` divides
-        the box by a cell size the renderer worked out, so when that changes afterwards — a font
-        arriving after the 1.5s the boot waits for it, the WebGL renderer handing over to the DOM one
-        — the row count stays and the rows get taller. Measured in the user's own pane, 2026-09-18:
-        24 rows, screen 403px, box 328px, and `scrollHeight == clientHeight`, so the 75px holding the
-        prompt could not be reached at all. The cell is grown here behind the fit's back, which is
-        what a late font does to it."""
+        the box by the cell size the terminal has **cached**, and it re-measures that only when a font
+        option *changes* — the options service fires on `rawOptions[k] !== v`, so writing the same
+        value back is nothing at all. When the cell changes for any other reason — the real font
+        arriving after boot gave up waiting 1.5s for it, a renderer handing over — every fit after
+        that divides by a number that is no longer true, calls the result fitted, and refitting
+        changes nothing however often it runs. Measured in the user's pane, 2026-09-18: 24 rows,
+        screen 403px, box 328px, `scrollHeight == clientHeight`, and unchanged by a refit.
+
+        The stale cache is set here directly, because that is the state and there is no way to make a
+        font arrive late on demand. What is under test is that palmar climbs out of it."""
         self.js("put('far', 40, 40, 520, 360); return 1;")
         read = """(()=>{const t=[...window.palmar.tiles.values()][0];
           const s=t.el.querySelector('.xterm-screen');
-          return {rows:t.term.rows, screen:Math.round(s.offsetHeight),
-                  box:Math.round(t.termEl.clientHeight)};})()"""
+          return {rows:t.term.rows, cell:t.term._core._renderService.dimensions.css.cell.height,
+                  propose:(()=>{const p=t.fit.proposeDimensions();return p?p.rows:null})(),
+                  screen:Math.round(s.offsetHeight), box:Math.round(t.termEl.clientHeight)};})()"""
         was = self.b.ev(read)
         self.assertLessEqual(was["screen"], was["box"], "it did not start out fitting: %r" % (was,))
-        try:
-            self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
-              t.termEl.style.fontSize='19px'; t.term.options.fontSize=19; return 1;})()""")
-            time.sleep(0.7)
-            over = self.b.ev(read)
-            self.assertGreater(over["screen"], over["box"],
-                               "the cell did not actually grow — this test proves nothing: %r" % (over,))
-            self.b.ev("(()=>{[...window.palmar.tiles.values()][0].refit(); return 1;})()")
-            time.sleep(1.2)
-            now = self.b.ev(read)
-            self.assertLessEqual(now["screen"], now["box"],
-                                 "rows are still hanging below the box: %r" % (now,))
-        finally:
-            self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
-              t.termEl.style.fontSize=''; t.term.options.fontSize=13; t.refit(); return 1;})()""")
-            time.sleep(1.0)
+        self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+          t.term._core._renderService.dimensions.css.cell.height = 13.67; return 1;})()""")
+        stale = self.b.ev(read)
+        self.assertNotEqual(stale["propose"], was["propose"],
+                            "the stale cell changed nothing — this test proves nothing: %r" % (stale,))
+        self.b.ev("(()=>{const t=[...window.palmar.tiles.values()][0]; t.fitted=false; t.refit(); return 1;})()")
+        time.sleep(1.5)
+        now = self.b.ev(read)
+        self.assertLessEqual(now["screen"], now["box"],
+                             "rows are still hanging below the box: %r" % (now,))
+        self.assertAlmostEqual(now["cell"], was["cell"], places=1,
+                               msg="it fitted, but still against a cell size that is not real: %r" % (now,))
+
+    def test_writing_a_font_option_back_unchanged_measures_nothing(self):
+        """Why `remeasure` moves the value at all. This is xterm's rule, not ours, and the whole fix
+        above rests on it — if a future version starts firing on an identical write, the hair up and
+        back can go."""
+        r = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+          let fired = 0;
+          const off = t.term.onResize(() => fired++);
+          const before = t.term._core._renderService.dimensions.css.cell.height;
+          t.term._core._renderService.dimensions.css.cell.height = 13.67;
+          const f = t.term.options.fontSize;
+          t.term.options.fontSize = f;                       // the same value: nothing happens
+          const same = t.term._core._renderService.dimensions.css.cell.height;
+          t.term.options.fontSize = f + 0.01;
+          t.term.options.fontSize = f;                       // moved and back: it measures
+          const moved = t.term._core._renderService.dimensions.css.cell.height;
+          off.dispose();
+          return {before: before, afterSame: same, afterMoved: moved};})()""")
+        self.assertEqual(r["afterSame"], 13.67, "an identical write re-measured after all: %r" % (r,))
+        self.assertAlmostEqual(r["afterMoved"], r["before"], places=1,
+                               msg="moving the value and back did not re-measure: %r" % (r,))
 
     def test_the_world_does_not_shrink_while_the_page_is_open(self):
         """The slack you panned into does not vanish under you. It goes on a reload, not before."""

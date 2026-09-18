@@ -1061,6 +1061,11 @@ class Tile {
     const scr = this.termEl.querySelector('.xterm-screen');
     if (scr && scr.offsetHeight > this.termEl.clientHeight + 1) {
       if (++this.fitTries <= 8) {
+        // **And fitting again is not enough.** `fit()` divides the box by the cell size the terminal
+        // has **cached**, so a second pass on a stale cell hands back the same wrong row count, calls
+        // it fitted, and nothing changes however often it runs (user, 2026-09-18: still 24 rows,
+        // 408px in a 328px box, after the refit added here). It has to be told to measure again.
+        remeasure(this.term);
         this.fitted = false;
         requestAnimationFrame(() => { if (!this.closed) this.refit(); });
         return;
@@ -3027,6 +3032,21 @@ cvPad = el('div', 'cv-pad');
 cvWorld = el('div', 'cv-world');
 cvScroll.appendChild(cvPad);
 cvScroll.appendChild(cvWorld);
+
+//: **Make the terminal measure a character again.** It caches the cell size and re-measures only
+//: when a font option *changes* — the options service fires on `rawOptions[k] !== v`, so writing the
+//: same value back is nothing at all. When the cell changes underneath it for any other reason — the
+//: font arriving after boot gave up waiting for it, a renderer handing over — the cache is stale and
+//: every `fit()` after that divides the box by a number that is no longer true. A hair up and back
+//: is two real changes, so it measures twice and settles on what is actually there, and the option
+//: ends where it began.
+function remeasure(term) {
+  try {
+    const f = term.options.fontSize;
+    term.options.fontSize = f + 0.01;
+    term.options.fontSize = f;
+  } catch (e) {}
+}
 
 //: The room the windows occupy, floored at the viewport — the same number the minimap scales to.
 function contentExtent() {
@@ -5192,7 +5212,7 @@ fontWait.then(boot, boot);
 // costs nothing when the font was already there — `ready` has resolved and every fit is a no-op.
 if (document.fonts && document.fonts.ready) {
   document.fonts.ready.then(() => {
-    for (const t of tiles.values()) if (t.visible()) t.refit();
+    for (const t of tiles.values()) if (t.visible()) { remeasure(t.term); t.refit(); }
   }).catch(() => {});
 }
 })();
