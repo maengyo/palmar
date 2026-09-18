@@ -62,9 +62,10 @@ if sys.platform == "win32" and not os.environ.get("PALMAR_WINDOWS_ANYWAY"):
         "\n"
         "  The port is far enough along to try, if you want to help find what is missing:\n"
         "      $env:PALMAR_WINDOWS_ANYWAY=1 ; palmar\n"
-        "  A daemon comes up and serves the page (measured on a runner, 2026-09-14). What is not\n"
-        "  there yet: it stays attached to the terminal (no fork on Windows), and the hook shim is\n"
-        "  shell scripts, so status comes from window titles only. docs/windows.md has the list."
+        "  A daemon comes up and serves the page, terminals open, the hooks attach through a\n"
+        "  PowerShell preamble, and a pane says where it is and what it is doing (2026-09-18).\n"
+        "  What is not there yet: it stays attached to the terminal (no fork on Windows), and a\n"
+        "  pane opened with cmd.exe gets no hooks. docs/windows.md has the list."
     )
 if sys.version_info < (3, 9):
     raise SystemExit("palmar: Python 3.9 or newer is required (/usr/bin/python3 is 3.9.6)")

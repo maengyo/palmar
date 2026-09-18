@@ -13,10 +13,10 @@
 
 **You can see which one wants you.** Every terminal carries a light — working, waiting on you,
 done, idle. There is nothing to install and nothing to configure: palmar attaches the agent's own
-hooks itself, through a shim on the shell's PATH, and where an agent offers none it reads the window
-title, and where there is no title either, what the shell is actually printing. Your settings files
-are not touched. The one that has been waiting longest sits at the top of the list, even if its
-window is off-screen.
+hooks itself — a shim in front of the shell on macOS and Linux, a preamble in PowerShell on Windows
+— and where an agent offers none it reads the window title, and where there is no title either,
+what the shell is actually printing. Your settings files are not touched. The one that has been
+waiting longest sits at the top of the list, even if its window is off-screen.
 
 **A window stays where you put it.** Drag it, size it, and the shell's rows and columns follow;
 nothing is tiled and nothing is resized behind your back. Windows never overlap — drop one on
@@ -31,7 +31,8 @@ browser.
 **Your files are right there.** The rail beside the canvas is the folder you are working in. A
 file opens in a window like any other — text with line numbers, a table for CSV, a page, a PDF —
 and text can be edited and saved in place. If something else wrote the file meanwhile, palmar says
-so instead of winning.
+so instead of winning. Drag one in from Finder or Explorer and it opens where you let go; a button
+on its title bar hands it to the program your machine would have opened it with.
 
 **Nothing to install but Python.** The standard library and a vendored copy of xterm.js. No build
 step, no packages, and no network at runtime — palmar opens no connection of its own unless you turn
@@ -107,6 +108,9 @@ free everywhere.
 - [`docs/protocol.md`](docs/protocol.md) — the contract between daemon and browser.
 - [`docs/decisions.md`](docs/decisions.md) — what is settled, and what is deliberately still open.
 - [`docs/roadmap.md`](docs/roadmap.md) — the order of work.
+- [`docs/reports.md`](docs/reports.md) — what was reported, what it turned out to be, and what is
+  still open. Including the ones that could not be reproduced, which is most of what a list like
+  this is for.
 
 The living list is the [issues](https://github.com/maengyo/palmar/issues).
 
