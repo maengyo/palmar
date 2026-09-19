@@ -3880,9 +3880,29 @@ class ViewerModes(unittest.TestCase):
 
     def test_while_it_looks_the_canvas_says_so(self):
         """Finding a dropped file means sweeping disks, which takes as long as it takes — and until it
-        finished, letting go of a file did nothing you could see (user, 2026-09-18). Read while the
-        search is still out: the cursor is the busy one and the toast names the file."""
+        finished, letting go of a file did nothing you could see (user, 2026-09-18).
+
+        **Watched, not sampled.** The first version polled every 100ms for the busy state and passed
+        here, where a large home makes the search take seconds, while failing on all three CI runners,
+        where an empty home finishes it before the first look (2026-09-19). How long the search takes
+        is a property of the machine; that the canvas says so while it runs is a property of palmar.
+        An observer set up before the drop records the states as they happen, so the assertion does
+        not depend on catching one."""
         self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').forEach(v=>v.close()); 1")
+        self.b.ev("""(()=>{
+          window.__seen = {busy:false, cursor:null, spin:false, done:false};
+          const cv = document.getElementById('cv'), S = document.getElementById('cv-scroll');
+          const look = () => {
+            if (cv.classList.contains('finding')) {
+              window.__seen.busy = true;
+              window.__seen.cursor = getComputedStyle(S).cursor;
+            } else if (window.__seen.busy) window.__seen.done = true;
+            const sp = document.querySelector('.toast .spin');
+            if (sp && getComputedStyle(sp).animationName !== 'none') window.__seen.spin = true;
+          };
+          window.__mo = new MutationObserver(look);
+          window.__mo.observe(document.body, {subtree:true, attributes:true, childList:true});
+          return 1;})()""")
         self.b.ev("""(()=>{
           const S=document.getElementById('cv-scroll'), b=S.getBoundingClientRect();
           const dt=new DataTransfer();
@@ -3890,26 +3910,19 @@ class ViewerModes(unittest.TestCase):
           const at={clientX:b.left+300, clientY:b.top+200, dataTransfer:dt, bubbles:true, cancelable:true};
           S.dispatchEvent(new DragEvent('dragover', at));
           S.dispatchEvent(new DragEvent('drop', at)); return 1;})()""")
-        busy, said, spun = False, "", False
-        for _ in range(40):
-            time.sleep(0.1)
-            r = self.b.ev("""(()=>{const sp=document.querySelector('.toast .spin');
-              return {busy: document.getElementById('cv').classList.contains('finding'),
-                cursor: getComputedStyle(document.getElementById('cv-scroll')).cursor,
-                spin: !!sp && getComputedStyle(sp).animationName !== 'none',
-                said: (document.querySelector('.toast')||{}).textContent||''};})()""")
-            if r["spin"]:
-                spun = True
-            if r["busy"]:
-                busy = True
-                self.assertEqual(r["cursor"], "wait", "the canvas is busy and does not look it")
-            if "nowhere at all.csv" in r["said"]:
-                said = r["said"]
-            if busy and said and not r["busy"]:
+        said = ""
+        for _ in range(80):
+            time.sleep(0.25)
+            said = self.b.ev("(document.querySelector('.toast')||{}).textContent||''")
+            if "was not found" in said:
                 break
-        self.assertTrue(busy, "nothing said the search was running")
-        self.assertIn("nowhere at all.csv", said, "it did not say what it was looking for")
-        self.assertTrue(spun, "no ring was going round — the cursor set is the platform's, this is ours")
+        seen = self.b.ev("(()=>{window.__mo.disconnect(); return window.__seen;})()")
+        self.assertIn("nowhere at all.csv", said, "it never said how the search ended: %r" % (said,))
+        self.assertTrue(seen["busy"], "nothing said the search was running: %r" % (seen,))
+        self.assertEqual(seen["cursor"], "wait", "the canvas was busy and did not look it: %r" % (seen,))
+        self.assertTrue(seen["spin"],
+                        "no ring went round — the cursor set is the platform's, this one is ours")
+        self.assertTrue(seen["done"], "the busy state was never taken off again: %r" % (seen,))
         self.assertFalse(self.b.ev("document.getElementById('cv').classList.contains('finding')"),
                          "the busy cursor was left on after the search ended")
 

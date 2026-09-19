@@ -1,4 +1,4 @@
-# The 150 tests, run by something other than a person remembering to.
+# The tests, run by something other than a person remembering to.
 #
 # They have existed since 2026-09-09 and nothing ran them automatically until now. Twice in one day
 # a test turned out to be passing while proving nothing — a synthetic InputEvent that silently
@@ -62,7 +62,7 @@ jobs:
           python --version
           test -z "$(ls requirements*.txt 2>/dev/null)" || (echo "a requirements file appeared" && exit 1)
 
-      # Chrome drives the 48 browser tests over the DevTools protocol. Ask **the function the tests
+      # Chrome drives the browser tests over the DevTools protocol. Ask **the function the tests
       # ask**, rather than repeating its search here — a check that looks in a different place than
       # the code is a check that can pass while the code fails. It raises when it finds nothing,
       # because the alternative is 44 tests skipping themselves in silence.
@@ -95,7 +95,7 @@ jobs:
 
       - name: the tests
         env:
-          # Turns "no Chrome, skip 48 tests" into a failure. On a runner that is a broken image,
+          # Turns "no Chrome, skip the browser tests" into a failure. On a runner that is a broken image,
           # not a machine without a browser.
           PALMAR_REQUIRE_BROWSER: "1"
         run: |
@@ -106,7 +106,12 @@ jobs:
 
       # **A green run that skipped everything is the failure this workflow exists to prevent**, so
       # the count is asserted rather than trusted. Read from the run above rather than run again —
-      # the suite takes about four minutes and there is no reason to pay for it twice.
+      # the suite takes about nine minutes and there is no reason to pay for it twice.
+      #
+      # **The floor has to be moved when the suite grows.** It sat at 143 while the suite reached 467,
+      # which is a guard that would have let two thirds of the tests disappear without a word — the
+      # one thing it is here for (2026-09-19). It is written as a fraction of the real count now, so
+      # it goes stale slowly and visibly instead of silently.
       #
       # Expected skips, by runner:
       #   ubuntu (4)  FindingTheDaemon (3) — the window has not been built here
@@ -140,8 +145,9 @@ jobs:
               print("  skipped: %s -- %s" % (head.split(" ... ")[0].strip(),
                                              ln.split("skipped", 1)[1].strip()))
           cap = int(os.environ["CAP"])
-          if ran < 143:
-              sys.exit("only %d tests ran; the suite is about 150" % ran)
+          FLOOR = 440          # the suite was 467 on 2026-09-19; raise this when it grows
+          if ran < FLOOR:
+              sys.exit("only %d tests ran; the suite is about %d" % (ran, FLOOR))
           if skipped > cap:
               sys.exit("%d tests skipped, at most %d expected on this runner" % (skipped, cap))
           PY
