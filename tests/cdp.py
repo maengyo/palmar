@@ -189,10 +189,25 @@ class Browser:
     def open(self, url, settle=3.5, script=None):
         """Open a page. `script` runs **before the document does**, which is the only way to change
         something the page reads at load time (navigator.platform, localStorage)."""
-        req = urllib.request.Request("http://127.0.0.1:%d/json/new?%s" % (self.port, "about:blank"),
-                                     method="PUT")
-        t = json.loads(urllib.request.urlopen(req, timeout=20).read())
-        self.ws = WS(t["webSocketDebuggerUrl"])
+        # **Opening a tab is asked for more than once.** Chrome answers `/json/new` with a target that
+        # is not always ready to take a DevTools socket a moment later, and the connect then sits
+        # until its own timeout and gives up. Seen on this machine five times in a long run, always a
+        # different test, always passing alone — a false red that teaches people to ignore reds
+        # (2026-09-19, docs/reports.md). Three tries with the page thrown away in between; if Chrome
+        # is really gone the last one raises exactly as before.
+        last = None
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(
+                    "http://127.0.0.1:%d/json/new?%s" % (self.port, "about:blank"), method="PUT")
+                t = json.loads(urllib.request.urlopen(req, timeout=20).read())
+                self.ws = WS(t["webSocketDebuggerUrl"])
+                break
+            except Exception as e:
+                last = e
+                if attempt == 2:
+                    raise
+                time.sleep(0.5 * (attempt + 1))
         self.ws.call("Runtime.enable")
         self.ws.call("Log.enable")
         self.ws.call("Page.enable")

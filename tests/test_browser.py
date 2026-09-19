@@ -1690,6 +1690,46 @@ class TidyWithTheWindowsFarApart(unittest.TestCase):
         self.assertTrue(vx <= sx and sx + 300 <= vx + vw and vy <= sy and sy + 200 <= vy + vh,
                         "it opened off screen: spot %r, looking at %r" % (r["spot"], r["view"]))
 
+    def test_fit_shows_the_whole_canvas_and_a_click_brings_you_back(self):
+        """Asked for 2026-09-19 and decided as view-only: the windows are drawn smaller, not resized,
+        so no terminal is told anything and no cell has to be measured again.
+
+        **And it does not scroll.** That is what keeps it small — every place that turns a screen
+        point into a board point would otherwise need the scale folded into it, and five conversions
+        is where this kind of feature goes wrong. Fitted, the board is all on screen; the one
+        conversion left is the click that takes you back."""
+        self.js("put('far', 40, 40, 400, 300); return 1;")
+        self.js("put('near', 60, 1500, 400, 300); P.panTo(0, 0); return 1;")   # a known place to start
+        time.sleep(0.4)
+        look = """(()=>{const S=document.getElementById('cv-scroll'), b=S.getBoundingClientRect();
+          const t0=[...window.palmar.tiles.values()][0];
+          return {seen:[...window.palmar.tiles.values()].filter(t=>{const q=t.el.getBoundingClientRect();
+                    return q.width>1 && q.right>b.left && q.left<b.right && q.bottom>b.top && q.top<b.bottom;})
+                    .map(t=>t.s.name).sort(),
+                  fit: window.palmar.fitting(),
+                  scrollable: (S.scrollHeight-S.clientHeight) + (S.scrollWidth-S.clientWidth),
+                  pe: getComputedStyle(t0.el).pointerEvents};})()"""
+        before = self.b.ev(look)
+        self.assertEqual(before["seen"], ["far"], "both were already on screen: %r" % (before,))
+        self.b.ev("document.getElementById('fit').click()")
+        time.sleep(0.6)
+        fitted = self.b.ev(look)
+        self.assertEqual(fitted["seen"], ["far", "near"], "fitting did not show them all: %r" % (fitted,))
+        self.assertEqual(fitted["scrollable"], 0, "there is still somewhere to scroll: %r" % (fitted,))
+        self.assertEqual(fitted["pe"], "none", "a window could still be dragged or typed into")
+        self.assertEqual(self.b.ev("document.getElementById('fit').getAttribute('aria-pressed')"), "true")
+        at = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name==='near');
+          const r=t.el.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+r.height/2};})()""")
+        for kind in ("mousePressed", "mouseReleased"):
+            self.b.ws.call("Input.dispatchMouseEvent",
+                           dict(type=kind, button="left", x=at["x"], y=at["y"], clickCount=1, buttons=0 if "Rel" in kind else 1))
+        time.sleep(0.8)
+        back = self.b.ev(look)
+        self.assertFalse(back["fit"], "the click did not come back out: %r" % (back,))
+        self.assertEqual(back["seen"], ["near"],
+                         "it came back somewhere other than what was pointed at: %r" % (back,))
+        self.assertEqual(back["pe"], "auto", "the windows did not take their input back")
+
     def test_tidy_does_not_leave_you_staring_between_two_windows(self):
         """One window at the top right and one at the bottom left: the corner of the box they make is
         empty canvas, and pressing tidy went and looked at it (user, 2026-09-17). The view goes to

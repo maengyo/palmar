@@ -3345,8 +3345,57 @@ function panTo(bx, by) {
   cvScroll.scrollTop = originY + by;
 }
 
+//: **Seeing the whole canvas at once, and nothing else.** Asked for 2026-09-19 and decided as
+//: view-only, which is the version that does not touch xterm's cell arithmetic — the windows are
+//: drawn smaller, not resized, so no terminal is told anything and nothing has to be measured again.
+//:
+//: **And it does not scroll.** That is what keeps it small: every place that turns a screen point
+//: into a board point would otherwise need the scale folded into it — the drop point, the minimap,
+//: the pan, where a new window goes — and five conversions is where this kind of feature goes wrong.
+//: Fitted, the whole board is on screen, so there is nothing to scroll and one conversion is left:
+//: the click that takes you back, which lands you at 1:1 with what you clicked in the middle.
+let fitting = false;
+function fitScale() {
+  const c = contentExtent();
+  const k = Math.min(1, (cvScroll.clientWidth - 8) / Math.max(1, c.w),
+                        (cvScroll.clientHeight - 8) / Math.max(1, c.h));
+  return { k: k, c: c };
+}
+function setFit(on, at) {
+  const was = fitting;
+  fitting = !!on;
+  cv.classList.toggle('fit', fitting);
+  const b = document.getElementById('fit');
+  if (b) b.setAttribute('aria-pressed', String(fitting));
+  if (was && !fitting && at) {
+    // Back to 1:1 with what was clicked in the middle of the screen. The only screen-to-board
+    // conversion this feature has, and it happens once.
+    const box = cvScroll.getBoundingClientRect(), f = at.k, c = at.c;
+    const bx = (at.x - box.left) / f + c.lx, by = (at.y - box.top) / f + c.ly;
+    sizeWorld();
+    panTo(Math.round(bx - cvScroll.clientWidth / 2), Math.round(by - cvScroll.clientHeight / 2));
+    return;
+  }
+  sizeWorld();
+  renderMinimap();
+  refreshOff();
+}
+
 function sizeWorld() {
   if (!cvPad) return;
+  if (fitting) {
+    // The pad is the screen — there is nowhere to scroll — and the world is moved and scaled so the
+    // near edge of the windows' own room lands in the corner.
+    const { k, c } = fitScale();
+    cvPad.style.width = cvScroll.clientWidth + 'px';
+    cvPad.style.height = cvScroll.clientHeight + 'px';
+    cvWorld.style.left = '0px';
+    cvWorld.style.top = '0px';
+    cvWorld.style.transform = 'translate(' + (-c.lx * k) + 'px,' + (-c.ly * k) + 'px) scale(' + k + ')';
+    cvScroll.scrollTo(0, 0);
+    return;
+  }
+  cvWorld.style.transform = '';
   const c = contentExtent();
   const seen = worldSeen.get(current) || { ox: 0, oy: 0, w: 0, h: 0 };
   // Where board zero sits inside the pad: however far the windows have gone the other side of it,
@@ -5047,7 +5096,8 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // Expose **the same function** the button calls, unchanged.
                   // paintTidy with it: the button's enabled state is what a person actually sees,
                   // and a test that writes the board directly has to be able to bring it up to date.
-                  tidyCanvas, paintTidy, gatherCanvas, gatherPlan,
+                  tidyCanvas, paintTidy, gatherCanvas, gatherPlan, setFit, fitScale,
+                  fitting: () => fitting,
                   // Push-aside. A test drives the real drag with mouse events; these are here so the geometry
                   // can also be asked directly — the cascade and the round limit need more windows than a
                   // hand can comfortably drag into place one at a time.
@@ -5397,6 +5447,15 @@ function boot() {
       });
     }
   }
+  const fitBtn = document.getElementById('fit');
+  if (fitBtn) fitBtn.addEventListener('click', () => setFit(!fitting));
+  // Anywhere on the fitted canvas takes you back, to what you pointed at. The tiles do not take the
+  // click — while fitted they take nothing, which is the whole of "view only".
+  cvScroll.addEventListener('click', (ev) => {
+    if (!fitting) return;
+    const f = fitScale();
+    setFit(false, { x: ev.clientX, y: ev.clientY, k: f.k, c: f.c });
+  });
   const tidyBtn = document.getElementById('tidy');
   // `byHand`: a person pressed it, so the view is allowed to go where the windows went. Auto-tidy
   // (the two calls above, on a pane disappearing) must not — nobody asked for that one.
