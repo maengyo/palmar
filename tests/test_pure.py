@@ -596,6 +596,90 @@ class WhereADroppedFileIsLookedFor(unittest.TestCase):
                          "the home ate the whole search: %r" % (got,))
 
 
+class DrawingTheSameThingAgain(unittest.TestCase):
+    """An agent with no hooks and no window title holds its approval menu open by repainting it, and
+    to the only question the output layer can ask — did bytes come out? — that is identical to
+    working. So the light stayed green for as long as it waited (user, aelix, 2026-09-18).
+
+    The rule chosen (2026-09-19) is the same shape as the one already there for cursor-management
+    bytes: **it never looks at what was written, only at whether it is the same as last time.**"""
+
+    def pane(self, alt=True):
+        class F:
+            pass
+        f = F()
+        f.alt = alt
+        f.last_paint = None
+        f.last_out, f.out_start, f.out_break = 0.0, 0.0, False
+        f.title_spun = False
+        f.ticks = 0
+        f._has_content = lambda d: D.Session._has_content(d)
+        f._out_tick = lambda: setattr(f, "ticks", f.ticks + 1)
+        f._arm_out = lambda: None
+        return f
+
+    def feed(self, f, *chunks):
+        for c in chunks:
+            D.Session._out_scan(f, c)
+        return f.last_out
+
+    def test_the_same_frame_twice_is_not_work(self):
+        f = self.pane()
+        menu = b"\x1b[2J\x1b[H  Allow this edit?  [y] yes  [n] no"
+        self.feed(f, menu)
+        first = f.last_out
+        self.assertGreater(first, 0, "the first paint did not count as output at all")
+        time.sleep(0.02)
+        self.feed(f, menu, menu, menu)
+        self.assertEqual(f.last_out, first,
+                         "repainting the same menu kept the pane looking busy")
+
+    def test_a_spinner_is_work_because_its_frames_differ(self):
+        """The whole point of a spinner is that it changes. This must not quiet one."""
+        f = self.pane()
+        for frame in "⠋⠙⠹⠸⠼":
+            time.sleep(0.01)
+            was = f.last_out
+            self.feed(f, ("\x1b[H thinking " + frame).encode())
+            self.assertGreater(f.last_out, was, "frame %s was taken for a repeat" % frame)
+
+    def test_a_shell_loop_printing_one_line_is_still_work(self):
+        """`while true; do echo x; done` prints the same bytes for ever and **is** working. A shell
+        is not in the alt screen and a full-screen agent is, which is the whole of the distinction."""
+        f = self.pane(alt=False)
+        self.feed(f, b"x\n")
+        first = f.last_out
+        time.sleep(0.02)
+        self.feed(f, b"x\n", b"x\n")
+        self.assertGreater(f.last_out, first, "a shell loop was quieted")
+
+    def test_a_repaint_too_big_to_be_one_is_left_alone(self):
+        """A build log is not what this is for, and stripping escapes out of every large chunk to
+        compare it is a cost paid on exactly the panes that produce the most."""
+        f = self.pane()
+        big = b"\x1b[H" + b"a line of build output\n" * 400
+        self.assertGreater(len(big), D.REPEAT_MAX)
+        self.feed(f, big)
+        first = f.last_out
+        time.sleep(0.02)
+        self.feed(f, big)
+        self.assertGreater(f.last_out, first, "a large repeated chunk was quieted")
+
+    def test_leaving_the_alt_screen_forgets_the_last_frame(self):
+        """Otherwise a frame from before could silence the first identical line after it."""
+        f = self.pane()
+        self.feed(f, b"\x1b[H menu")
+        f.alt = False
+        self.feed(f, b"plain")
+        self.assertIsNone(f.last_paint)
+
+    def test_cursor_management_alone_still_counts_for_nothing(self):
+        """The rule this one extends, unchanged: output that leaves nothing on screen is not work."""
+        f = self.pane()
+        self.feed(f, b"\x1b[?25l\x1b[?7l\x1b[?7h\x1b[0m\x1b[?12l\x1b[?25h")
+        self.assertEqual(f.last_out, 0.0, "a cursor tick was counted as output")
+
+
 URL = "http://127.0.0.1:8801/?k=abc123"
 
 

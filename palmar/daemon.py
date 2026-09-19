@@ -227,6 +227,17 @@ FIND_SKIP_SUFFIX = (".app", ".photoslibrary", ".framework", ".bundle", ".xcodepr
 #: **This is not reading the screen** — it never looks at what was written, only whether anything was.
 ESC_SEQ = re.compile(rb"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()][A-Za-z0-9]|[@-Z\\-_])")
 CONTENT_FAST = 512      # bigger than this and there is content, no need to check — keeps a flood off the per-byte path
+#: **And inside the alt screen, drawing the same thing again is not progress either** (user's
+#: decision, 2026-09-19). An agent with no hooks and no window title — aelix, measured — holds its
+#: approval menu open by repainting it, and by the only question the layer above can ask (did bytes
+#: come out?) that is identical to working. It is the same shape as the rule above: **it never looks
+#: at what was written, only at whether it is the same as last time.**
+#:
+#: **Only in the alt screen**, so `while true; do echo x; done` still counts as work — a shell loop
+#: is not in alt and a full-screen agent is. **And only for a small chunk**: a repaint is small, a
+#: build log is not, and a log is not what this is for. A redraw split differently across two reads
+#: simply does not match, which leaves the light where it already was.
+REPEAT_MAX = 4096
 
 # ── Paths ─────────────────────────────────────────────────────────────────────────────
 HOME = Path.home().resolve()
@@ -800,6 +811,7 @@ class Session:
         self.title_hits = []         # recent title-change times (monotonic). Anything outside TITLE_WINDOW_S is dropped
         self.title_timer = None
         self.osc_carry = b""         # an OSC candidate straddling a chunk boundary
+        self.last_paint = None       # the last small repaint inside alt — see REPEAT_MAX
         self.cwd_told = False        # has this shell ever said where it is — then we stop reading it
         self.shell_marks = False     # has this shell ever spoken OSC 133 — then the guesses stand down
         self.cmd_start = None        # monotonic time of the last 133;C, or None between commands
@@ -1199,6 +1211,13 @@ class Session:
         the title is more accurate, and two layers fighting over one value makes the lights flicker."""
         if not self._has_content(data):
             return                       # a cursor-management tick — counted as if it never came
+        if self.alt and len(data) <= REPEAT_MAX:
+            paint = ESC_SEQ.sub(b"", data)
+            if paint == self.last_paint:
+                return                   # the same picture again — see REPEAT_MAX
+            self.last_paint = paint
+        else:
+            self.last_paint = None       # out of alt, or too big to be a repaint
         now = time.monotonic()
         if self.out_break or now - self.last_out > OUT_QUIET_S:
             self.out_start = now         # a person did something, or it prints again after quiet — a new run
