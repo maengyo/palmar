@@ -214,7 +214,7 @@ POSIX 의 rc 끼우기에 해당하는 것이 PowerShell 에는 `-NoExit -Comman
 시험 아홉(`tests/test_pure.py` `WhenTheShellSaysItOutright`)과 하나(`tests/test_daemon.py`:
 진짜 pane 을 통과하는 전 경로).
 
-##### 첫 실사용에서 나온 것 둘 (2026-09-18, 사용자: aelix)
+##### 첫 실사용에서 나온 것 둘 (2026-09-18, 사용자)
 
 **① 초록불만 뜨고 안 바뀐다.** `C`(명령 시작)는 오는데 `D`(끝)가 안 왔다. `D` 를 내는 것은
 프롬프트 래퍼인데 — `PSConsoleHostReadLine` 쪽에만 `Get-Command` 로 존재를 확인하고 **프롬프트

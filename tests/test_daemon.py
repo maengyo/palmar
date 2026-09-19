@@ -1435,7 +1435,7 @@ class TheBoardLivesOnTheDaemon(unittest.TestCase):
 
 class WhatRunsInAPane(unittest.TestCase):
     """The daemon names the foreground command — whatever it is, not a list (user, 2026-09-15:
-    "claude 를 실행시켰을 때는 claude, aelix 를 실행했을 때는 aelix … 하드코딩 말고"). The foreground
+    "claude 를 실행시켰을 때는 claude, 다른 것을 실행했을 때는 그것 … 하드코딩 말고"). The foreground
     process group was already read for the status lights; its leader's name is one call further."""
 
     def test_the_foreground_command_is_reported_and_cleared(self):

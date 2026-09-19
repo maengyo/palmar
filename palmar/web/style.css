@@ -841,6 +841,22 @@ body.ui-mono { --ui: var(--mono); }
 }
 /* Under the hand the windows have no transition, so neither has their colour — see `carrying`. */
 .gbox.carried .gcell { transition: none; }
+/* The group's name, above the top-left corner of the whole shape. It is the one part of the frame a
+   hand can reach, so it takes pointer events back from the frame (which has none). */
+.gname {
+  position: absolute; transform: translateY(-1.35em);
+  font-size: 11px; font-weight: 600; letter-spacing: .01em;
+  color: color-mix(in srgb, var(--group) 72%, var(--ink));
+  pointer-events: auto; cursor: text; user-select: none;
+  max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: left .35s cubic-bezier(.2,.8,.2,1), top .35s cubic-bezier(.2,.8,.2,1);
+}
+.gbox.carried .gname { transition: none; }
+/* An unnamed group shows nothing until you go looking for it — a placeholder on every group would be
+   four words of furniture on a canvas that is meant to be windows. */
+.gname.empty::before { content: "name"; opacity: 0; }
+.gname.empty:hover::before, .gname.empty:focus-within::before { opacity: .45; }
+.gname .ed { font-size: 11px; font-weight: 600; width: 14ch; }
 /* The member keeps its own border — the frame says "group", the border still says "window". A hair
    of the group's colour is enough to tell you which frame a window belongs to when two overlap. */
 .tile.grouped { border-color: color-mix(in srgb, var(--group) 30%, var(--line)); }

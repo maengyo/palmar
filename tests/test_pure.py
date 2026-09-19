@@ -496,7 +496,7 @@ class WhenTheShellSaysItOutright(unittest.TestCase):
     def test_while_a_command_runs_the_layers_that_watch_the_agent_still_speak(self):
         """**The regression that mattered.** Standing them down for good the moment a shell spoke was
         wrong in exactly the case palmar is for: the shell knows *a command is running*, and an agent
-        is one long command. Running aelix, the light went green and stayed green for the whole
+        is one long command. With one such agent the light went green and stayed green for a whole
         session, because the one layer that watches **the agent** rather than the shell had been
         switched off (user, 2026-09-18). Between C and D they are all there is."""
         f = self.pane()
@@ -599,7 +599,7 @@ class WhereADroppedFileIsLookedFor(unittest.TestCase):
 class DrawingTheSameThingAgain(unittest.TestCase):
     """An agent with no hooks and no window title holds its approval menu open by repainting it, and
     to the only question the output layer can ask — did bytes come out? — that is identical to
-    working. So the light stayed green for as long as it waited (user, aelix, 2026-09-18).
+    working. So the light stayed green for as long as it waited (user, 2026-09-18).
 
     The rule chosen (2026-09-19) is the same shape as the one already there for cursor-management
     bytes: **it never looks at what was written, only at whether it is the same as last time.**"""

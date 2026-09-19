@@ -1742,9 +1742,16 @@ class Grouping(unittest.TestCase):
         self.assertEqual(self.b.errors(), [], "the page threw while being driven")
 
     def setUp(self):
-        """Every test opens its own board: no groups, nothing where it was left."""
+        """Every test opens its own board: no groups, nothing where it was left.
+
+        **And the frames go with the membership.** Dropping `g` from the store leaves the previous
+        test's `.gbox` on screen until something repaints, and a test asking the document for
+        `.gbox .gcell` then reads a leftover instead of its own — which passed alone and failed in
+        company (2026-09-19)."""
         self.b.ev("""(()=>{const P=window.palmar, L=P.layout();
-          for (const t of P.tiles.values()) if (L[t.id]) { const n=Object.assign({},L[t.id]); delete n.g; L[t.id]=n; }
+          for (const t of P.tiles.values()) if (L[t.id]) {
+            const n=Object.assign({},L[t.id]); delete n.g; delete n.gn; L[t.id]=n; }
+          P.paintGroups();
           const t=document.querySelector('.toast'); if(t){t.classList.remove('show');t.textContent='';}
           return 1;})()""")
 
@@ -2593,6 +2600,29 @@ class Grouping(unittest.TestCase):
         self.assertTrue(self.b.ev("document.getElementById('gather').disabled"),
                         "there is nothing left to close up and the button still offers to")
 
+    def test_a_group_can_be_named_and_keeps_it(self):
+        """A name on the frame, above the top-left corner, changed by double-clicking it — the gesture
+        a canvas tab and a window's name already use. It rides on the members rather than in a table
+        of its own: a table would need pruning, and a name whose group has lost every window is an
+        orphan nobody sweeps up. This way it has exactly the life `g` has."""
+        self.bench("""put('g1',60,80,220,150); put('g2',292,80,220,150);
+                      P.joinGroups(by('g1').id, by('g2').id); return 1;""")
+        g = self.bench("return L[by('g1').id].g;")
+        self.bench("P.setGroupName(%s, '배포 작업'); return 1;" % json.dumps(g))
+        time.sleep(0.3)
+        r = self.b.ev("""(()=>{const P=window.palmar, L=P.layout();
+          const tag=document.querySelector('.gbox .gname');
+          return {shown: tag ? tag.textContent : null,
+                  on: [...P.tiles.values()].filter(t=>(L[t.id]||{}).g).map(t=>(L[t.id]||{}).gn||null)};})()""")
+        self.assertEqual(r["shown"], "배포 작업", "the frame does not show the name: %r" % (r,))
+        self.assertEqual(r["on"], ["배포 작업", "배포 작업"],
+                         "the name is not on every member, so losing one could lose it: %r" % (r,))
+        self.bench("P.setGroupName(%s, ''); return 1;" % json.dumps(g))
+        time.sleep(0.3)
+        gone = self.b.ev("""(()=>{const L=window.palmar.layout();
+          return [...window.palmar.tiles.values()].some(t=>(L[t.id]||{}).gn);})()""")
+        self.assertFalse(gone, "clearing the name left it on the board")
+
     def test_taking_one_out_of_the_middle_closes_the_hole(self):
         """Closing the middle window closed the group up; taking it out with Alt-drag left its hole
         behind (user, 2026-09-15). Both are "a member is gone" and both close up now."""
@@ -2875,6 +2905,55 @@ class TwoGroupsMeeting(unittest.TestCase):
                         where = "carrying a %s onto a %s, aiming %s of %s" % (mine, theirs, side, target)
                         self.assertEqual(r["over"], [], "windows ended up on top of each other — " + where)
                         self.assertTrue(r["kept"], "the pair you carried came apart — " + where)
+
+
+class WhatAWindowDoesNotOwn(unittest.TestCase):
+    """Its own board, because it tears a pane down and builds it again — which is what a reload does,
+    and a bad neighbour to every test sharing a browser with it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+        cls.b.ev("""(async()=>{const T=window.PALMAR_TOKEN;
+          await fetch('/api/sessions?token='+T,{method:'POST',
+            headers:{'content-type':'application/json'},
+            body:JSON.stringify({cwd:%s,name:'g1'})});})()""" % json.dumps(cls.d.home))
+        time.sleep(5)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def tearDown(self):
+        self.assertEqual(self.b.errors(), [], "the page threw while being driven")
+
+    JS = Grouping.JS
+
+    def bench(self, body):
+        return self.b.ev("(()=>{" + self.JS + "\n" + body + "})()")
+
+    def test_placing_a_window_keeps_everything_it_does_not_own(self):
+        """**Four times, the same trap.** Building a pane's frame writes its position and used to copy
+        a *named list* of the other fields back, and the list is always one behind: the text size went
+        first (a fresh open at the default while the store still held it), then group membership, then
+        the group's name, which lasted until the next reload. Nothing is listed now — the entry is
+        kept and only what that code knows is written over it. This test writes a field nobody has
+        invented yet, which is the only way to check for the fifth time."""
+        r = self.bench("""const t = by('g1'), id = t.id;
+          L[id] = Object.assign({}, L[id], {g:'gkeep', gn:'이름', f:16, zz:'미래에 생길 것'});
+          t.el.remove(); P.tiles.delete(id);
+          P.upsert(t.s);                                  // rebuilt exactly as a reload rebuilds it
+          const now = P.layout()[id] || {};
+          return {g: now.g||null, gn: now.gn||null, f: now.f||null, zz: now.zz||null,
+                  x: Number.isFinite(now.x), w: Number.isFinite(now.w)};""")
+        self.assertTrue(r["x"] and r["w"], "it stopped writing the position it does own: %r" % (r,))
+        self.assertEqual([r["g"], r["gn"], r["f"]], ["gkeep", "이름", 16],
+                         "rebuilding the frame dropped a field it does not own: %r" % (r,))
+        self.assertEqual(r["zz"], "미래에 생길 것",
+                         "a field added later would be dropped — the list came back: %r" % (r,))
 
 class Undoing(unittest.TestCase):
     """One way back for everything that moves a window.

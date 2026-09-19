@@ -709,12 +709,14 @@ function buildFrame(t, s) {
     const z = saved && saved.z ? saved.z : ++zTop;
     zTop = Math.max(zTop, z);
     Object.assign(e.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px', zIndex: String(z) });
-    // **Do not wipe the saved text size here.** This line rewrites the position, not every property of the pane —
-    // overwriting wholesale threw f away, so a fresh open always came up at the default size (measured:
-    // localStorage still held f while the screen showed the default).
-    layout[s.id] = { x, y, w, h, z };
-    if (saved && saved.f) layout[s.id].f = saved.f;
-    if (saved && saved.g) layout[s.id].g = saved.g;   // groups survive a reload, like the position
+    // **Rewrite the position, keep everything else.** This line owns four numbers and a stacking
+    // order. Every other field on the entry belongs to somebody else, and the way it kept going wrong
+    // was a named list of what to copy back — the list is always one behind. The text size went that
+    // way first (a fresh open came up at the default while the store still held `f`), then group
+    // membership, then the group's **name**, which lasted until the next reload and then the board
+    // forgot it (2026-09-19). Four times is enough: nothing is listed, the entry is kept and the five
+    // values this line actually knows are written over it.
+    layout[s.id] = Object.assign({}, saved || {}, { x, y, w, h, z });
     saveLayout();
     cvWorld.appendChild(e);
     // The frame is painted by upsert, **after** this tile is in `tiles` — painted from here it cannot
@@ -1176,15 +1178,17 @@ class Tile {
   persist(at) {
     const r = this.rect();
     if (at) { r.x = at.x; r.y = at.y; }
-    // **Keep the group.** This rewrites the entry wholesale, which is how the text size was thrown
-    // away once before (see below) — membership would have gone the same way on every drag.
-    const was = layout[this.id] || {};
-    const g = was.g;
-    layout[this.id] = { x: r.x, y: r.y, w: r.w, h: r.h, z: parseInt(this.el.style.zIndex, 10) || 0 };
-    if (g) layout[this.id].g = g;
-    if (was.kind) { layout[this.id].kind = was.kind; layout[this.id].path = was.path; layout[this.id].canvas = was.canvas; }   // a viewer is kept by what it shows
+    // **Keep everything this does not own.** It used to build the entry from nothing and copy back a
+    // named list of fields, and the list is what goes wrong: the text size was thrown away that way
+    // once, group membership would have gone the same way on every drag, and the group's **name**
+    // did — it lasted until the first drag and then the board forgot it (2026-09-19, the third time).
+    // Position, size and stacking are what a window knows about itself. Everything else on the entry
+    // belongs to somebody else and is none of this function's business.
+    const e = Object.assign({}, layout[this.id] || {},
+      { x: r.x, y: r.y, w: r.w, h: r.h, z: parseInt(this.el.style.zIndex, 10) || 0 });
     const f = this.term.options.fontSize;
-    if (f && Math.abs(f - FONT_PX) > 0.01) layout[this.id].f = f;   // the default is not written
+    if (f && Math.abs(f - FONT_PX) > 0.01) e.f = f; else delete e.f;   // the default is not written
+    layout[this.id] = e;
     saveLayout();
   }
 
@@ -2587,6 +2591,30 @@ function compactGroup(ids, anchorId) {
   return moved;
 }
 
+//: **A group's name rides on its members.** A table of its own would need pruning — a name whose
+//: group has lost every window is an orphan nobody sweeps up — and this way the name has exactly the
+//: life `g` already has. Every member carries the same string; this reads the first that has one, so
+//: a member joining without it is not a group losing its name.
+function groupName(g) {
+  for (const t of tiles.values()) {
+    const r = layout[t.id];
+    if (r && r.g === g && r.gn) return r.gn;
+  }
+  return '';
+}
+function setGroupName(g, name) {
+  const n = (name || '').trim().slice(0, 64);
+  for (const t of tiles.values()) {
+    const r = layout[t.id];
+    if (!r || r.g !== g) continue;
+    const e = Object.assign({}, r);
+    if (n) e.gn = n; else delete e.gn;
+    layout[t.id] = e;
+  }
+  saveLayout();
+  paintGroups();
+}
+
 function newGroupId() {
   return 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
@@ -2681,9 +2709,21 @@ function paintGroups() {
     // **One padded cell per member, and the shape is their union.** Opaque children inside a
     // translucent parent: overlapping padding does not compound into darker seams the way stacked
     // translucent boxes would, so an ㄱ reads as one shape rather than two rectangles that met.
-    const cells = box.children;
-    for (let i = cells.length; i < ids.length; i++) box.appendChild(el('div', 'gcell'));
-    while (box.children.length > ids.length) box.lastChild.remove();
+    // **The name sits on the frame, above its top-left corner.** Double-click to change it, which is
+    // the gesture a canvas tab and a window's name already use — one thing to learn, not three.
+    let tag = box.gTag;
+    if (!tag) {
+      tag = box.gTag = el('div', 'gname');
+      tag.title = 'name this group — double-click';
+      tag.addEventListener('dblclick', (ev) => {
+        ev.stopPropagation();
+        inlineEdit(tag, groupName(g), (v) => setGroupName(g, v), () => paintGroups());
+      });
+      box.appendChild(tag);
+    }
+    const cells = [...box.children].filter((c) => c !== tag);
+    for (let i = cells.length; i < ids.length; i++) box.insertBefore(el('div', 'gcell'), tag);
+    while (box.children.length - 1 > ids.length) box.firstChild.remove();
     const hue = 'hsl(' + groupHue(g) + ' 70% 55%)';
     ids.forEach((id, i) => {
       const q = layout[id];
@@ -2700,6 +2740,11 @@ function paintGroups() {
       c.style.width = (q.w + GROUP_PAD * 2) + 'px';
       c.style.height = (q.h + GROUP_PAD * 2) + 'px';
     });
+    // Above the corner of the whole shape, not of whichever member happened to be first.
+    if (!tag.querySelector('input')) tag.textContent = groupName(g);
+    tag.classList.toggle('empty', !tag.textContent);
+    tag.style.left = (r.x - GROUP_PAD) + 'px';
+    tag.style.top = (r.y - GROUP_PAD) + 'px';
   }
   for (const [g, box] of groupBoxes) {
     if (keep.has(g)) continue;
@@ -3820,7 +3865,7 @@ function buildItem(s, pinned) {
   // ⑫ A name a person gave wins. Without one, the path label as before.
   const who = el('span', 'who');
   if (s.name) who.textContent = s.name;
-  // Unnamed: what is in front — claude, aelix, whatever runs — else the agent word, else "shell".
+  // Unnamed: what is in front — claude, vim, whatever runs — else the agent word, else "shell".
   else { who.textContent = (s.fg || s.agent || 'shell') + ' '; who.appendChild(el('span', null, shortPath(s.cwd))); }
   const ago = el('span', 'ago');
   // ⑪ Something on another canvas gets a canvas label — in **the same slot** as "↗ off". The two never appear
@@ -4992,6 +5037,9 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // (#18's 409) can only be exercised from the console. The daemon blocks it anyway, so having it here adds no risk.
                   // switchCanvas because the frames are drawn into the scroller rather than into a
                   // canvas, so what happens to them on a switch is a thing a test has to be able to ask.
+                  // upsert is how a session frame becomes a window — it is what a reload runs, so it is
+                  // also the only way a test can ask "rebuild this pane exactly as a reload would".
+                  upsert,
                   removeCanvas, watchInput, newTerminal, newCanvas, switchCanvas, openViewer, viewerId, toast,
                   // Dropping a file in from Finder or Explorer: the path parsing is the part with edges.
                   fileUrlToPath, droppedPaths,
@@ -5008,7 +5056,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // has to be able to ask both, because the bug they fix was arithmetic nobody could see.
                   sizeWorld, contentExtent, origin: () => ({ x: originX, y: originY }),
                   // Groups: the model is testable without a hand, the gesture needs one.
-                  groupOf, groupRect, joinGroups, leaveGroup, paneOver, joinPreview, joinBlock, setGauge, compactGroup, dropInto, settle, paintGroups,
+                  groupOf, groupRect, joinGroups, leaveGroup, groupName, setGroupName, paneOver, joinPreview, joinBlock, setGauge, compactGroup, dropInto, settle, paintGroups,
                   // Undo: one way back for everything that moves a window.
                   undoMark, undoLast, undoDepth: () => undoStack.length,
                   // Path joining is platform-shaped and the platform it gets wrong has no Chrome

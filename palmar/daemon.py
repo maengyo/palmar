@@ -228,7 +228,7 @@ FIND_SKIP_SUFFIX = (".app", ".photoslibrary", ".framework", ".bundle", ".xcodepr
 ESC_SEQ = re.compile(rb"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()][A-Za-z0-9]|[@-Z\\-_])")
 CONTENT_FAST = 512      # bigger than this and there is content, no need to check — keeps a flood off the per-byte path
 #: **And inside the alt screen, drawing the same thing again is not progress either** (user's
-#: decision, 2026-09-19). An agent with no hooks and no window title — aelix, measured — holds its
+#: decision, 2026-09-19). An agent with no hooks and no window title — one was measured — holds its
 #: approval menu open by repainting it, and by the only question the layer above can ask (did bytes
 #: come out?) that is identical to working. It is the same shape as the rule above: **it never looks
 #: at what was written, only at whether it is the same as last time.**
@@ -1144,7 +1144,7 @@ class Session:
     #: **And it does not silence the layers above it — it bounds them.** The first version stood the
     #: title and output layers down for good the moment a shell spoke, which was wrong in the case
     #: that matters most: the shell knows *a command is running*, and an agent is one long command.
-    #: Running aelix, the light went green and stayed green for the whole session, because the one
+    #: With one such agent the light went green and stayed green for a whole session, because the
     #: layer that watches **the agent** rather than the shell had been switched off (user,
     #: 2026-09-18). So: **at a prompt the shell is the last word** — nothing may paint green over a
     #: `D`. **Between `C` and `D` the agent-watching layers speak**, because the shell has nothing
@@ -1272,7 +1272,7 @@ class Session:
         # on Windows: the prompt writes the right folder into the title, and ten seconds later this
         # read the PEB — which `Set-Location` never updates — and put the folder the pane *opened* in
         # back. From the outside it looked like running an agent sent the rail home and kept it there
-        # (user, 2026-09-18: "aelix 실행하면 ~ 로 바뀌고 … 돌아와도 ~ 로 유지되네"). It was the tick,
+        # (user, 2026-09-18: "에이전트 실행하면 ~ 로 바뀌고 … 돌아와도 ~ 로 유지되네"). It was the tick,
         # not the agent. Same rule as hooks over the title, and OSC 133 over the guesses: the one who
         # knows wins, and the one who infers stops.
         if self.cwd_told:
@@ -1884,7 +1884,7 @@ _VPI_SIZE, _VPI_OFF, _VPI_PATH = 2352, 152, 1024
 
 #: **What is running in a pane, by name.** The foreground process group is read already (that is how
 #: "nothing is running" is known); its leader's command name is one call further — `proc_name` on
-#: macOS, `/proc/<pid>/comm` on Linux — and it is whatever is there: claude, aelix, vim, npm. Not a
+#: macOS, `/proc/<pid>/comm` on Linux — and it is whatever is there: claude, vim, npm, anything. Not a
 #: list of known agents (user, 2026-09-15: "하드코딩 말고"). Windows has no foreground group, so it
 #: stays None there until the shim writes the name into the title (#30).
 def comm_of(pid: int):
@@ -2143,6 +2143,15 @@ def clean_layout(obj):
             if not isinstance(g, str) or len(g) > 64:
                 return None
             e["g"] = g
+        # **A group's name rides on its members, not in a table of its own.** A table would need
+        # pruning — a name whose group has lost every window is an orphan nobody sweeps up — and this
+        # way the name goes when the last member does, exactly as `g` already does. Every member
+        # carries the same string; the page writes them all and reads the first that has one.
+        gn = r.get("gn")
+        if gn is not None:
+            if not isinstance(gn, str) or len(gn) > 64:
+                return None
+            e["gn"] = gn
         # A viewer window is not a session: the page keeps it on the board by its kind and path, and
         # brings it back from there (2026-09-15). Strings, bounded, nothing else.
         for k, cap in (("kind", 16), ("path", 4096), ("canvas", 64)):
