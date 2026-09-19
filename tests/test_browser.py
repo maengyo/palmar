@@ -2562,6 +2562,37 @@ class Grouping(unittest.TestCase):
             self.assertGreaterEqual(now["b"][0], now["a"][0] + now["a"][2],
                                     "the neighbour ended up on top of it: %r" % (now,))
 
+    def test_gathering_closes_the_gaps_and_rearranges_nothing(self):
+        """Asked for after a session spent flinging windows about (2026-09-17), and decided
+        2026-09-19: **keep the arrangement, close the gaps.** Packing them into a grid from the
+        top-left was the other option and it throws the placing away, which is the thing this program
+        is for. One axis at a time, squeezing the empty bands: everything overlapping on that axis is
+        one band and moves as one, so a row stays a row and a group stays a group, and two bands end
+        up a GAP apart, which is a gap and not a collision."""
+        self.bench("""put('g1',40,40,220,150); put('g2',272,40,220,150); put('g3',1400,1200,220,150);
+                      P.joinGroups(by('g1').id, by('g2').id); P.paintTidy(); return 1;""")
+        was = self.bench("return {a: at('g1'), b: at('g2'), c: at('g3')};")
+        self.assertFalse(self.b.ev("document.getElementById('gather').disabled"),
+                         "there are gaps and the button says there are not")
+        self.b.ev("document.getElementById('gather').click()")
+        time.sleep(1.0)
+        now = self.bench("""const A=L[by('g1').id], B=L[by('g2').id], C=L[by('g3').id];
+          const box=(p,q)=>Math.min(p.x+p.w,q.x+q.w)>Math.max(p.x,q.x) &&
+                           Math.min(p.y+p.h,q.y+q.h)>Math.max(p.y,q.y);
+          return {a:[A.x,A.y], b:[B.x,B.y], c:[C.x,C.y],
+                  over: box(A,B)||box(A,C)||box(B,C)};""")
+        self.assertFalse(now["over"], "gathering put windows on top of each other: %r" % (now,))
+        self.assertEqual([now["b"][0] - now["a"][0], now["b"][1] - now["a"][1]],
+                         [was["b"][0] - was["a"][0], was["b"][1] - was["a"][1]],
+                         "the group's own arrangement changed: %r" % (now,))
+        self.assertEqual(now["a"], was["a"], "the corner-most window moved — everything comes to it")
+        self.assertLess(now["c"][0], was["c"][0], "the far window did not come in across: %r" % (now,))
+        self.assertLess(now["c"][1], was["c"][1], "the far window did not come in down: %r" % (now,))
+        self.assertGreater(now["c"][0], now["b"][0], "it came in past the window it was to the right of")
+        self.assertGreater(now["c"][1], now["a"][1], "it came in past the window it was below")
+        self.assertTrue(self.b.ev("document.getElementById('gather').disabled"),
+                        "there is nothing left to close up and the button still offers to")
+
     def test_taking_one_out_of_the_middle_closes_the_hole(self):
         """Closing the middle window closed the group up; taking it out with Alt-drag left its hole
         behind (user, 2026-09-15). Both are "a member is gone" and both close up now."""

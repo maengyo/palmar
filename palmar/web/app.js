@@ -1961,10 +1961,81 @@ function paintTidy() {
   if (!b) return;
   const any = current !== null && [...tiles.values()].some((t) => t.s.canvas === current && layout[t.id]);
   const slack = current === null ? 0 : tidySlack(current);
+  const g = document.getElementById('gather');
+  if (g) {
+    const plan = current === null ? null : gatherPlan(current);
+    g.disabled = !plan;
+    g.title = plan ? 'bring them closer — keeps the arrangement, closes the gaps'
+                   : 'bring them closer — there is nothing to close up';
+  }
   b.disabled = !any;
   b.title = !any ? 'tidy this canvas — nothing on it yet'
     : slack ? 'tidy this canvas — pull the windows back to the corner'
             : 'tidy this canvas — already at the corner; this takes you there';
+}
+
+//: **Bring them closer without rearranging anything** (asked 2026-09-17, decided 2026-09-19: keep
+//: the arrangement, close the gaps — the version that argues least with "a window stays where you
+//: put it"). Packing everything into a grid from the top-left was the other option and it throws
+//: away the placing, which is the thing this program is for.
+//:
+//: One axis at a time, and on each axis the windows are swept in order while the **empty bands
+//: between them** are squeezed to a single GAP. Everything that overlaps on that axis is in the same
+//: band and moves as one, so a row stays a row, a group stays a group, and nothing can end up on top
+//: of anything: two bands finish GAP apart, which is a gap and not a collision. The first band does
+//: not move, so the corner stays where it was and the rest comes in towards it.
+function gatherAxis(rows, lo, size) {
+  const order = rows.map((r, i) => ({ i, a: lo(r), b: lo(r) + size(r) }))
+                    .sort((p, q) => p.a - q.a || p.b - q.b);
+  const shift = new Map();
+  let back = 0, far = null;
+  for (const s of order) {
+    let a = s.a - back;
+    if (far !== null && a > far + GAP) {
+      back += a - (far + GAP);
+      a = far + GAP;
+    }
+    shift.set(s.i, back);
+    far = far === null ? a + (s.b - s.a) : Math.max(far, a + (s.b - s.a));
+  }
+  return shift;
+}
+
+//: What `gather` would do, as {id: {x, y}} — worked out without touching anything, so the button can
+//: know whether it has anything to do and a test can ask the same question the button asks.
+function gatherPlan(canvasId) {
+  const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
+  if (mine.length < 2) return null;
+  const rs = mine.map((t) => layout[t.id]);
+  const dx = gatherAxis(rs, (r) => r.x, (r) => r.w);
+  const dy = gatherAxis(rs, (r) => r.y, (r) => r.h);
+  const plan = {};
+  let moved = false;
+  mine.forEach((t, i) => {
+    const r = rs[i], x = r.x - dx.get(i), y = r.y - dy.get(i);
+    if (x !== r.x || y !== r.y) moved = true;
+    plan[t.id] = { x, y };
+  });
+  return moved ? plan : null;
+}
+
+function gatherCanvas(canvasId) {
+  const plan = gatherPlan(canvasId);
+  if (!plan) return false;
+  for (const [id, at] of Object.entries(plan)) {
+    const t = tiles.get(id);
+    if (!t) continue;
+    // Write the intended value; never read it back — .tile slides for 350ms (see tidyCanvas).
+    t.el.style.left = at.x + 'px';
+    t.el.style.top = at.y + 'px';
+    layout[id] = Object.assign({}, layout[id], { x: at.x, y: at.y });
+  }
+  saveLayout();
+  renderMinimap();
+  refreshOff();
+  paintTidy();
+  paintGroups();
+  return true;
 }
 
 function tidyCanvas(canvasId, byHand) {
@@ -4928,7 +4999,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // Expose **the same function** the button calls, unchanged.
                   // paintTidy with it: the button's enabled state is what a person actually sees,
                   // and a test that writes the board directly has to be able to bring it up to date.
-                  tidyCanvas, paintTidy,
+                  tidyCanvas, paintTidy, gatherCanvas, gatherPlan,
                   // Push-aside. A test drives the real drag with mouse events; these are here so the geometry
                   // can also be asked directly — the cascade and the round limit need more windows than a
                   // hand can comfortably drag into place one at a time.
@@ -5282,6 +5353,11 @@ function boot() {
   // `byHand`: a person pressed it, so the view is allowed to go where the windows went. Auto-tidy
   // (the two calls above, on a pane disappearing) must not — nobody asked for that one.
   if (tidyBtn) tidyBtn.addEventListener('click', () => { undoMark('tidying up'); tidyCanvas(current, true); });
+  const gatherBtn = document.getElementById('gather');
+  if (gatherBtn) gatherBtn.addEventListener('click', () => {
+    undoMark('bringing them closer');
+    if (!gatherCanvas(current)) toast(['nothing to close up — they are already together']);
+  });
   // The floating new-terminal button. Folding the right rail took "Open terminal here" with it and
   // left no way to open one by hand (user, 2026-09-15); this one shows only while that rail is folded
   // and does what Ctrl/⌘⏎ does — a terminal in the folder of the one you are on.
