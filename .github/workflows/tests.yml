@@ -31,21 +31,41 @@ on:
 
 jobs:
   unittest:
+    name: ${{ matrix.suite }} · ${{ matrix.os }} ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
     # macOS pays for a `cargo check` of wry and tao that Linux skips for want of WebKitGTK headers,
     # and that dependency tree is not small. Four minutes of tests, the rest is Rust.
     timeout-minutes: 40
+    # **Three suites, run beside each other rather than one after the other.** Measured 2026-09-19:
+    # the browser tests are 394 of the 525 seconds and the other four modules are 131 between them, so
+    # in one job the wall clock is their sum and split it is the larger of the two. The runner minutes
+    # go up and this repository is public, where they are free; the thing being spent is the wait
+    # before a push is known to be good, and that is what this buys back.
+    #
+    # **The browser suite is what it is.** Its 394 seconds are 31 classes each starting a daemon and a
+    # Chrome, about a third of that in startup alone. Merging classes or sharing one browser between
+    # them would cut it further and both were tried in miniature on 2026-09-19: a test that tears a
+    # pane down broke its neighbour, and a frame left on screen was read by the test after it. That is
+    # a cost worth paying deliberately, not by accident, so it is not paid here.
     strategy:
       fail-fast: false        # 3.9 failing should not hide what 3.13 says, or Linux what macOS says
       matrix:
-        include:
-          # The floor and the ceiling. 3.9 is what macOS ships and what the code claims to run on
-          # (daemon.py refuses to start below it); 3.13 is what a current machine has.
-          - { os: ubuntu-24.04, python: "3.9",  skips: 6 }
-          - { os: ubuntu-24.04, python: "3.13", skips: 6 }
-          # macOS is deliberately unpinned: there is no ABI reason to hold it still the way
-          # app-linux.yml holds glibc, and we want to hear about a new macOS breaking us.
-          - { os: macos-latest, python: "3.13", skips: 5 }
+        # The floor and the ceiling. 3.9 is what macOS ships and what the code claims to run on
+        # (daemon.py refuses to start below it); 3.13 is what a current machine has. macOS is
+        # deliberately unpinned: there is no ABI reason to hold it still the way app-linux.yml holds
+        # glibc, and we want to hear about a new macOS breaking us.
+        os: [ubuntu-24.04, macos-latest]
+        python: ["3.9", "3.13"]
+        # `floor` is the count below which the run is a green nothing — see "how many actually ran".
+        # `skips` is how many are expected to skip themselves on a runner with no window built.
+        suite:
+          - { name: browser, mods: "tests.test_browser",                            floor: 175, skips: 0 }
+          - { name: daemon,  mods: "tests.test_daemon",                             floor: 115, skips: 0 }
+          - { name: rest,    mods: "tests.test_pure tests.test_app tests.test_install", floor: 155, skips: 6 }
+        exclude:
+          # One Python on macOS is enough — what it adds over Linux is the OS, not the interpreter,
+          # and 3.9 there is the same 3.9 the ubuntu job already runs.
+          - { os: macos-latest, python: "3.9" }
 
     steps:
       - uses: actions/checkout@v4
@@ -100,29 +120,29 @@ jobs:
           PALMAR_REQUIRE_BROWSER: "1"
         run: |
           set -o pipefail
-          python -m unittest -v \
-            tests.test_pure tests.test_app tests.test_daemon tests.test_install tests.test_browser \
-            2>&1 | tee tests.log
+          python -m unittest -v ${{ matrix.suite.mods }} 2>&1 | tee tests.log
 
       # **A green run that skipped everything is the failure this workflow exists to prevent**, so
       # the count is asserted rather than trusted. Read from the run above rather than run again —
       # the suite takes about nine minutes and there is no reason to pay for it twice.
       #
-      # **The floor has to be moved when the suite grows.** It sat at 143 while the suite reached 467,
-      # which is a guard that would have let two thirds of the tests disappear without a word — the
-      # one thing it is here for (2026-09-19). It is written as a fraction of the real count now, so
-      # it goes stale slowly and visibly instead of silently.
+      # **The floor has to be moved when a suite grows.** It sat at 143 while the whole suite reached
+      # 467, which is a guard that would have let two thirds of the tests disappear without a word —
+      # the one thing it is here for (2026-09-19). Each suite carries its own now, set a little under
+      # what it really ran on 2026-09-19 (browser 183, daemon 120, rest 164).
       #
-      # Expected skips, by runner:
-      #   ubuntu (4)  FindingTheDaemon (3) — the window has not been built here
-      #               Builds.test_it_compiles — cargo is on the image, WebKitGTK's headers are not
-      #   macOS  (3)  FindingTheDaemon (3) — same reason. test_it_compiles **runs** here, because
-      #               WKWebView needs no dev package, so macOS is where the window's Rust is checked.
-      # The cap sits a little above each so an added test does not fail the build for being new; the
-      # names are printed either way, which is what makes tightening it cheap.
+      # **Every expected skip is in the `rest` suite**, which is why the other two allow none at all —
+      # a browser test that skips itself there is now a failure, which is what PALMAR_REQUIRE_BROWSER
+      # was always trying to say.
+      #   test_app      FindingTheDaemon (3) and Builds.test_it_compiles — no window built in a checkout
+      #   test_install  one, for the same reason
+      # On macOS `test_it_compiles` **runs** — WKWebView needs no dev package, so that is where the
+      # window's Rust is checked. The cap sits a little above so an added test does not fail the build
+      # for being new; the names are printed either way, which is what makes tightening it cheap.
       - name: how many actually ran
         env:
-          CAP: ${{ matrix.skips }}
+          CAP: ${{ matrix.suite.skips }}
+          FLOOR: ${{ matrix.suite.floor }}
         run: |
           python - <<'PY'
           import os, re, sys
@@ -145,9 +165,9 @@ jobs:
               print("  skipped: %s -- %s" % (head.split(" ... ")[0].strip(),
                                              ln.split("skipped", 1)[1].strip()))
           cap = int(os.environ["CAP"])
-          FLOOR = 440          # the suite was 467 on 2026-09-19; raise this when it grows
-          if ran < FLOOR:
-              sys.exit("only %d tests ran; the suite is about %d" % (ran, FLOOR))
+          floor = int(os.environ["FLOOR"])
+          if ran < floor:
+              sys.exit("only %d tests ran; this suite is at least %d" % (ran, floor))
           if skipped > cap:
               sys.exit("%d tests skipped, at most %d expected on this runner" % (skipped, cap))
           PY
