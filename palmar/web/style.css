@@ -813,9 +813,15 @@ body.ui-mono { --ui: var(--mono); }
    origin the windows are placed from, so there is room on the left and above too — scrollLeft
    cannot go below zero, so slack up there has to come from moving the origin, not the scroll.
    Neither takes a pointer: pressing empty space must still reach `.cv-scroll` and pan. */
-.cv-pad, .cv-world { position: absolute; left: 0; top: 0; pointer-events: none; }
+.cv-pad, .cv-world, .cv-names { position: absolute; left: 0; top: 0; pointer-events: none; }
 .cv-pad { z-index: 0; }
-.cv-world { width: 0; height: 0; }
+/* **`isolation` and not a z-index.** A tile's z-index goes ++ on every focus for ever, and penning
+   that inside this layer is what lets one number above it stay above it. Without this the tiles
+   compete in `.cv-scroll`'s context and no fixed z-index can win against a counter. */
+.cv-world { width: 0; height: 0; isolation: isolate; }
+/* The group names, over the windows. Same origin and same scale as the world — app.js writes both
+   from one place — so a board coordinate means the same thing in the two layers. */
+.cv-names { width: 0; height: 0; z-index: 2; }
 .tile {
   pointer-events: auto;              /* .cv-world takes none; its windows still do */
   position: absolute; display: flex; flex-direction: column;
@@ -853,10 +859,11 @@ body.ui-mono { --ui: var(--mono); }
 }
 /* Under the hand the windows have no transition, so neither has their colour — see `carrying`. */
 .gbox.carried .gcell { transition: none; }
-/* The group's name, above the top-left corner of the whole shape — **beside the frame, not inside
-   it**: `.gbox` is 16% opaque and a label in there is 16% opaque too, which is as good as gone. */
+/* The group's name, above the top-left corner of the whole shape. **Not inside the frame** — `.gbox`
+   is 16% opaque and a label in there is 16% opaque too — and **not among the windows** either, where
+   a tile's ever-climbing z-index covered it. It lives in `.cv-names`, which is a layer above them. */
 .gname {
-  position: absolute; z-index: 1; transform: translateY(-1.35em);
+  position: absolute; transform: translateY(-1.35em);
   font-size: 11px; font-weight: 600; line-height: 1.25; letter-spacing: .01em;
   color: color-mix(in srgb, var(--group) 62%, var(--ink));
   pointer-events: auto; cursor: text; user-select: none;

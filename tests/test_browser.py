@@ -1916,6 +1916,59 @@ class Grouping(unittest.TestCase):
     def bench(self, body):
         return self.b.ev("(()=>{" + self.JS + "\n" + body + "})()")
 
+    def test_a_group_s_name_is_readable_over_a_window(self):
+        """It was inside the frame first, and `.gbox` is 16% opaque, so the label was too (user,
+        2026-09-20). Moved beside the frame it was then covered by any window that had been clicked
+        — a tile's z-index goes ++ on every focus, for ever, so nothing sharing that layer can stay
+        above them ("그룹 이름은 터미널창에 가려져서 거의 안 보여", user on Windows, 2026-09-21).
+
+        The label sits above the group's top-left corner, so the window put there is deliberately in
+        its way. What this asks is the only question that matters: at the middle of the label, is the
+        label what you would touch?"""
+        r = self.bench("""
+          // Two windows in a group, and a third — focused, so its z-index is the highest there is —
+          // exactly where the group's label goes.
+          put('g1', 400, 400, 300, 200); put('g2', 720, 400, 300, 200);
+          P.joinGroups(by('g1').id, by('g2').id);
+          P.setGroupName(L[by('g1').id].g, 'deploy');
+          P.paintGroups();
+          const tag = document.querySelector('.gname');
+          const q = tag.getBoundingClientRect();
+          put('g3', 380, 360, 300, 60);
+          P.focusTile(by('g3').id, {keyboard: false});
+          const hit = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2);
+          const over = by('g3').el.getBoundingClientRect();
+          return {text: tag.textContent, parent: tag.parentElement.className,
+                  opacity: getComputedStyle(tag).opacity,
+                  covered: over.left < q.right && over.right > q.left
+                           && over.top < q.bottom && over.bottom > q.top,
+                  touched: hit && (hit === tag || tag.contains(hit)) ? 'the name' : (hit && hit.className)};""")
+        self.assertEqual(r["text"], "deploy")
+        self.assertEqual(r["parent"], "cv-names", "the name is not in the layer above the windows")
+        self.assertEqual(r["opacity"], "1", "something is fading the name: %r" % (r,))
+        self.assertTrue(r["covered"], "the window was not in the way — this test proves nothing: %r" % (r,))
+        self.assertEqual(r["touched"], "the name", "a window is on top of the group's name: %r" % (r,))
+
+    def test_the_names_layer_moves_with_the_world(self):
+        """Two layers over one board only work while they agree. They are written from one place in
+        `sizeWorld`; this is what notices if they ever stop being."""
+        r = self.bench("""
+          put('g1', 400, 400, 300, 200); put('g2', 720, 400, 300, 200);
+          P.joinGroups(by('g1').id, by('g2').id);
+          P.setGroupName(L[by('g1').id].g, 'deploy');
+          P.paintGroups();
+          const w = document.querySelector('.cv-world'), n = document.querySelector('.cv-names');
+          // The .gbox wrapper is a 0x0 coordinate origin; its shape is the cells inside it.
+          const box = document.querySelector('.gbox .gcell').getBoundingClientRect();
+          const tag = document.querySelector('.gname').getBoundingClientRect();
+          return {same: [w.style.left, w.style.top, w.style.transform].join('|')
+                     === [n.style.left, n.style.top, n.style.transform].join('|'),
+                  // The label sits just above the frame's own top-left corner.
+                  dx: Math.round(tag.left - box.left), dy: Math.round(tag.bottom - box.top)};""")
+        self.assertTrue(r["same"], "the two layers are not laid out the same: %r" % (r,))
+        self.assertLess(abs(r["dx"]), 4, "the name is not over its frame's corner: %r" % (r,))
+        self.assertLess(abs(r["dy"]), 10, "the name is not just above its frame: %r" % (r,))
+
     def test_the_model_joins_and_leaves(self):
         """Without a hand: two windows join, a third joins the same group, one leaves."""
         r = self.bench("""

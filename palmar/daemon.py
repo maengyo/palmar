@@ -1182,6 +1182,7 @@ class Session:
             started, self.cmd_start = self.cmd_start, None
             said = started is not None and self.last_out >= started
             want = "done" if said else "idle"
+            self._clear_told_fg()           # the command ended, so nothing is running — see there
         else:
             # **A and B say nothing the D before them did not.** They used to set idle, and the
             # preamble writes `D` and `A` in one go — so "finished" was erased in the same breath it
@@ -1323,6 +1324,19 @@ class Session:
     #: Windows there is no foreground process to ask. `palmar:run:` with nothing after it is the
     #: prompt saying nothing is running. The words are the ones the person typed, so only a name is
     #: ever taken out of them — see `name_from_command`.
+    def _clear_told_fg(self) -> None:
+        """At a prompt nothing is running, so a told name has to go — and **the title is not a
+        reliable way to say so.** The prompt does write `palmar:run:` with nothing after it, but that
+        write is followed in the same breath by the folder marker, and on Windows the name stayed
+        (user, 2026-09-21: "aelix 끝내면 shell 로 안 돌아오고 aelix 로 남아있네") while the folder
+        marker beside it arrived. A console that keeps only the last title of a batch explains both.
+        OSC 133 `D` says the same thing on a channel that demonstrably survives — the lights run on
+        it — so that is where the clearing lives. The title write stays: it is the honest statement,
+        and it works wherever it is not coalesced away."""
+        if self.fg_told and self.fg is not None:
+            self.fg = None
+            registry.changed(self)
+
     def _title_run(self, t: str) -> bool:
         if not t.startswith(TITLE_RUN):
             return False

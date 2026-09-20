@@ -431,6 +431,7 @@ class WhenTheShellSaysItOutright(unittest.TestCase):
         f.fg, f.fg_told = None, False
         f._title_cwd = lambda t: D.Session._title_cwd(f, t)
         f._title_run = lambda t: D.Session._title_run(f, t)
+        f._clear_told_fg = lambda: D.Session._clear_told_fg(f)
         f._shell_mark = lambda m: D.Session._shell_mark(f, m)
         f._title_tick = lambda: D.Session._title_tick(f)
         f._title_busy = lambda: D.Session._title_busy(f)
@@ -938,6 +939,32 @@ class TheShellSaysWhatItRuns(unittest.TestCase):
         with mock.patch.object(D.registry, "changed"):
             self.assertFalse(D.Session._title_run(f, "~/work — claude"))
         self.assertIsNone(f.fg)
+
+    def test_the_command_ending_clears_it_even_if_the_title_did_not_arrive(self):
+        """**The prompt's clear can be swallowed.** It writes `palmar:run:` with nothing after it and
+        then the folder marker in the same breath, and on Windows the name stayed while the folder
+        marker beside it arrived (user, 2026-09-21: "aelix 끝내면 shell 로 안 돌아오고 aelix 로
+        남아있네"). A console that keeps only the last title of a batch explains both. OSC 133 `D`
+        says the same thing on a channel that demonstrably survives — the lights run on it."""
+        f = self.pane()
+        f.derived, f.status, f.shell_marks, f.cmd_start, f.last_out = "idle", "unknown", False, None, 0.0
+        f._clear_told_fg = lambda: D.Session._clear_told_fg(f)
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._title_run(f, D.TITLE_RUN + "aelix")
+            self.assertEqual(f.fg, "aelix")
+            D.Session._shell_mark(f, "C")
+            self.assertEqual(f.fg, "aelix", "it went out while the command was still running")
+            D.Session._shell_mark(f, "D")
+        self.assertIsNone(f.fg, "the command ended and the name stayed")
+
+    def test_a_pane_that_never_told_is_not_cleared_by_the_mark(self):
+        """On macOS and Linux the name comes from the process, and the next tick would only put it
+        back — clearing it on every prompt would make it blink."""
+        f = self.pane()
+        f.fg, f.fg_told = "vim", False
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._clear_told_fg(f)
+        self.assertEqual(f.fg, "vim")
 
     def test_once_a_shell_has_said_we_stop_guessing(self):
         """Same rule as hooks over the title and OSC 133 over the guesses. Without it the very next

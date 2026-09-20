@@ -2746,10 +2746,11 @@ function paintGroups() {
     // translucent boxes would, so an ㄱ reads as one shape rather than two rectangles that met.
     // **The name sits on the frame, above its top-left corner.** Double-click to change it, which is
     // the gesture a canvas tab and a window's name already use — one thing to learn, not three.
-    // **The name is a sibling of the frame, not a child of it.** `.gbox` is 16% opaque — that is how
-    // the union of cells reads as one shape instead of overlapping rectangles — and a label inside it
-    // is 16% opaque too, which is as good as invisible (user, 2026-09-20). It sits in the world layer
-    // beside the frame and carries its own colour.
+    // **The name is not in the frame, and not among the windows either.** `.gbox` is 16% opaque —
+    // that is how the union of cells reads as one shape instead of overlapping rectangles — and a
+    // label inside it is 16% opaque too, which is as good as invisible (user, 2026-09-20). Put beside
+    // the frame instead, it was then covered by any window that had been clicked, because a tile's
+    // z-index climbs for ever (user, 2026-09-21). So it lives in a layer above the windows.
     let tag = box.gTag;
     if (!tag) {
       tag = box.gTag = el('div', 'gname');
@@ -2758,7 +2759,7 @@ function paintGroups() {
         ev.stopPropagation();
         inlineEdit(tag, groupName(g), (v) => setGroupName(g, v), () => paintGroups());
       });
-      cvWorld.appendChild(tag);
+      cvNames.appendChild(tag);
     }
     tag.style.setProperty('--group', 'hsl(' + groupHue(g) + ' 70% 55%)');
     tag.classList.toggle('carried', g === carrying);
@@ -3328,14 +3329,21 @@ cvScroll.addEventListener('scroll', () => refreshOff(true), { passive: true });
 //: way to fix that — would have snapped the view 888px sideways on release (measured).
 const worldSeen = new Map();              // canvas id → the largest extent that canvas has had this session
 let worldCanvas = null;
-let cvPad = null, cvWorld = null;
+let cvPad = null, cvWorld = null, cvNames = null;
 let originX = 0, originY = 0;
 
-// Built once, before anything is put on the canvas. The floor first so it stays under the windows.
+//: Built once, before anything is put on the canvas. The floor first so it stays under the windows,
+//: and **a layer of its own for the group names on top of them.** A tile's z-index goes `++` on every
+//: focus without end (see `.cv-scroll { isolation: isolate }`), so nothing sharing that layer can sit
+//: above the windows for good — the name was at `z-index: 1` and any window that had been clicked
+//: covered it ("그룹 이름은 터미널창에 가려져서 거의 안 보여", user on Windows, 2026-09-21). A
+//: separate layer wins by being a layer: `.cv-world` pens the ++ inside itself, and this sits over it.
 cvPad = el('div', 'cv-pad');
 cvWorld = el('div', 'cv-world');
+cvNames = el('div', 'cv-names');
 cvScroll.appendChild(cvPad);
 cvScroll.appendChild(cvWorld);
+cvScroll.appendChild(cvNames);
 
 //: **Make the terminal measure a character again.** It caches the cell size and re-measures only
 //: when a font option *changes* — the options service fires on `rawOptions[k] !== v`, so writing the
@@ -3518,9 +3526,13 @@ function sizeWorld() {
   originX = ox; originY = oy;
   // `pad = zoom × (origin + board)`: the floor carries the scale in its own size, and the world
   // is scaled about its top-left corner and placed at the scaled origin inside it.
-  cvWorld.style.left = (ox * zoom) + 'px';
-  cvWorld.style.top = (oy * zoom) + 'px';
-  cvWorld.style.transform = zoom === 1 ? '' : 'scale(' + zoom + ')';
+  // The names layer is the world's twin: same origin, same scale, so a board coordinate means the
+  // same thing in both and the label stays over its frame at any scale.
+  for (const layer of (cvNames ? [cvWorld, cvNames] : [cvWorld])) {
+    layer.style.left = (ox * zoom) + 'px';
+    layer.style.top = (oy * zoom) + 'px';
+    layer.style.transform = zoom === 1 ? '' : 'scale(' + zoom + ')';
+  }
   // **The floor still has to cover the screen.** Under 1:1 the screen shows more board than the
   // windows and the hand have claimed, so the pad is given the shortfall — and only the pad: it is
   // not written back into `worldSeen`, or standing back once would leave slack behind for good.
