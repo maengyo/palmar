@@ -2751,6 +2751,10 @@ function paintGroups() {
     // translucent boxes would, so an ㄱ reads as one shape rather than two rectangles that met.
     // **The name sits on the frame, above its top-left corner.** Double-click to change it, which is
     // the gesture a canvas tab and a window's name already use — one thing to learn, not three.
+    // **The name is a sibling of the frame, not a child of it.** `.gbox` is 16% opaque — that is how
+    // the union of cells reads as one shape instead of overlapping rectangles — and a label inside it
+    // is 16% opaque too, which is as good as invisible (user, 2026-09-20). It sits in the world layer
+    // beside the frame and carries its own colour.
     let tag = box.gTag;
     if (!tag) {
       tag = box.gTag = el('div', 'gname');
@@ -2759,11 +2763,12 @@ function paintGroups() {
         ev.stopPropagation();
         inlineEdit(tag, groupName(g), (v) => setGroupName(g, v), () => paintGroups());
       });
-      box.appendChild(tag);
+      cvWorld.appendChild(tag);
     }
-    const cells = [...box.children].filter((c) => c !== tag);
-    for (let i = cells.length; i < ids.length; i++) box.insertBefore(el('div', 'gcell'), tag);
-    while (box.children.length - 1 > ids.length) box.firstChild.remove();
+    tag.style.setProperty('--group', 'hsl(' + groupHue(g) + ' 70% 55%)');
+    tag.classList.toggle('carried', g === carrying);
+    for (let i = box.children.length; i < ids.length; i++) box.appendChild(el('div', 'gcell'));
+    while (box.children.length > ids.length) box.lastChild.remove();
     const hue = 'hsl(' + groupHue(g) + ' 70% 55%)';
     ids.forEach((id, i) => {
       const q = layout[id];
@@ -2789,6 +2794,7 @@ function paintGroups() {
   for (const [g, box] of groupBoxes) {
     if (keep.has(g)) continue;
     box.remove();
+    if (box.gTag) box.gTag.remove();     // the label is a sibling now — it does not go with the box
     groupBoxes.delete(g);
   }
 }

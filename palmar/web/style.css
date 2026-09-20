@@ -853,21 +853,22 @@ body.ui-mono { --ui: var(--mono); }
 }
 /* Under the hand the windows have no transition, so neither has their colour — see `carrying`. */
 .gbox.carried .gcell { transition: none; }
-/* The group's name, above the top-left corner of the whole shape. It is the one part of the frame a
-   hand can reach, so it takes pointer events back from the frame (which has none). */
+/* The group's name, above the top-left corner of the whole shape — **beside the frame, not inside
+   it**: `.gbox` is 16% opaque and a label in there is 16% opaque too, which is as good as gone. */
 .gname {
-  position: absolute; transform: translateY(-1.35em);
-  font-size: 11px; font-weight: 600; letter-spacing: .01em;
-  color: color-mix(in srgb, var(--group) 72%, var(--ink));
+  position: absolute; z-index: 1; transform: translateY(-1.35em);
+  font-size: 11px; font-weight: 600; line-height: 1.25; letter-spacing: .01em;
+  color: color-mix(in srgb, var(--group) 62%, var(--ink));
   pointer-events: auto; cursor: text; user-select: none;
   max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   transition: left .35s cubic-bezier(.2,.8,.2,1), top .35s cubic-bezier(.2,.8,.2,1);
 }
-.gbox.carried .gname { transition: none; }
-/* An unnamed group shows nothing until you go looking for it — a placeholder on every group would be
-   four words of furniture on a canvas that is meant to be windows. */
-.gname.empty::before { content: "name"; opacity: 0; }
-.gname.empty:hover::before, .gname.empty:focus-within::before { opacity: .45; }
+.gname.carried { transition: none; }
+/* **A group with no name says so, faintly.** An invisible label is also an invisible place to
+   double-click, so the hint was a hover target nobody could find — it is always there now, quiet
+   enough to ignore and solid enough to aim at. */
+.gname.empty::before { content: "name"; opacity: .4; font-weight: 500; }
+.gname.empty:hover::before { opacity: .75; }
 .gname .ed { font-size: 11px; font-weight: 600; width: 14ch; }
 /* The member keeps its own border — the frame says "group", the border still says "window". A hair
    of the group's colour is enough to tell you which frame a window belongs to when two overlap. */
