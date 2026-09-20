@@ -31,7 +31,7 @@ on:
 
 jobs:
   unittest:
-    name: ${{ matrix.suite }} · ${{ matrix.os }} ${{ matrix.python }}
+    name: ${{ matrix.suite.name }} · ${{ matrix.os }} ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
     # macOS pays for a `cargo check` of wry and tao that Linux skips for want of WebKitGTK headers,
     # and that dependency tree is not small. Four minutes of tests, the rest is Rust.

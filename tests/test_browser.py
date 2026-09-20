@@ -3930,7 +3930,8 @@ class ViewerModes(unittest.TestCase):
         not depend on catching one."""
         self.b.ev("[...window.palmar.tiles.values()].filter(t=>t.s.kind==='file').forEach(v=>v.close()); 1")
         self.b.ev("""(()=>{
-          window.__seen = {busy:false, cursor:null, spin:false, done:false};
+          window.__seen = {busy:false, cursor:null, ring:false, turning:false, done:false,
+                           still: matchMedia('(prefers-reduced-motion: reduce)').matches};
           const cv = document.getElementById('cv'), S = document.getElementById('cv-scroll');
           const look = () => {
             if (cv.classList.contains('finding')) {
@@ -3938,7 +3939,10 @@ class ViewerModes(unittest.TestCase):
               window.__seen.cursor = getComputedStyle(S).cursor;
             } else if (window.__seen.busy) window.__seen.done = true;
             const sp = document.querySelector('.toast .spin');
-            if (sp && getComputedStyle(sp).animationName !== 'none') window.__seen.spin = true;
+            if (sp) {
+              window.__seen.ring = true;
+              window.__seen.turning = getComputedStyle(sp).animationName !== 'none';
+            }
           };
           window.__mo = new MutationObserver(look);
           window.__mo.observe(document.body, {subtree:true, attributes:true, childList:true});
@@ -3960,8 +3964,14 @@ class ViewerModes(unittest.TestCase):
         self.assertIn("nowhere at all.csv", said, "it never said how the search ended: %r" % (said,))
         self.assertTrue(seen["busy"], "nothing said the search was running: %r" % (seen,))
         self.assertEqual(seen["cursor"], "wait", "the canvas was busy and did not look it: %r" % (seen,))
-        self.assertTrue(seen["spin"],
-                        "no ring went round — the cursor set is the platform's, this one is ours")
+        # **A ring either way.** The cursor set belongs to the platform; this one is ours, so it has to
+        # be there on every machine. Whether it *turns* is the machine's business — under
+        # prefers-reduced-motion it must stay a ring and stop, which is the promise the CSS makes, and
+        # asserting the animation flatly failed on a macOS runner that has that setting on (2026-09-19,
+        # the second time in two days a test of mine described this machine rather than palmar).
+        self.assertTrue(seen["ring"], "no ring at all: %r" % (seen,))
+        self.assertEqual(seen["turning"], not seen["still"],
+                         "the ring turns when it should not, or the other way about: %r" % (seen,))
         self.assertTrue(seen["done"], "the busy state was never taken off again: %r" % (seen,))
         self.assertFalse(self.b.ev("document.getElementById('cv').classList.contains('finding')"),
                          "the busy cursor was left on after the search ended")
