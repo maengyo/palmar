@@ -749,6 +749,118 @@ class AVersionIsNotAName(unittest.TestCase):
         self.assertEqual(f.fg, "9.9.9")
 
 
+class AnInterpreterIsNotTheProgram(unittest.TestCase):
+    """A tool written in Python runs as `python3.13`, because `comm` can only name the file that is
+    executing and for a script that file is the interpreter — the pane said `python3.13` where it
+    meant the agent's own name (user, 2026-09-21). Measured on this Mac before the fix:
+    `comm_of` -> `python3.13`, `exe_of` -> `/opt/anaconda3/bin/python3.13`, and the version rule
+    does not fire because `python3.13` is not a version. The name is in the arguments."""
+
+    def test_what_an_interpreter_looks_like(self):
+        for n in ("python", "python3", "python3.13", "pypy3", "node", "nodejs", "bun", "deno",
+                  "ruby", "ruby3.2", "perl", "php8"):
+            self.assertTrue(D.INTERPRETERISH.match(n), n)
+        # These run programs too, but a pane showing `bash` is honest and `bash -c …` is not a name.
+        for n in ("claude", "vim", "npm", "bash", "zsh", "sh", "git", "pythonic", "nodemon", "2.1.278"):
+            self.assertFalse(D.INTERPRETERISH.match(n), n)
+
+    def test_the_script_is_the_name(self):
+        self.assertEqual(D.script_of(["/x/uv/tools/aelix/bin/python", "/x/.local/bin/aelix", "run"]), "aelix")
+        self.assertEqual(D.script_of(["python3", "-u", "/srv/app/worker.py"]), "worker")
+        self.assertEqual(D.script_of(["node", "/p/cli.mjs"]), "cli")
+        self.assertEqual(D.script_of(["node", "--inspect", "/p/node_modules/.bin/eslint"]), "eslint")
+
+    def test_an_option_s_value_is_not_a_script(self):
+        """**Skipping options is not enough.** Some take a value, and taking the first thing that is
+        not an option gives `ignore` — a lie rather than a shortfall. A candidate has to look like a
+        file: a path separator, or one of the endings a script has."""
+        self.assertEqual(D.script_of(["/opt/py/bin/python3.13", "-W", "ignore", "serve.py"]), "serve")
+        self.assertEqual(D.script_of(["node", "-r", "dotenv/config", "app.js"]), "app")
+
+    def test_a_module_is_a_name_and_a_command_line_program_is_not(self):
+        self.assertEqual(D.script_of(["python3", "-m", "palmar.daemon", "--port", "8801"]), "daemon")
+        self.assertEqual(D.script_of(["/usr/bin/python3", "-m", "http.server"]), "server")
+        # Printing the code instead of `python3` is worse than saying nothing.
+        self.assertIsNone(D.script_of(["python3", "-c", "import os; os.system('x')"]))
+        self.assertIsNone(D.script_of(["node", "--eval", "console.log(1)"]))
+
+    def test_nothing_to_go_on_keeps_the_interpreter(self):
+        self.assertIsNone(D.script_of(["python3"]))
+        self.assertIsNone(D.script_of([]))
+        self.assertIsNone(D.script_of(None))
+        # No separator and no ending — it may well be a script, but it may be an option's value, and
+        # `python3` is the answer that is never wrong.
+        self.assertIsNone(D.script_of(["python3", "tool"]))
+
+    def test_a_script_named_after_its_version_walks_up_too(self):
+        """The two rules meet: the thing being run can itself live under a version number."""
+        self.assertEqual(D.nice_name("/x/share/aelix/versions/2.1.9"), "aelix")
+        self.assertEqual(D.nice_name("/x/run.py"), "run")
+
+    def test_reading_the_arguments_macos_hands_back(self):
+        """`KERN_PROCARGS2`: argc, the executable's path, padding, then argv — and then the whole
+        environment, which is why the count matters. Without it the scan walks into `PATH`."""
+        raw = ((2).to_bytes(4, sys.byteorder) + b"/opt/py/bin/python3.13\0\0\0"
+               + b"/opt/py/bin/python3.13\0" + b"/x/.local/bin/aelix\0"
+               + b"PATH=/usr/bin\0" + b"HOME=/x\0")
+        self.assertEqual(D.parse_procargs2(raw), ["/opt/py/bin/python3.13", "/x/.local/bin/aelix"])
+        self.assertIsNone(D.parse_procargs2(b""))
+        self.assertIsNone(D.parse_procargs2((0).to_bytes(4, sys.byteorder)))
+
+    def test_the_pane_takes_the_script_over_the_interpreter(self):
+        class F:
+            pass
+        f = F()
+        f.pid, f.fg, f._fg_argv = 1, None, (None, None, None)
+        f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
+        with mock.patch.object(D, "comm_of", lambda pid: "python3.13"), \
+             mock.patch.object(D, "argv_of", lambda pid: ["/x/py/bin/python3.13", "/x/.local/bin/aelix"]), \
+             mock.patch.object(D.registry, "changed"):
+            D.Session.sample_fg(f)
+        self.assertEqual(f.fg, "aelix")
+
+    def test_the_arguments_are_read_once_for_a_pid(self):
+        """This runs on every output tick. A 1MB `sysctl` per tick per pane is not the cost of a name."""
+        class F:
+            pass
+        f = F()
+        f.pid, f.fg, f._fg_argv = 1, None, (None, None, None)
+        f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
+        calls = []
+
+        def argv(pid):
+            calls.append(pid)
+            return ["/x/py/bin/python3.13", "/x/.local/bin/aelix"]
+
+        with mock.patch.object(D, "comm_of", lambda pid: "python3.13"), \
+             mock.patch.object(D, "argv_of", argv), \
+             mock.patch.object(D.registry, "changed"):
+            for _ in range(5):
+                D.Session.sample_fg(f)
+        self.assertEqual(f.fg, "aelix")
+        self.assertEqual(len(calls), 1, "the arguments were read %d times for one process" % len(calls))
+
+    def test_an_exec_in_place_is_not_served_from_the_cache(self):
+        """The key is the pid **and** the name. A process that execs keeps its pid, and a name held
+        against the pid alone would go on saying what used to be there."""
+        class F:
+            pass
+        f = F()
+        f.pid, f.fg, f._fg_argv = 1, None, (None, None, None)
+        f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
+        seen = ["python3.13", "node"]
+        argvs = {"python3.13": ["/x/py/bin/python3.13", "/x/.local/bin/aelix"],
+                 "node": ["/x/n/bin/node", "/x/p/cli.mjs"]}
+        with mock.patch.object(D, "comm_of", lambda pid: seen[0]), \
+             mock.patch.object(D, "argv_of", lambda pid: argvs[seen[0]]), \
+             mock.patch.object(D.registry, "changed"):
+            D.Session.sample_fg(f)
+            self.assertEqual(f.fg, "aelix")
+            seen[0] = "node"
+            D.Session.sample_fg(f)
+        self.assertEqual(f.fg, "cli")
+
+
 URL = "http://127.0.0.1:8801/?k=abc123"
 
 

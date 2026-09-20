@@ -806,6 +806,7 @@ class Session:
         self.last_event = None
         self.alt = False
         self.created = time.time()
+        self._fg_argv = (None, None, None)   # pid · comm · the script behind an interpreter (see script_of)
         self.title = ""              # the window title the agent set last (#38)
         self.fg = None               # the command in the foreground, by name — None at a prompt or when unknowable
         self.title_hits = []         # recent title-change times (monotonic). Anything outside TITLE_WINDOW_S is dropped
@@ -1308,6 +1309,14 @@ class Session:
             # A program installed under its own version number is named after it — see VERSIONISH.
             if name and VERSIONISH.match(name):
                 name = name_from_path(exe_of(pid)) or name
+            # And a script is named after its interpreter — see INTERPRETERISH. The answer is held
+            # against the pid and the name: this runs on every output tick and reading a process's
+            # arguments is not a per-tick price. An exec in place changes `comm`, which misses the
+            # key, so the cache cannot go stale into a different program.
+            if name and INTERPRETERISH.match(name):
+                if self._fg_argv[:2] != (pid, name):
+                    self._fg_argv = (pid, name, script_of(argv_of(pid)))
+                name = self._fg_argv[2] or name
         if name != self.fg:
             self.fg = name
             registry.changed(self)
@@ -1936,6 +1945,126 @@ def name_from_path(path):
             continue
         return part
     return None
+
+
+#: **An interpreter is not the program.** A tool written in Python or JavaScript runs as
+#: `python3.13` or `node`, because `comm` can only name the file that is executing and for a script
+#: that file is the interpreter — the pane said `python3.13` where it meant the agent's own name
+#: (user, 2026-09-21). Same shape as the version rule above: ask what the name **looks like**, not
+#: which programs exist. What the person means is the script, and the script is in the arguments.
+#: The number on the end is part of the name everywhere — `python3.13`, `ruby3.2`, `php8` — so it
+#: is written once rather than per language. (A test asked for `ruby3.2` and got nothing.)
+INTERPRETERISH = re.compile(r"^(python|pypy|node|nodejs|bun|deno|ruby|perl|php)\d*(\.\d+)*$")
+#: Endings that say "this file is a program someone wrote", for telling a script from an option's value.
+SCRIPTY = (".py", ".pyw", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl", ".php")
+#: **Options whose value comes as the next word.** Looking like a file is not enough on its own:
+#: `node -r dotenv/config app.js` has a separator in the value and answered `config` (found by the
+#: test, not in the wild). This list is the part of the rule that can go out of date — a value-taking
+#: option nobody wrote down, whose value looks like a path, still names the wrong thing.
+TAKES_A_VALUE = frozenset({"-W", "-X", "-r", "-I", "-M", "-i", "--require", "--import", "--loader",
+                           "--experimental-loader", "--check-hash-based-pycs", "--conditions",
+                           "--env-file", "--tsconfig", "--config", "--allow-read", "--allow-write"})
+
+
+def script_of(argv):
+    """The argument that names what is being run, or None.
+
+    **Skipping the interpreter's own options is not enough.** Some take a value — `python -W ignore
+    script.py`, `node -r ./setup app.js` — and taking the first non-option gives `ignore`, which is
+    a lie rather than a shortfall. So a candidate has to *look like a file*: a path separator, or one
+    of the endings a script has. Anything else is stepped over and the scan goes on.
+
+    `-m` is the exception: what follows it is a module, and a module name **is** the name. `-c` ends
+    the scan — a program written on the command line has no name, and printing the code is worse
+    than printing `python3`.
+    """
+    i = 1
+    while argv and i < len(argv):
+        a = argv[i]
+        if a in ("-m", "--module") and i + 1 < len(argv):
+            return argv[i + 1].rsplit(".", 1)[-1] or None      # a.b.cli -> cli
+        if a in ("-c", "-e", "--eval", "--print"):
+            return None
+        if a.startswith("-"):
+            i += 2 if a in TAKES_A_VALUE else 1
+            continue
+        if "/" in a or "\\" in a or a.lower().endswith(SCRIPTY):
+            return nice_name(a)
+        i += 1
+    return None
+
+
+def nice_name(path):
+    """A path into the word to show: the last component, without a script's ending — and if that is
+    a version, the same walk up the path the version rule uses."""
+    base = re.split(r"[\\/]+", path.strip())[-1]
+    for ext in SCRIPTY:
+        if base.lower().endswith(ext):
+            base = base[:-len(ext)]
+            break
+    if not base or VERSIONISH.match(base):
+        return name_from_path(path)
+    return base
+
+
+#: How a process was started. **Only asked when the name is an interpreter**, and the answer is held
+#: against the pid — this runs on every output tick, and a 1MB `sysctl` per tick per pane is not the
+#: cost of a name. Linux hands it over in a file; macOS needs `KERN_PROCARGS2`, whose buffer has to
+#: be the whole of `KERN_ARGMAX` or the call fails rather than truncating.
+CTL_KERN, KERN_ARGMAX, KERN_PROCARGS2 = 1, 8, 49
+_ARGMAX = [None]
+
+
+def parse_procargs2(raw):
+    """What `KERN_PROCARGS2` returns: `[argc int32][executable path\0][\0 padding][argv0\0][argv1\0]…`
+    and then the environment, which is why the count matters — without it the scan walks into `PATH`."""
+    if len(raw) < 4:
+        return None
+    argc = int.from_bytes(raw[:4], sys.byteorder)
+    if argc <= 0:
+        return None
+    i = raw.find(b"\0", 4)                       # past the executable's path
+    if i < 0:
+        return None
+    while i < len(raw) and raw[i] == 0:          # and past the padding that follows it
+        i += 1
+    out = []
+    while len(out) < argc and i < len(raw):
+        j = raw.find(b"\0", i)
+        if j < 0:
+            j = len(raw)
+        out.append(raw[i:j].decode("utf-8", "replace"))
+        i = j + 1
+    return out or None
+
+
+def argv_of(pid: int):
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/%d/cmdline" % pid, "rb") as fh:
+                out = [p.decode("utf-8", "replace") for p in fh.read().split(b"\0") if p]
+            return out or None
+        except OSError:
+            return None
+    if sys.platform != "darwin":
+        return None
+    try:
+        import ctypes, ctypes.util
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "/usr/lib/libSystem.dylib")
+        if _ARGMAX[0] is None:
+            n = ctypes.c_int(0)
+            sz = ctypes.c_size_t(ctypes.sizeof(n))
+            mib = (ctypes.c_int * 2)(CTL_KERN, KERN_ARGMAX)
+            _ARGMAX[0] = n.value if libc.sysctl(mib, 2, ctypes.byref(n), ctypes.byref(sz),
+                                                None, 0) == 0 and n.value > 0 else 262144
+        buf = ctypes.create_string_buffer(_ARGMAX[0])
+        sz = ctypes.c_size_t(_ARGMAX[0])
+        mib = (ctypes.c_int * 3)(CTL_KERN, KERN_PROCARGS2, pid)
+        if libc.sysctl(mib, 3, buf, ctypes.byref(sz), None, 0) != 0:
+            return None
+        return parse_procargs2(buf.raw[:sz.value])
+    except Exception:
+        return None
 
 
 #: Where a process runs from. **Only asked when the name is a version** — it costs a syscall and a
