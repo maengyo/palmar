@@ -1978,48 +1978,88 @@ function paintTidy() {
             : 'tidy this canvas — already at the corner; this takes you there';
 }
 
-//: **Bring them closer without rearranging anything** (asked 2026-09-17, decided 2026-09-19: keep
-//: the arrangement, close the gaps — the version that argues least with "a window stays where you
-//: put it"). Packing everything into a grid from the top-left was the other option and it throws
-//: away the placing, which is the thing this program is for.
+//: **Bring them closer, until they touch** (asked 2026-09-17; the first rule was "keep the
+//: arrangement, close the gaps", and the user looked at it and asked for tighter — "테트리스처럼 좌우
+//: 창들이 맞닿게끔", 2026-09-20). Squeezing each axis on its own left windows meeting only at a
+//: corner, because closing a horizontal gap and a vertical one separately never makes two windows
+//: sit side by side. So each one is slid instead: left until it meets something, then up, a few
+//: passes until nothing moves.
 //:
-//: One axis at a time, and on each axis the windows are swept in order while the **empty bands
-//: between them** are squeezed to a single GAP. Everything that overlaps on that axis is in the same
-//: band and moves as one, so a row stays a row, a group stays a group, and nothing can end up on top
-//: of anything: two bands finish GAP apart, which is a gap and not a collision. The first band does
-//: not move, so the corner stays where it was and the rest comes in towards it.
-function gatherAxis(rows, lo, size) {
-  const order = rows.map((r, i) => ({ i, a: lo(r), b: lo(r) + size(r) }))
-                    .sort((p, q) => p.a - q.a || p.b - q.b);
-  const shift = new Map();
-  let back = 0, far = null;
-  for (const s of order) {
-    let a = s.a - back;
-    if (far !== null && a > far + GAP) {
-      back += a - (far + GAP);
-      a = far + GAP;
-    }
-    shift.set(s.i, back);
-    far = far === null ? a + (s.b - s.a) : Math.max(far, a + (s.b - s.a));
+//: **A group is one thing that slides.** Everything a group owns is in one block and moves together,
+//: so the one arrangement that must not change does not — and blocks collide by their outer
+//: rectangle, which can leave a little air beside an L-shaped group. That is the conservative way
+//: round: a gap is a gap, an overlap would be a bug.
+//:
+//: **The corner does not move.** Gather brings things together; pulling the whole lot to the origin
+//: is tidy's job, and doing both here would make one button two.
+function gatherBlocks(canvasId) {
+  const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
+  if (mine.length < 2) return null;
+  const byGroup = new Map();
+  for (const t of mine) {
+    const k = layout[t.id].g || t.id;
+    if (!byGroup.has(k)) byGroup.set(k, []);
+    byGroup.get(k).push(t.id);
   }
-  return shift;
+  return [...byGroup.values()].map((ids) => {
+    const r = groupRect(ids);
+    return { ids, x: r.x, y: r.y, w: r.w, h: r.h };
+  });
+}
+
+//: How far left this block can go before it meets one already placed. Only the blocks sharing rows
+//: with it can be in the way; the rest are beside it on the other axis. Never past the corner, and
+//: never to the right — sliding is one way.
+function slideLeft(b, placed, x0) {
+  let edge = x0;
+  for (const o of placed) {
+    if (o.y >= b.y + b.h + GAP || o.y + o.h + GAP <= b.y) continue;   // not in the same rows
+    edge = Math.max(edge, o.x + o.w + GAP);
+  }
+  return Math.max(x0, Math.min(b.x, edge));
+}
+//: The same reading upwards: only the blocks sharing columns can stop it.
+function slideUp(b, placed, y0) {
+  let edge = y0;
+  for (const o of placed) {
+    if (o.x >= b.x + b.w + GAP || o.x + o.w + GAP <= b.x) continue;   // not in the same columns
+    edge = Math.max(edge, o.y + o.h + GAP);
+  }
+  return Math.max(y0, Math.min(b.y, edge));
 }
 
 //: What `gather` would do, as {id: {x, y}} — worked out without touching anything, so the button can
 //: know whether it has anything to do and a test can ask the same question the button asks.
 function gatherPlan(canvasId) {
-  const mine = [...tiles.values()].filter((t) => t.s.canvas === canvasId && layout[t.id]);
-  if (mine.length < 2) return null;
-  const rs = mine.map((t) => layout[t.id]);
-  const dx = gatherAxis(rs, (r) => r.x, (r) => r.w);
-  const dy = gatherAxis(rs, (r) => r.y, (r) => r.h);
+  const blocks = gatherBlocks(canvasId);
+  if (!blocks) return null;
+  const x0 = Math.min(...blocks.map((b) => b.x));
+  const y0 = Math.min(...blocks.map((b) => b.y));
+  const was = new Map(blocks.map((b) => [b, { x: b.x, y: b.y }]));
+  // Nearest the corner first, so each one slides against what is already settled.
+  const order = [...blocks].sort((m, n) => (m.y + m.x) - (n.y + n.x));
+  for (let pass = 0; pass < 3; pass++) {
+    let moved = false;
+    const placed = [];
+    for (const b of order) {
+      const bx = slideLeft(b, placed, x0);
+      if (bx !== b.x) { b.x = bx; moved = true; }
+      const by = slideUp(b, placed, y0);
+      if (by !== b.y) { b.y = by; moved = true; }
+      placed.push(b);
+    }
+    if (!moved) break;
+  }
   const plan = {};
   let moved = false;
-  mine.forEach((t, i) => {
-    const r = rs[i], x = r.x - dx.get(i), y = r.y - dy.get(i);
-    if (x !== r.x || y !== r.y) moved = true;
-    plan[t.id] = { x, y };
-  });
+  for (const b of blocks) {
+    const from = was.get(b), dx = b.x - from.x, dy = b.y - from.y;
+    if (dx || dy) moved = true;
+    for (const id of b.ids) {
+      const r = layout[id];
+      plan[id] = { x: r.x + dx, y: r.y + dy };
+    }
+  }
   return moved ? plan : null;
 }
 
