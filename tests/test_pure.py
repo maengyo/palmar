@@ -680,6 +680,75 @@ class DrawingTheSameThingAgain(unittest.TestCase):
         self.assertEqual(f.last_out, 0.0, "a cursor tick was counted as output")
 
 
+class AVersionIsNotAName(unittest.TestCase):
+    """Claude Code installs itself as `~/.local/share/claude/versions/2.1.278` with a symlink called
+    `claude` pointing at it, so the program that actually runs is named after its version and the
+    rail said `2.1.274` where it meant `claude` (user, 2026-09-20). Anything installed that way reads
+    the same, which is why this asks the **shape** of the name rather than knowing about one program."""
+
+    def test_what_a_version_looks_like(self):
+        for yes in ("2.1.278", "v20.11.1", "1.2", "1.0.0-beta.3", "0.1.2+build"):
+            self.assertTrue(D.VERSIONISH.match(yes), "%r is a version" % yes)
+        for no in ("claude", "node", "vim", "2026", "python3.13", "x1.2"):
+            self.assertFalse(D.VERSIONISH.match(no), "%r is not a version" % no)
+
+    def test_the_name_comes_out_of_the_path(self):
+        """Walking up from the binary, past the components that say where a thing is kept rather than
+        what it is."""
+        for path, want in [
+            ("/Users/x/.local/share/claude/versions/2.1.278", "claude"),
+            ("/home/x/.nvm/versions/node/v20.11.1/bin/node", "node"),
+            ("/opt/homebrew/Cellar/node/22.1.0/bin/node", "node"),
+            ("/Applications/Foo.app/Contents/MacOS/Foo", "Foo"),
+            (r"C:\\Users\\x\\AppData\\Local\\thing\\versions\\9.9.9", "thing"),
+            ("/usr/bin/vim", "vim"),
+            ("", None),
+            ("/usr/local/bin", None),          # nothing here but places
+        ]:
+            self.assertEqual(D.name_from_path(path), want, "from %r" % path)
+
+    def test_only_a_version_sends_it_looking(self):
+        """`exe_of` costs a syscall and a buffer, and every other name is already the answer."""
+        class F:
+            pass
+        f = F()
+        f.pid, f.fg = 1, None
+        f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
+        asked = []
+        with mock.patch.object(D, "comm_of", lambda pid: "vim"), \
+             mock.patch.object(D, "exe_of", lambda pid: asked.append(pid) or "/usr/bin/vim"), \
+             mock.patch.object(D.registry, "changed"):
+            D.Session.sample_fg(f)
+        self.assertEqual(f.fg, "vim")
+        self.assertEqual(asked, [], "it went looking for a path it did not need")
+
+    def test_a_version_is_traded_for_the_name_beside_it(self):
+        class F:
+            pass
+        f = F()
+        f.pid, f.fg = 1, None
+        f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
+        with mock.patch.object(D, "comm_of", lambda pid: "2.1.278"), \
+             mock.patch.object(D, "exe_of", lambda pid: "/Users/x/.local/share/claude/versions/2.1.278"), \
+             mock.patch.object(D.registry, "changed"):
+            D.Session.sample_fg(f)
+        self.assertEqual(f.fg, "claude")
+
+    def test_a_version_with_nothing_better_behind_it_keeps_the_version(self):
+        """Something is better than nothing: a number on the rail is poor, an empty rail says the pane
+        is at a prompt when it is not."""
+        class F:
+            pass
+        f = F()
+        f.pid, f.fg = 1, None
+        f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
+        with mock.patch.object(D, "comm_of", lambda pid: "9.9.9"), \
+             mock.patch.object(D, "exe_of", lambda pid: None), \
+             mock.patch.object(D.registry, "changed"):
+            D.Session.sample_fg(f)
+        self.assertEqual(f.fg, "9.9.9")
+
+
 URL = "http://127.0.0.1:8801/?k=abc123"
 
 

@@ -1305,6 +1305,9 @@ class Session:
         name = None
         if pid and pid != self.pid:
             name = comm_of(pid)
+            # A program installed under its own version number is named after it — see VERSIONISH.
+            if name and VERSIONISH.match(name):
+                name = name_from_path(exe_of(pid)) or name
         if name != self.fg:
             self.fg = name
             registry.changed(self)
@@ -1908,6 +1911,51 @@ def comm_of(pid: int):
         try:
             with open("/proc/%d/comm" % pid, "rb") as fh:
                 return fh.read().strip().decode("utf-8", "replace") or None
+        except OSError:
+            return None
+    return None
+
+
+#: **A version is not a name.** Claude Code installs itself as `~/.local/share/claude/versions/2.1.278`
+#: with a symlink called `claude` pointing at it, so the program that actually runs is named after its
+#: version and the rail said `2.1.274` where it meant `claude` (user, 2026-09-20). Anything installed
+#: that way reads the same, which is why this asks the shape of the name rather than knowing about one
+#: program: a bare version number is not something to show a person.
+VERSIONISH = re.compile(r"^v?\d+(\.\d+){1,3}([-+.][0-9A-Za-z.\-+]*)?$")
+#: Directory names that say where a thing is kept rather than what it is. Walking up from the binary,
+#: these are stepped over on the way to the first component that means something.
+PLACE_DIRS = frozenset({"versions", "version", "bin", "sbin", "libexec", "current", "latest",
+                        "releases", "release", "dist", "build", "lib", "node_modules", ".bin",
+                        "contents", "macos", "resources", "usr", "local", "opt", "share"})
+
+
+def name_from_path(path):
+    """The first component of a path that is worth showing, from the end backwards."""
+    for part in reversed([p for p in re.split(r"[\\/]+", path or "") if p]):
+        if VERSIONISH.match(part) or part.lower() in PLACE_DIRS:
+            continue
+        return part
+    return None
+
+
+#: Where a process runs from. **Only asked when the name is a version** — it costs a syscall and a
+#: buffer, and every other name is already the answer.
+def exe_of(pid: int):
+    if sys.platform == "darwin":
+        if _LIBPROC[0] is False:
+            cwd_of(pid)                      # loads libproc, or records that it cannot
+        if not _LIBPROC[0]:
+            return None
+        ctypes, lib = _LIBPROC[0]
+        try:
+            buf = ctypes.create_string_buffer(4096)
+            n = lib.proc_pidpath(pid, buf, 4096)
+            return buf.raw[:n].decode("utf-8", "replace") if n > 0 else None
+        except Exception:
+            return None
+    if sys.platform.startswith("linux"):
+        try:
+            return os.readlink("/proc/%d/exe" % pid)
         except OSError:
             return None
     return None
