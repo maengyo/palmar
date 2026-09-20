@@ -350,7 +350,9 @@ class TheFolderAPaneIsIn(unittest.TestCase):
         f.title_hits = []
         f.osc_carry = b""
         # _scan_title reaches for it through self, and this stand-in is not a Session.
+        f.fg, f.fg_told = None, False
         f._title_cwd = lambda t: D.Session._title_cwd(f, t)
+        f._title_run = lambda t: D.Session._title_run(f, t)
         f._title_tick = lambda: None
         f._arm_settle = lambda: None
         return f
@@ -426,7 +428,9 @@ class WhenTheShellSaysItOutright(unittest.TestCase):
         f.last_out = 0.0
         f.title, f.title_hits, f.title_spun, f.osc_carry = "", [], False, b""
         f.cwd, f.pid = "/start", os.getpid()
+        f.fg, f.fg_told = None, False
         f._title_cwd = lambda t: D.Session._title_cwd(f, t)
+        f._title_run = lambda t: D.Session._title_run(f, t)
         f._shell_mark = lambda m: D.Session._shell_mark(f, m)
         f._title_tick = lambda: D.Session._title_tick(f)
         f._title_busy = lambda: D.Session._title_busy(f)
@@ -712,7 +716,7 @@ class AVersionIsNotAName(unittest.TestCase):
         class F:
             pass
         f = F()
-        f.pid, f.fg = 1, None
+        f.pid, f.fg, f.fg_told = 1, None, False
         f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
         asked = []
         with mock.patch.object(D, "comm_of", lambda pid: "vim"), \
@@ -726,7 +730,7 @@ class AVersionIsNotAName(unittest.TestCase):
         class F:
             pass
         f = F()
-        f.pid, f.fg = 1, None
+        f.pid, f.fg, f.fg_told = 1, None, False
         f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
         with mock.patch.object(D, "comm_of", lambda pid: "2.1.278"), \
              mock.patch.object(D, "exe_of", lambda pid: "/Users/x/.local/share/claude/versions/2.1.278"), \
@@ -740,7 +744,7 @@ class AVersionIsNotAName(unittest.TestCase):
         class F:
             pass
         f = F()
-        f.pid, f.fg = 1, None
+        f.pid, f.fg, f.fg_told = 1, None, False
         f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
         with mock.patch.object(D, "comm_of", lambda pid: "9.9.9"), \
              mock.patch.object(D, "exe_of", lambda pid: None), \
@@ -811,7 +815,7 @@ class AnInterpreterIsNotTheProgram(unittest.TestCase):
         class F:
             pass
         f = F()
-        f.pid, f.fg, f._fg_argv = 1, None, (None, None, None)
+        f.pid, f.fg, f.fg_told, f._fg_argv = 1, None, False, (None, None, None)
         f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
         with mock.patch.object(D, "comm_of", lambda pid: "python3.13"), \
              mock.patch.object(D, "argv_of", lambda pid: ["/x/py/bin/python3.13", "/x/.local/bin/aelix"]), \
@@ -824,7 +828,7 @@ class AnInterpreterIsNotTheProgram(unittest.TestCase):
         class F:
             pass
         f = F()
-        f.pid, f.fg, f._fg_argv = 1, None, (None, None, None)
+        f.pid, f.fg, f.fg_told, f._fg_argv = 1, None, False, (None, None, None)
         f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
         calls = []
 
@@ -846,7 +850,7 @@ class AnInterpreterIsNotTheProgram(unittest.TestCase):
         class F:
             pass
         f = F()
-        f.pid, f.fg, f._fg_argv = 1, None, (None, None, None)
+        f.pid, f.fg, f.fg_told, f._fg_argv = 1, None, False, (None, None, None)
         f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
         seen = ["python3.13", "node"]
         argvs = {"python3.13": ["/x/py/bin/python3.13", "/x/.local/bin/aelix"],
@@ -859,6 +863,100 @@ class AnInterpreterIsNotTheProgram(unittest.TestCase):
             seen[0] = "node"
             D.Session.sample_fg(f)
         self.assertEqual(f.fg, "cli")
+
+
+class TheShellSaysWhatItRuns(unittest.TestCase):
+    """Windows has no foreground process to ask — ConPTY has no process group, and
+    `GetConsoleProcessList` needs the caller attached to that console — so every pane there was
+    named `shell` (user, 2026-09-21). The same answer as the folder: the shell knows, so it says.
+    `palmar:run:<the first three words>` when a command starts, `palmar:run:` when the prompt
+    comes back.
+
+    Only a **name** is ever taken out of those words. A command line is not only commands."""
+
+    # The tokens arrive already split by the preamble, on a character a Windows path cannot hold.
+    def name(self, *words):
+        return D.name_from_command(list(words))
+
+    def test_the_first_word_is_the_program(self):
+        self.assertEqual(self.name("aelix"), "aelix")
+        self.assertEqual(self.name("aelix", "run"), "aelix")
+        self.assertEqual(self.name("claude", "--resume"), "claude")
+
+    def test_the_ways_of_writing_the_same_name(self):
+        self.assertEqual(self.name(".\\tools\\build.exe", "--x"), "build")
+        self.assertEqual(self.name('"C:\\Program Files\\Git\\bin\\git.exe"', "status"), "git")
+        # `&` is a word of its own in PowerShell, and so is a dot-source.
+        self.assertEqual(self.name("&", "C:/x/node.exe", "C:/p/cli.mjs"), "cli")
+
+    def test_the_other_two_rules_come_along(self):
+        """The interpreter rule and the version rule work on these words too — that is the whole
+        reason the preamble sends three of them and not one."""
+        self.assertEqual(self.name("python", "foo.py"), "foo")
+        self.assertEqual(self.name("python3", "-m", "http.server"), "server")
+        self.assertEqual(self.name("C:/x/versions/2.1.278/claude.exe", "--resume"), "claude")
+
+    def test_a_command_line_is_not_only_commands(self):
+        """**This is the one that matters.** `$env:TOKEN="abc"; aelix` put that whole first word on
+        the rail — secret and all — until what comes out had to look like a name. Found here, not in
+        the wild. Saying nothing is what palmar said before any of this existed."""
+        self.assertIsNone(self.name('$env:TOKEN="abc";', "aelix"))
+        self.assertIsNone(self.name("TOKEN=abc", "aelix"))
+        self.assertIsNone(self.name(""))
+        self.assertIsNone(self.name("x" * 200))
+        # The command's own name is not the secret beside it.
+        self.assertEqual(self.name("echo", "hunter2"), "echo")
+
+    def test_a_name_may_be_in_any_language(self):
+        """`\\w` here is not ASCII. A script called 내도구 is a name like any other."""
+        self.assertEqual(self.name("./내도구.py"), "내도구.py")
+
+    def test_the_preamble_and_the_daemon_spell_it_the_same(self):
+        """The two halves have to agree, the same way the folder marker's two halves do."""
+        body = D.PWSH_PREAMBLE
+        self.assertIn(D.TITLE_RUN, body, "the preamble and the daemon disagree on the marker")
+        self.assertIn("palmar:run:$w", body, "the preamble never says what is running")
+        self.assertIn("palmar:run:$b", body, "the prompt never clears it — a name would stick for ever")
+        # Written into a plain Python string, so every backslash has to survive Python's own
+        # escaping. `[\x00-\x1f\x7f]` once became those actual bytes in the file.
+        self.assertNotIn("\x00", body, "the preamble carries real control bytes")
+        self.assertIn("\\S+", body, "the tokenizer's escape did not survive into the file")
+        self.assertLess(body.index("133;C"), body.index("palmar:run:$w"),
+                        "the name is sent before the shell has said a command started")
+
+    def test_the_marker_names_the_pane_and_the_prompt_clears_it(self):
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            took = D.Session._title_run(f, D.TITLE_RUN + "aelix|run")
+            self.assertTrue(took, "the marker was not recognised as palmar's own")
+            self.assertEqual(f.fg, "aelix")
+            D.Session._title_run(f, D.TITLE_RUN)      # the prompt is back
+        self.assertIsNone(f.fg, "the name stayed after the command ended")
+
+    def test_an_ordinary_title_is_left_alone(self):
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            self.assertFalse(D.Session._title_run(f, "~/work — claude"))
+        self.assertIsNone(f.fg)
+
+    def test_once_a_shell_has_said_we_stop_guessing(self):
+        """Same rule as hooks over the title and OSC 133 over the guesses. Without it the very next
+        output tick reads a foreground process, finds none, and wipes the told name back to nothing."""
+        f = self.pane()
+        f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: None)})()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session._title_run(f, D.TITLE_RUN + "aelix")
+            self.assertTrue(f.fg_told)
+            D.Session.sample_fg(f)
+        self.assertEqual(f.fg, "aelix", "the tick wiped what the shell had said")
+
+    def pane(self):
+        class F:
+            pass
+        f = F()
+        f.fg, f.fg_told, f.pid = None, False, 1
+        f._fg_argv = (None, None, None)
+        return f
 
 
 URL = "http://127.0.0.1:8801/?k=abc123"

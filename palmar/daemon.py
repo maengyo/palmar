@@ -159,6 +159,11 @@ OSC_SEEN = re.compile(
     rb"\x1b\](?:([012]);([^\x07\x1b]{0,255})|133;([A-D])(?:;[^\x07\x1b]{0,255})?)(?:\x07|\x1b\\)")
 #: A title that begins with this is palmar's preamble saying where the pane is, not an agent at work.
 TITLE_CWD = "palmar:cwd:"
+#: And what it is running. Windows has no foreground process to ask — ConPTY has no process group
+#: and `GetConsoleProcessList` needs the caller attached to that console — so the pane said `shell`
+#: for everything (user, 2026-09-21). The shell knows, so it says: `palmar:run:<the first three
+#: words>` when a command starts and `palmar:run:` with nothing when the prompt comes back.
+TITLE_RUN = "palmar:run:"
 TITLE_WINDOW_S = 3.0
 TITLE_BUSY_N = 2
 #: **The count alone is not enough — how far it spreads matters too.** A shell that swaps the title on
@@ -509,8 +514,9 @@ if (-not $global:PalmarUserPrompt) {
     try { $out = & $global:PalmarUserPrompt } catch { $out = "PS $($PWD.ProviderPath)> " }
     try {
       $e = [char]27; $b = [char]7
-      # 어디에 있는지, 그리고 "직전 명령이 끝났다 · 프롬프트다" (OSC 133).
-      [Console]::Write("$e]2;palmar:cwd:$($PWD.ProviderPath)$b$e]133;D$b$e]133;A$b")
+      # 프롬프트면 도는 것이 없다(run 비우기), 어디에 있는지, 그리고 "직전 명령이 끝났다 ·
+      # 프롬프트다" (OSC 133). 경로를 마지막에 써서 창 제목에 남는 것은 그대로 폴더다.
+      [Console]::Write("$e]2;palmar:run:$b$e]2;palmar:cwd:$($PWD.ProviderPath)$b$e]133;D$b$e]133;A$b")
     } catch {}
     $out
   }
@@ -525,7 +531,20 @@ if (-not $global:PalmarReadLine -and (Get-Command PSConsoleHostReadLine -ErrorAc
     try {
       $e = [char]27; $b = [char]7
       [Console]::Write("$e]133;B$b")
-      if ($line -and $line.Trim()) { [Console]::Write("$e]133;C$b") }
+      if ($line -and $line.Trim()) {
+        [Console]::Write("$e]133;C$b")
+        # 그리고 **무엇을** 돌리는지. 윈도우에는 앞 프로세스라는 것이 없어서 palmar 는 밖에서
+        # 볼 방법이 없는데, 셸은 방금 자기가 무엇을 받았는지 안다. 앞의 세 낱말만 — 이름 하나와,
+        # 인터프리터일 때 뒤에 오는 스크립트까지가 필요한 전부고, 나머지는 남의 명령줄이다.
+        # **따옴표를 아는 채로 쳪개다.** 공백으로 자르면 따옴표 안의 경로가 반으로 끊기고,
+        # git 을 `Program` 이라고 부르게 된다(시험이 잡았다). 낱말은 `|` 로 잉는다 —
+        # 윈도우 경로에 못 들어가는 글자라 뒤에서 다시 가를 때 안 부서진다.
+        $q = [regex]::Matches($line.Trim(), '"[^"]*"|''[^'']*''|\\S+')
+        $w = (@($q | Select-Object -First 3 | ForEach-Object { $_.Value }) -join '|')
+        if ($w.Length -gt 200) { $w = $w.Substring(0, 200) }
+        $w = $w -replace '[\\x00-\\x1f\\x7f]', ''
+        if ($w) { [Console]::Write("$e]2;palmar:run:$w$b") }
+      }
     } catch {}
     $line
   }
@@ -814,6 +833,7 @@ class Session:
         self.osc_carry = b""         # an OSC candidate straddling a chunk boundary
         self.last_paint = None       # the last small repaint inside alt — see REPEAT_MAX
         self.cwd_told = False        # has this shell ever said where it is — then we stop reading it
+        self.fg_told = False         # has this shell ever said what it runs — then we stop guessing
         self.shell_marks = False     # has this shell ever spoken OSC 133 — then the guesses stand down
         self.cmd_start = None        # monotonic time of the last 133;C, or None between commands
         self.derived = "idle"        # status read from title and output when there are no hooks
@@ -1099,7 +1119,7 @@ class Session:
                 self._shell_mark(m.group(3).decode())
                 continue
             t = m.group(2).decode("utf-8", "replace")
-            if self._title_cwd(t):     # palmar's own marker — a place, not a heartbeat
+            if self._title_cwd(t) or self._title_run(t):   # palmar's own markers, not heartbeats
                 continue
             if t != self.title:        # setting the same title again is not a change
                 self.title = t
@@ -1299,9 +1319,28 @@ class Session:
             registry.changed(self)
         return True
 
+    #: The pane telling us **what it is running**, for the same reason it tells us where it is: on
+    #: Windows there is no foreground process to ask. `palmar:run:` with nothing after it is the
+    #: prompt saying nothing is running. The words are the ones the person typed, so only a name is
+    #: ever taken out of them — see `name_from_command`.
+    def _title_run(self, t: str) -> bool:
+        if not t.startswith(TITLE_RUN):
+            return False
+        self.fg_told = True
+        name = name_from_command(t[len(TITLE_RUN):].split("|"))
+        if name != self.fg:
+            self.fg = name
+            registry.changed(self)
+        return True
+
     def sample_fg(self) -> None:
         """Read who is in front and, when that changed, tell every browser. Called on every output tick
         and every ten seconds from the restore timer, so a command that prints nothing is still seen."""
+        # **The one who knows wins.** Same rule as hooks over the title and OSC 133 over the guesses:
+        # once a shell has said what it runs, palmar stops reading processes for this pane — which on
+        # Windows would otherwise wipe the told name back to None on the very next tick.
+        if self.fg_told:
+            return
         pid = self.pty.foreground_pid()
         name = None
         if pid and pid != self.pid:
@@ -1992,6 +2031,40 @@ def script_of(argv):
             return nice_name(a)
         i += 1
     return None
+
+
+#: **A typed command line into a name.** The first word is the program; a path, a `.exe`, quotes
+#: and a call operator are all ways of writing the same name. Everything after it is only looked at
+#: through `script_of`, which takes nothing that does not look like a file — so a password typed as
+#: an argument cannot arrive on the rail by this road.
+CMD_EXT = (".exe", ".cmd", ".bat", ".com", ".ps1")
+#: **And what comes out has to look like a name.** A command line is not only commands: `$env:TOKEN=
+#: "abc"; aelix` put that whole first word on the rail when this was first written, secret and all
+#: (found by the test, not in the wild). A name is word characters — Hangul included, `\w` is not
+#: ASCII here — with the punctuation a filename carries. Anything else and palmar says nothing,
+#: which is what it said before this existed.
+NAMEISH = re.compile(r"^\w[\w.+-]{0,63}$")
+
+
+def name_from_command(argv):
+    # `& "C:\\x\\node.exe" app.js` — the call operator is a word of its own, and so is a dot-source.
+    argv = [w for w in argv if w.strip() not in ("", "&", ".")]
+    if not argv:
+        return None
+    word = argv[0].strip().strip("\"'").strip()
+    if not word:
+        return None
+    base = re.split(r"[\\/]+", word)[-1]
+    for ext in CMD_EXT:
+        if base.lower().endswith(ext):
+            base = base[:-len(ext)]
+            break
+    if not base or len(base) > 64:
+        return None
+    name = name_from_path(word) if VERSIONISH.match(base) else base
+    if name and INTERPRETERISH.match(name):
+        name = script_of(argv) or name
+    return name if name and NAMEISH.match(name) else None
 
 
 def nice_name(path):
