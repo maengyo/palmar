@@ -957,7 +957,25 @@ class Tile {
     this.connect();
   }
 
-  rect() { return { x: this.el.offsetLeft, y: this.el.offsetTop, w: this.el.offsetWidth, h: this.el.offsetHeight }; }
+  //: **Where it was told to be, not where it happens to be.** A tile slides for 350ms, so the live
+  //: `offsetLeft` in the middle of that is a place the window is only passing through — save it and
+  //: the store and the screen disagree for good. The inline value is the one that was set, which is
+  //: the answer whether the slide has finished or not. Measured 2026-09-21: a window heading for
+  //: 700,560 read back 629,509 a tenth of a second in, and that number went into the board.
+  //:
+  //: **Clicking is enough to trigger it** — `focusTile` persists to keep the stacking order — so
+  //: a click landing inside any arrangement's 350ms moved that window on the board without anybody
+  //: touching it. The next push then cleared a neighbour out of the way of a window that was not
+  //: there, which is the diagonal a grouped neighbour took now and then (user, 2026-09-21).
+  //:
+  //: It is also the right answer for an expanded window: `.tile.max` overrides all four with
+  //: `!important`, so what is measured is the whole canvas while what is stored stays the real box.
+  rect() {
+    const el = this.el;
+    const n = (v, live) => { const p = parseFloat(v); return Number.isFinite(p) ? p : live; };
+    return { x: n(el.style.left, el.offsetLeft), y: n(el.style.top, el.offsetTop),
+             w: n(el.style.width, el.offsetWidth), h: n(el.style.height, el.offsetHeight) };
+  }
 
   // ⑪ Does it belong to this canvas? If current is null the **daemon does not know canvases**, so everything shows (renderTabs below).
   visible() { return current === null || this.s.canvas === current; }
@@ -1353,7 +1371,16 @@ class Tile {
       }
       // The drag wrote every member's position into the store as it went; saving it is not an
       // excuse to go and measure the screen again (see persist).
-      const told = (t) => (was === 'move' && layout[t.id]) ? { x: layout[t.id].x, y: layout[t.id].y } : null;
+      //: **Nobody's position is read back off the element — not even the one being resized.** A tile
+      //: slides for 350ms, so `offsetLeft` in the middle of that is a place the window is passing
+      //: through. A move already wrote the intended value every frame; a resize never moved the
+      //: window at all, so the store is right in both cases and the DOM is only right when nothing
+      //: is in flight. Reading it anyway is what sent a grouped neighbour off on a diagonal, now and
+      //: then, when the resize came within a slide of whatever moved the group last (user, 2026-09-21:
+      //: "간헐적으로 대각선으로 이동된다"). Measured: grabbing the grip 20ms into a slide saved
+      //: 223,219 for a window standing at 260,250, and `settle` then pushed its neighbour clear of a
+      //: window that was not there.
+      const told = (t) => layout[t.id] ? { x: layout[t.id].x, y: layout[t.id].y } : null;
       for (const id of party) { const t = tiles.get(id); if (t && t !== this) t.persist(told(t)); }
       paintTidy();          // moving a window creates or removes slack to close up
       if (was === 'size') this.refit();   // tell the PTY only when the resize is let go (spike D)
@@ -1491,7 +1518,7 @@ class Viewer {
     this.load();
   }
   visible() { return current === null || this.s.canvas === current; }
-  rect() { return { x: this.el.offsetLeft, y: this.el.offsetTop, w: this.el.offsetWidth, h: this.el.offsetHeight }; }
+  rect() { return Tile.prototype.rect.call(this); }
   persist(at) { Tile.prototype.persist.call(this, at); }
   dragify() { Tile.prototype.dragify.call(this); }
   rename() {}

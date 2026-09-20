@@ -1916,6 +1916,53 @@ class Grouping(unittest.TestCase):
     def bench(self, body):
         return self.b.ev("(()=>{" + self.JS + "\n" + body + "})()")
 
+    def test_a_window_in_flight_is_stored_where_it_is_going(self):
+        """**The board learned a position nobody chose.** A tile slides for 350ms, and everything that
+        saves a window reads the position back off the element — including `focusTile`, which saves
+        the stacking order every time you click. So a click landing inside any arrangement's slide
+        wrote a point on the way into the store, the store and the screen then disagreed for good,
+        and the next push cleared a neighbour out of the way of a window that was not there. That is
+        the diagonal a grouped neighbour took now and then (user, 2026-09-21: "간헐적으로 대각선으로
+        이동된다"). Measured before the fix: a window heading for 700,560 stored 629,509.
+
+        The slide here is five seconds long on purpose — not to wait out, but so that "in flight" is
+        a fact rather than a race. Mid-slide, `offsetLeft` is still near where it started."""
+        r = self.bench("""
+          const A = put('g1', 200, 200, 300, 200);
+          const t = by('g1');
+          // A slide of the kind an arrangement starts, slowed down so the middle of it is a place
+          // this test can stand in rather than a moment it has to catch.
+          t.el.style.transition = 'left 5s linear, top 5s linear';
+          L[A] = Object.assign({}, L[A], {x: 900, y: 700});
+          t.el.style.left = '900px'; t.el.style.top = '700px';
+          void t.el.offsetWidth;
+          const flying = [t.el.offsetLeft, t.el.offsetTop];
+          // What a click does: it saves the stacking order, and saving reads the position.
+          P.focusTile(A, {keyboard: false});
+          const stored = [L[A].x, L[A].y];
+          t.el.style.transition = '';
+          return {flying: flying, stored: stored};""")
+        self.assertLess(r["flying"][0], 400,
+                        "the slide was already over — this test proves nothing: %r" % (r,))
+        self.assertEqual(r["stored"], [900, 700],
+                         "clicking a window mid-slide moved it on the board: %r" % (r,))
+
+    def test_resizing_a_grouped_window_leaves_its_neighbour_on_the_row(self):
+        """The symptom the above was found from. Two side by side, grow the left one, and the right
+        one must come across — never down and across."""
+        r = self.bench("""
+          const A = put('g1', 200, 200, 300, 200), B = put('g2', 512, 200, 300, 200);
+          P.joinGroups(A, B);
+          const y0 = L[B].y;
+          // Grown wider, the way the grip does it, and let go.
+          L[A] = Object.assign({}, L[A], {w: 400});
+          by('g1').el.style.width = '400px';
+          P.settle(A, {compact: true, dir: 'r'});
+          return {a: [L[A].x, L[A].y, L[A].w], b: [L[B].x, L[B].y], y0: y0};""")
+        self.assertEqual(r["b"][1], r["y0"], "the neighbour left its row: %r" % (r,))
+        self.assertGreaterEqual(r["b"][0], r["a"][0] + r["a"][2],
+                                "the neighbour did not come across: %r" % (r,))
+
     def test_a_group_s_name_is_readable_over_a_window(self):
         """It was inside the frame first, and `.gbox` is 16% opaque, so the label was too (user,
         2026-09-20). Moved beside the frame it was then covered by any window that had been clicked
