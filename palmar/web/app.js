@@ -1296,7 +1296,9 @@ class Tile {
     };
     const move = (ev) => {
       if (!mode) return;
-      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      // Screen pixels into board pixels: the hand moves over the scaled drawing, and the window's
+      // coordinates are the board's. At 1:1 this is the same arithmetic it has always been.
+      const dx = (ev.clientX - sx) / zoom, dy = (ev.clientY - sy) / zoom;
       // Move the minimap rectangle along using **the value just computed** — do not ask the DOM again
       if (mode === 'move') {
         // **A window may be carried past the origin.** It used to be clamped there, which made the
@@ -1820,9 +1822,8 @@ cvScroll.addEventListener('drop', (ev) => {
 
 // The board's coordinates start at the world's origin, not the scroller's (see "the world").
 function at0(ev) {
-  const box = cvScroll.getBoundingClientRect();
-  return { x: Math.round(ev.clientX - box.left + cvScroll.scrollLeft - originX - 60),
-           y: Math.round(ev.clientY - box.top + cvScroll.scrollTop - originY - 15) };
+  const p = boardFromClient(ev.clientX, ev.clientY);
+  return { x: Math.round(p.x - 60), y: Math.round(p.y - 15) };
 }
 
 //: **When the drop came without a location.** Which is Windows, every time: `text/uri-list` is not
@@ -2090,7 +2091,7 @@ function tidyCanvas(canvasId, byHand) {
   const sx = dx, sy = dy;                    // signed: the corner may be above and to the left
   // Nothing to close up is not nothing to do: by hand it still goes and looks. Left to itself
   // (auto-tidy) it stops here, because a run that moves nothing must not move the view either.
-  const l0 = cvScroll.scrollLeft, t0 = cvScroll.scrollTop;
+  const v0 = viewBoard();
   // **Write the intended value instead of reading it back.** `persist()` reads `offsetLeft`, but the position has
   // a transition on it, so that value is a **mid-move** one — save it as-is and the old position goes back in and
   // nothing appears to have happened (measured: pressing it left the positions unchanged). The drag path was
@@ -2132,18 +2133,11 @@ function tidyCanvas(canvasId, byHand) {
       // one you last touched, so tidy takes you back to it rather than to whatever happens to lie
       // nearest the corner — with its group, because a member on its own is half a thing to look at
       // (user, 2026-09-17). Nothing in front, or in front on another canvas: the corner-most window.
-      const mine_ = mine.map((t) => layout[t.id]);
-      const front = tiles.get(focused);
-      const lead = (front && front.s.canvas === canvasId && layout[focused])
-        ? blockOf(groupOf(focused))
-        : mine_.reduce((a, q) => (a && a.x + a.y <= q.x + q.y ? a : q), null);
+      const lead = leadBlock(canvasId);
       const smooth = !matchMedia('(prefers-reduced-motion: reduce)').matches;
-      cvScroll.scrollTo({ left: Math.max(0, originX + lead.x - GAP),
-                          top: Math.max(0, originY + lead.y - GAP),
-                          behavior: smooth ? 'smooth' : 'auto' });
+      scrollToBoard(lead.x - GAP, lead.y - GAP, smooth);
     } else {
-      cvScroll.scrollLeft = Math.max(0, l0 - sx);
-      cvScroll.scrollTop = Math.max(0, t0 - sy);
+      scrollToBoard(v0.x - sx, v0.y - sy);
     }
   }
   renderMinimap();
@@ -2168,24 +2162,25 @@ function firstFree(w, h, canvasId) {
   // As big as the viewport, or as big as what is already on the canvas — whichever is larger. The
   // extra row and column of slack let a window land just past the current edge rather than starting
   // a new pile below, which is the case that made this look broken.
-  const W = Math.max(cvScroll.clientWidth, rects.reduce((m, r) => Math.max(m, r.x + r.w), 0) + GAP + w);
-  const H = Math.max(cvScroll.clientHeight, rects.reduce((m, r) => Math.max(m, r.y + r.h), 0) + GAP + h);
+  const view = viewBoard();
+  const W = Math.max(view.w, rects.reduce((m, r) => Math.max(m, r.x + r.w), 0) + GAP + w);
+  const H = Math.max(view.h, rects.reduce((m, r) => Math.max(m, r.y + r.h), 0) + GAP + h);
   const hit = (x, y) => rects.some((r) => x < r.x + r.w + GAP && x + w + GAP > r.x && y < r.y + r.h + GAP && y + h + GAP > r.y);
   // **Where you are looking, first** (user, 2026-09-17). The canvas is far bigger than the screen, and
   // a new terminal opening at the board's top-left corner is a new terminal you have to go and find.
   // This is a first pass, not the rule: scanning the viewport and stopping there is what used to pile
   // windows downwards for ever once it was full (2026-09-14, the test below this one), so if nothing
   // in view can hold it the whole canvas is searched exactly as before.
-  const vx = Math.round(cvScroll.scrollLeft - originX), vy = Math.round(cvScroll.scrollTop - originY);
-  for (let y = vy + GAP; y + h <= vy + cvScroll.clientHeight; y += GRID)
-    for (let x = vx + GAP; x + w <= vx + cvScroll.clientWidth; x += GRID)
+  const vx = Math.round(view.x), vy = Math.round(view.y);
+  for (let y = vy + GAP; y + h <= vy + view.h; y += GRID)
+    for (let x = vx + GAP; x + w <= vx + view.w; x += GRID)
       if (!hit(x, y)) return { x, y };
   // **And when it cannot, the nearest gap to the view rather than the board's corner.** With a
   // window or two in sight there is often no room left in view for a third, and falling straight
   // back to the top-left of the board put it somewhere the person had to go and find — the very
   // thing the pass above was for (user, 2026-09-17: "그 다음 터미널은 기존의 원점에서 생성되는거
   // 같아"). Same scan, same gaps, same fallback under it; it just takes the closest one now.
-  const cx = vx + cvScroll.clientWidth / 2, cy = vy + cvScroll.clientHeight / 2;
+  const cx = vx + view.w / 2, cy = vy + view.h / 2;
   let best = null, bestD = Infinity;
   for (let y = GAP; y + h <= H; y += GRID) {
     const ody = y + h / 2 - cy;
@@ -3076,10 +3071,13 @@ let prevScroll = null;
 //: `origin + left`, which is why the margin has the origin taken off it.
 const MAX_PAD = 10;
 function maxBox(tile) {
-  tile.el.style.setProperty('--max-l', (MAX_PAD - originX) + 'px');
-  tile.el.style.setProperty('--max-t', (MAX_PAD - originY) + 'px');
-  tile.el.style.setProperty('--max-w', (cvScroll.clientWidth - MAX_PAD * 2) + 'px');
-  tile.el.style.setProperty('--max-h', (cvScroll.clientHeight - MAX_PAD * 2) + 'px');
+  // Board units, because the tile lives inside the scaled world: the padding shrinks with it so the
+  // window still stops MAX_PAD screen pixels short of the edge at any scale.
+  const pad = MAX_PAD / zoom, v = viewBoard();
+  tile.el.style.setProperty('--max-l', (pad - originX) + 'px');
+  tile.el.style.setProperty('--max-t', (pad - originY) + 'px');
+  tile.el.style.setProperty('--max-w', (v.w - pad * 2) + 'px');
+  tile.el.style.setProperty('--max-h', (v.h - pad * 2) + 'px');
 }
 function setMax(tile, on) {
   for (const t of tiles.values()) t.el.classList.remove('max');
@@ -3293,8 +3291,8 @@ function refreshOff(fromScroll) {
   offTimer = setTimeout(() => {
     offTimer = null;
     // Measure the viewport once per batch (constant). Re-measuring per window forces one layout per window.
-    const sl = cvScroll.scrollLeft, st = cvScroll.scrollTop;
-    const vw = cvScroll.clientWidth, vh = cvScroll.clientHeight;
+    const v = viewBoard();
+    const sl = v.x, st = v.y, vw = v.w, vh = v.h;
     // Something on another canvas is not "↗ off" — it gets a canvas label instead (⑪)
     // **Do not rebuild the list to flip one badge.** The old version called renderList() here, and while scrolling
     // that ran 60 times in 6 seconds (measured 2026-09-08: 16 windows, 3 of 5 runs at 62·62·60). Every .ses row was
@@ -3361,6 +3359,9 @@ function contentExtent() {
   // `lx`/`ly` are at most 0 and `hx`/`hy` at least the viewport, so the span is never smaller than
   // one screen — and a window carried into the slack pulls the near edge negative rather than
   // being stopped at it.
+  // **At 1:1, whatever the scale is.** Standing back shows more board than there is, and if that
+  // went in here the world would grow every time — and still be that big after coming back to 1:1.
+  // The pad gets the shortfall instead, in sizeWorld, where it is not remembered.
   let lx = 0, ly = 0, hx = cvScroll.clientWidth, hy = cvScroll.clientHeight;
   for (const t of tiles.values()) {
     const r = t.visible() && layout[t.id];
@@ -3379,69 +3380,129 @@ function contentExtent() {
 //: this runs, and a board coordinate does not.
 function panTo(bx, by) {
   const seen = worldSeen.get(current) || { ox: 0, oy: 0, w: 0, h: 0 };
+  const v = viewBoard();
   const ox = Math.max(seen.ox, -bx), oy = Math.max(seen.oy, -by);
-  const w = Math.max(seen.w, ox + bx + cvScroll.clientWidth);
-  const h = Math.max(seen.h, oy + by + cvScroll.clientHeight);
+  const w = Math.max(seen.w, ox + bx + v.w);
+  const h = Math.max(seen.h, oy + by + v.h);
   if (ox !== seen.ox || oy !== seen.oy || w !== seen.w || h !== seen.h) {
     worldSeen.set(current, { ox: ox, oy: oy, w: w, h: h });
     sizeWorld();                 // lays the pad out and carries the scroll along with the origin
     renderMinimap();
   }
-  cvScroll.scrollLeft = originX + bx;
-  cvScroll.scrollTop = originY + by;
+  scrollToBoard(bx, by);
 }
 
-//: **Seeing the whole canvas at once, and nothing else.** Asked for 2026-09-19 and decided as
-//: view-only, which is the version that does not touch xterm's cell arithmetic — the windows are
-//: drawn smaller, not resized, so no terminal is told anything and nothing has to be measured again.
+//: **Looking at the canvas from further away** (user, 2026-09-20: "빈 캔버스에 마우스를 올리고
+//: ctrl+휠로 확대 축소"). Ctrl and the wheel over the bare floor, and the whole board is drawn
+//: smaller. The windows are **drawn** smaller, not resized: no terminal is told a new size, no cell
+//: is measured again, and the board keeps its own coordinates whatever the scale is. It is a view.
 //:
-//: **And it does not scroll.** That is what keeps it small: every place that turns a screen point
-//: into a board point would otherwise need the scale folded into it — the drop point, the minimap,
-//: the pan, where a new window goes — and five conversions is where this kind of feature goes wrong.
-//: Fitted, the whole board is on screen, so there is nothing to scroll and one conversion is left:
-//: the click that takes you back, which lands you at 1:1 with what you clicked in the middle.
-let fitting = false;
-function fitScale() {
-  const c = contentExtent();
-  const k = Math.min(1, (cvScroll.clientWidth - 8) / Math.max(1, c.w),
-                        (cvScroll.clientHeight - 8) / Math.max(1, c.h));
-  return { k: k, c: c };
+//: This replaces a fit-to-view toggle that froze the canvas — no scrolling, no pointer on a window,
+//: a click to come back. That one was built to keep the scale out of every screen-to-board
+//: conversion, and what it bought in simplicity it paid for in being a mode you had to leave. The
+//: scale is now real, and the eight conversions are paid for properly: every one of them goes
+//: through the three functions below, and **nothing else in this file multiplies or divides by it.**
+//:
+//:     pad = zoom × (origin + board)
+//:
+//: is the whole relation. `.cv-pad` is the scrolling floor and carries the scale in its own size;
+//: `.cv-world` is scaled about its top-left and sits at `origin × zoom` inside it. Board
+//: coordinates — what `layout` holds, what the daemon is told — never see the scale at all.
+let zoom = 1;
+const ZOOM_MIN = 0.2, ZOOM_MAX = 1;      // never past 1:1 — bigger is what the text size control is for
+//: The part of the board you can see, in board coordinates.
+function viewBoard() {
+  return { x: cvScroll.scrollLeft / zoom - originX, y: cvScroll.scrollTop / zoom - originY,
+           w: cvScroll.clientWidth / zoom, h: cvScroll.clientHeight / zoom };
 }
-function setFit(on, at) {
-  const was = fitting;
-  fitting = !!on;
-  cv.classList.toggle('fit', fitting);
-  const b = document.getElementById('fit');
-  if (b) b.setAttribute('aria-pressed', String(fitting));
-  if (was && !fitting && at) {
-    // Back to 1:1 with what was clicked in the middle of the screen. The only screen-to-board
-    // conversion this feature has, and it happens once.
-    const box = cvScroll.getBoundingClientRect(), f = at.k, c = at.c;
-    const bx = (at.x - box.left) / f + c.lx, by = (at.y - box.top) / f + c.ly;
-    sizeWorld();
-    panTo(Math.round(bx - cvScroll.clientWidth / 2), Math.round(by - cvScroll.clientHeight / 2));
-    return;
-  }
+//: Where on the board a point on the screen is.
+function boardFromClient(cx, cy) {
+  const b = cvScroll.getBoundingClientRect();
+  return { x: (cx - b.left + cvScroll.scrollLeft) / zoom - originX,
+           y: (cy - b.top + cvScroll.scrollTop) / zoom - originY };
+}
+//: Put this board point at the top-left of the view.
+function scrollToBoard(bx, by, smooth) {
+  const left = Math.max(0, (originX + bx) * zoom), top = Math.max(0, (originY + by) * zoom);
+  if (smooth) cvScroll.scrollTo({ left, top, behavior: 'smooth' });
+  else { cvScroll.scrollLeft = left; cvScroll.scrollTop = top; }
+}
+//: **Keep the point under the pointer where it is.** Zooming about the corner makes the thing you
+//: were looking at slide off, and then the gesture is a chore rather than a look. At the edge of
+//: the board there is nothing left to pull into view and the scroll clamps, so the point does
+//: slide there — `panTo` would invent the room instead, and that room would still be there,
+//: several screens of it, long after the scale came back to 1:1.
+function setZoom(k, at) {
+  const want = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, k));
+  if (Math.abs(want - zoom) < 0.001) return;
+  const b = cvScroll.getBoundingClientRect();
+  // No pointer — a button or a key — so the middle of the screen is what stays put.
+  if (!at) at = { x: b.left + cvScroll.clientWidth / 2, y: b.top + cvScroll.clientHeight / 2 };
+  const hold = boardFromClient(at.x, at.y);
+  zoom = want;
+  cv.classList.toggle('zoomed', zoom < 1);
   sizeWorld();
+  scrollToBoard(hold.x - (at.x - b.left) / zoom, hold.y - (at.y - b.top) / zoom);
   renderMinimap();
   refreshOff();
+  paintZoom();
+}
+function paintZoom() {
+  const b = document.getElementById('fit');
+  if (!b) return;
+  b.setAttribute('aria-pressed', String(zoom < 1));
+  b.title = zoom < 1 ? Math.round(zoom * 100) + '% — click to come back to 1:1'
+                     : 'see the whole canvas — or ctrl and the wheel over the empty canvas';
+}
+//: **Which window a "take me back" should land on.** The one in front is the one you last touched,
+//: and it travels with its group, because a member on its own is half a thing to look at (user,
+//: 2026-09-17). Nothing in front, or in front on another canvas: whichever is nearest the corner.
+function leadBlock(canvasId) {
+  const front = tiles.get(focused);
+  if (front && front.s.canvas === canvasId && layout[focused]) return blockOf(groupOf(focused));
+  let best = null;
+  for (const t of tiles.values()) {
+    if (t.s.canvas !== canvasId) continue;
+    const r = layout[t.id];
+    if (r && (!best || r.x + r.y < best.x + best.y)) best = r;
+  }
+  return best;
+}
+//: Put a board rectangle in the middle of the screen. Through `panTo`, because the room to centre
+//: something near the board's edge may not be there yet — and centring is exactly when that shows.
+function lookAt(r) {
+  const v = viewBoard();
+  panTo(Math.round(r.x + r.w / 2 - v.w / 2), Math.round(r.y + r.h / 2 - v.h / 2));
+}
+//: **Coming back has to come back to something.** It used to hold the middle of the screen, and
+//: standing back far enough that the whole board is smaller than the screen makes the middle of the
+//: screen empty canvas past everything — so the press landed you nowhere (user, 2026-09-20: "see
+//: the whole canvas 버튼 누르면 화면이 이상한 곳으로 가있어"; measured: the board went to 375,292
+//: with both windows off the top left). It lands on the window you were working in, in the middle.
+function backTo11() {
+  setZoom(1);
+  const r = leadBlock(current);
+  if (r) lookAt(r);
+  renderMinimap();
+  refreshOff();
+}
+//: How far back you have to stand to see every window at once. The floor `contentExtent` puts under
+//: itself is the view, so with everything already on screen this is 1 and the button does nothing.
+function fitZoom() {
+  const c = contentExtent();
+  return Math.max(ZOOM_MIN, Math.min(1, Math.min(cvScroll.clientWidth / c.w, cvScroll.clientHeight / c.h)));
+}
+//: The button: back far enough, with the windows in the middle — standing back while still pointed
+//: at empty space would be a wider view of nothing.
+function seeEverything() {
+  setZoom(fitZoom());
+  const c = contentExtent();
+  lookAt({ x: c.lx, y: c.ly, w: c.w, h: c.h });
+  renderMinimap();
 }
 
 function sizeWorld() {
   if (!cvPad) return;
-  if (fitting) {
-    // The pad is the screen — there is nowhere to scroll — and the world is moved and scaled so the
-    // near edge of the windows' own room lands in the corner.
-    const { k, c } = fitScale();
-    cvPad.style.width = cvScroll.clientWidth + 'px';
-    cvPad.style.height = cvScroll.clientHeight + 'px';
-    cvWorld.style.left = '0px';
-    cvWorld.style.top = '0px';
-    cvWorld.style.transform = 'translate(' + (-c.lx * k) + 'px,' + (-c.ly * k) + 'px) scale(' + k + ')';
-    cvScroll.scrollTo(0, 0);
-    return;
-  }
-  cvWorld.style.transform = '';
   const c = contentExtent();
   const seen = worldSeen.get(current) || { ox: 0, oy: 0, w: 0, h: 0 };
   // Where board zero sits inside the pad: however far the windows have gone the other side of it,
@@ -3455,19 +3516,25 @@ function sizeWorld() {
   const same = worldCanvas === current;
   worldCanvas = current;
   originX = ox; originY = oy;
-  cvWorld.style.left = ox + 'px';
-  cvWorld.style.top = oy + 'px';
-  cvPad.style.width = w + 'px';
-  cvPad.style.height = h + 'px';
+  // `pad = zoom × (origin + board)`: the floor carries the scale in its own size, and the world
+  // is scaled about its top-left corner and placed at the scaled origin inside it.
+  cvWorld.style.left = (ox * zoom) + 'px';
+  cvWorld.style.top = (oy * zoom) + 'px';
+  cvWorld.style.transform = zoom === 1 ? '' : 'scale(' + zoom + ')';
+  // **The floor still has to cover the screen.** Under 1:1 the screen shows more board than the
+  // windows and the hand have claimed, so the pad is given the shortfall — and only the pad: it is
+  // not written back into `worldSeen`, or standing back once would leave slack behind for good.
+  const padW = Math.max(w, cvScroll.clientWidth / zoom), padH = Math.max(h, cvScroll.clientHeight / zoom);
+  cvPad.style.width = (padW * zoom) + 'px';
+  cvPad.style.height = (padH * zoom) + 'px';
   // **Moving the origin must not slide the canvas under the hand.** Everything inside .cv-world
   // shifts by the same amount, so the scroll goes with it and the screen does not change.
   if (same) {
-    if (dx) cvScroll.scrollLeft += dx;
-    if (dy) cvScroll.scrollTop += dy;
+    if (dx) cvScroll.scrollLeft += dx * zoom;
+    if (dy) cvScroll.scrollTop += dy * zoom;
   } else {
     // A different canvas: start where its windows start rather than wherever the last one was left.
-    cvScroll.scrollLeft = ox + c.lx;
-    cvScroll.scrollTop = oy + c.ly;
+    scrollToBoard(c.lx, c.ly);
   }
 }
 
@@ -3479,7 +3546,7 @@ const PAN_SLOP = 3;      // below this much movement it is not a drag — that i
 cvScroll.addEventListener('pointerdown', (ev) => {
   if (ev.button !== 0 || ev.target !== cvScroll) return;   // on the bare floor only
   const x0 = ev.clientX, y0 = ev.clientY;
-  const b0x = cvScroll.scrollLeft - originX, b0y = cvScroll.scrollTop - originY;
+  const v0 = viewBoard(), b0x = v0.x, b0y = v0.y;
   let on = false;
   const move = (e2) => {
     const dx = e2.clientX - x0, dy = e2.clientY - y0;
@@ -3491,7 +3558,7 @@ cvScroll.addEventListener('pointerdown', (ev) => {
     }
     // Scroll **the other way** so the grabbed point follows the hand. The browser used to stop it at
     // both ends; now the end moves instead, which is the only way left to reach the slack.
-    panTo(b0x - dx, b0y - dy);
+    panTo(b0x - dx / zoom, b0y - dy / zoom);
   };
   const up = () => {
     cvScroll.classList.remove('panning');
@@ -3832,7 +3899,7 @@ function tabDrag(tabEl) {
 const mmRects = new Map();          // id → minimap rectangle DOM
 let mmK = 1, mmOx = 0, mmOy = 0;    // scale and the centring margins
 let mmLx = 0, mmLy = 0;             // the near edge of what the windows reach — it can be negative
-let cvW = 0, cvH = 0;               // canvas viewport size — held so it is not re-measured during a scroll
+let cvW = 0, cvH = 0;               // how much board the screen shows — held so it is not re-measured during a scroll
 
 function mmSet(id, x, y, w, h) {    // place a rectangle using only values we already know
   const e = mmRects.get(id);
@@ -3859,7 +3926,7 @@ function renderMinimap() {
   mmWorldEl.textContent = '';
   if (!list.length) { mmEl.hidden = true; return; }
   mmEl.hidden = false;
-  cvW = cvScroll.clientWidth; cvH = cvScroll.clientHeight;
+  const view = viewBoard(); cvW = view.w; cvH = view.h;
   const bw = mmEl.clientWidth - MM_PAD * 2, bh = mmEl.clientHeight - MM_PAD * 2;
   // **What the windows reach, near edge included** — the same span sizeWorld uses, so the two cannot
   // disagree. It never gets smaller than the viewport (⑩: no limit the other way).
@@ -3887,9 +3954,10 @@ function mmMove() {
   // **The minimap keeps drawing the windows' own room, not the slack around it** (user, 2026-09-17) —
   // otherwise exploring empty space would shrink the scale and push the windows into a corner. The
   // price is that panning into the slack takes this rectangle off the edge, which is the truth.
+  const v = viewBoard();
   mmVpEl.style.transform =
-    'translate(' + (mmOx + (cvScroll.scrollLeft - originX - mmLx) * mmK) + 'px, ' +
-                   (mmOy + (cvScroll.scrollTop - originY - mmLy) * mmK) + 'px)';
+    'translate(' + (mmOx + (v.x - mmLx) * mmK) + 'px, ' +
+                   (mmOy + (v.y - mmLy) * mmK) + 'px)';
 }
 cvScroll.addEventListener('scroll', mmMove, { passive: true });
 
@@ -3899,8 +3967,8 @@ cvScroll.addEventListener('scroll', mmMove, { passive: true });
   const seek = (ev) => {
     if (!box || !mmK) return;
     // The minimap draws the windows' own room, so what comes out of it is a board coordinate.
-    cvScroll.scrollLeft = Math.max(0, originX + mmLx + (ev.clientX - box.left - mmOx) / mmK - cvW / 2);
-    cvScroll.scrollTop = Math.max(0, originY + mmLy + (ev.clientY - box.top - mmOy) / mmK - cvH / 2);
+    scrollToBoard(mmLx + (ev.clientX - box.left - mmOx) / mmK - cvW / 2,
+                  mmLy + (ev.clientY - box.top - mmOy) / mmK - cvH / 2);
   };
   const up = () => {
     box = null;
@@ -5142,8 +5210,11 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // Expose **the same function** the button calls, unchanged.
                   // paintTidy with it: the button's enabled state is what a person actually sees,
                   // and a test that writes the board directly has to be able to bring it up to date.
-                  tidyCanvas, paintTidy, gatherCanvas, gatherPlan, setFit, fitScale,
-                  fitting: () => fitting,
+                  tidyCanvas, paintTidy, gatherCanvas, gatherPlan,
+                  // Looking from further away. The scale is a view, so a test asks for it and then
+                  // checks that the board did not move — which is the whole claim.
+                  setZoom, fitZoom, seeEverything, backTo11, leadBlock, lookAt,
+                  zoom: () => zoom, viewBoard, boardFromClient, scrollToBoard,
                   // Push-aside. A test drives the real drag with mouse events; these are here so the geometry
                   // can also be asked directly — the cascade and the round limit need more windows than a
                   // hand can comfortably drag into place one at a time.
@@ -5493,15 +5564,20 @@ function boot() {
       });
     }
   }
+  // The button is the shortcut, not the feature: one press pulls back far enough to see every
+  // window, the next puts it back at 1:1. Everything in between is the wheel.
   const fitBtn = document.getElementById('fit');
-  if (fitBtn) fitBtn.addEventListener('click', () => setFit(!fitting));
-  // Anywhere on the fitted canvas takes you back, to what you pointed at. The tiles do not take the
-  // click — while fitted they take nothing, which is the whole of "view only".
-  cvScroll.addEventListener('click', (ev) => {
-    if (!fitting) return;
-    const f = fitScale();
-    setFit(false, { x: ev.clientX, y: ev.clientY, k: f.k, c: f.c });
-  });
+  if (fitBtn) fitBtn.addEventListener('click', () => { if (zoom < 1) backTo11(); else seeEverything(); });
+  paintZoom();
+  // **Ctrl and the wheel, over the bare floor only** (user, 2026-09-20). Over a window the same
+  // gesture is that window's text size (#25), and both are wanted — so the target decides, and
+  // neither one is ever the browser's own zoom.
+  cvScroll.addEventListener('wheel', (ev) => {
+    if (!ev.ctrlKey && !ev.metaKey) return;
+    if (ev.target !== cvScroll) return;
+    ev.preventDefault();
+    setZoom(zoom * Math.exp(-ev.deltaY / 300), { x: ev.clientX, y: ev.clientY });
+  }, { passive: false });
   const tidyBtn = document.getElementById('tidy');
   // `byHand`: a person pressed it, so the view is allowed to go where the windows went. Auto-tidy
   // (the two calls above, on a pane disappearing) must not — nobody asked for that one.

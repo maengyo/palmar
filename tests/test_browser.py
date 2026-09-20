@@ -1616,6 +1616,12 @@ class TidyWithTheWindowsFarApart(unittest.TestCase):
         cls.b.stop()
         cls.d.stop()
 
+    def setUp(self):
+        # The scale is a view and views last, so a test that stood back leaves the next one looking
+        # from further away. Back to 1:1 before each, like the tidy the other classes do.
+        self.b.ev("(()=>{window.palmar.setZoom(1); return 1;})()")
+        time.sleep(0.3)
+
     def tearDown(self):
         self.assertEqual(self.b.errors(), [], "the page threw while being driven")
 
@@ -1690,45 +1696,145 @@ class TidyWithTheWindowsFarApart(unittest.TestCase):
         self.assertTrue(vx <= sx and sx + 300 <= vx + vw and vy <= sy and sy + 200 <= vy + vh,
                         "it opened off screen: spot %r, looking at %r" % (r["spot"], r["view"]))
 
-    def test_fit_shows_the_whole_canvas_and_a_click_brings_you_back(self):
-        """Asked for 2026-09-19 and decided as view-only: the windows are drawn smaller, not resized,
-        so no terminal is told anything and no cell has to be measured again.
+    def test_ctrl_and_the_wheel_over_the_empty_canvas_stands_back(self):
+        """Asked for 2026-09-20: "빈 캔버스에 마우스를 올리고 ctrl+휠로 확대 축소". The windows are
+        drawn smaller, not resized — so the two things this has to prove are that the drawing did
+        shrink and that the **board** did not move: no terminal was told a new size, and what the
+        daemon holds is the same numbers it held before.
 
-        **And it does not scroll.** That is what keeps it small — every place that turns a screen
-        point into a board point would otherwise need the scale folded into it, and five conversions
-        is where this kind of feature goes wrong. Fitted, the board is all on screen; the one
-        conversion left is the click that takes you back."""
+        And the point under the pointer stays where it is. Zooming about the corner slides what you
+        were looking at off the screen, and then the gesture is a chore rather than a look."""
+        self.js("put('far', 40, 40, 400, 300); put('near', 2200, 1600, 400, 300); return 1;")
+        # Looking at the middle of the board, with room on every side: standing back has to pull
+        # more board into view, and at the very corner there is none to pull and the scroll clamps.
+        self.js("P.panTo(700, 500); return 1;")
+        time.sleep(0.4)
+        # A point on the bare floor, well clear of both windows, and the board coordinate under it.
+        spot = self.js("""const b = S.getBoundingClientRect();
+          const x = b.left + S.clientWidth * 0.7, y = b.top + S.clientHeight * 0.55;
+          return {x: x, y: y, over: document.elementFromPoint(x, y).id,
+                  board: P.boardFromClient(x, y),
+                  drawn: by('far').el.getBoundingClientRect().width,
+                  box: Object.assign({}, P.layout()[by('far').id])};""")
+        self.assertEqual(spot["over"], "cv-scroll", "the test pointed at a window, not at empty canvas")
+        self.b.ws.call("Input.dispatchMouseEvent",
+                       dict(type="mouseWheel", x=spot["x"], y=spot["y"],
+                            deltaX=0, deltaY=120, modifiers=2))      # 2 = Ctrl
+        time.sleep(0.6)
+        after = self.js("""return {zoom: P.zoom(),
+                  drawn: by('far').el.getBoundingClientRect().width,
+                  board: P.boardFromClient(%r, %r),
+                  box: Object.assign({}, P.layout()[by('far').id])};""" % (spot["x"], spot["y"]))
+        self.assertLess(after["zoom"], 0.95, "ctrl and the wheel did not stand back: %r" % (after,))
+        self.assertLess(after["drawn"], spot["drawn"] * 0.95,
+                        "the window is not drawn any smaller: %r vs %r" % (after["drawn"], spot["drawn"]))
+        for k in ("x", "y", "w", "h"):
+            self.assertEqual(after["box"][k], spot["box"][k],
+                             "the board moved under a view change: %r → %r" % (spot["box"], after["box"]))
+        for k in ("x", "y"):
+            self.assertLess(abs(after["board"][k] - spot["board"][k]), 12,
+                            "what was under the pointer slid away: %r → %r" % (spot["board"], after["board"]))
+
+    def test_over_a_window_the_same_gesture_is_that_window_s_text(self):
+        """Both are wanted, so the target decides (#25 is the older of the two). Neither is ever the
+        browser's own zoom — that is what the preventDefault in each handler is for."""
+        self.js("put('far', 40, 40, 400, 300); P.panTo(0, 0); return 1;")
+        time.sleep(0.3)
+        was = self.js("""const t = by('far'), r = t.termEl.getBoundingClientRect();
+          return {font: t.term.options.fontSize, zoom: P.zoom(),
+                  x: r.left + r.width / 2, y: r.top + r.height / 2};""")
+        self.b.ws.call("Input.dispatchMouseEvent",
+                       dict(type="mouseWheel", x=was["x"], y=was["y"],
+                            deltaX=0, deltaY=-120, modifiers=2))
+        time.sleep(0.5)
+        now = self.js("return {font: by('far').term.options.fontSize, zoom: P.zoom()};")
+        self.assertGreater(now["font"], was["font"], "the pane's text did not grow: %r → %r" % (was, now))
+        self.assertEqual(now["zoom"], was["zoom"], "the canvas stood back instead: %r" % (now,))
+
+    def test_coming_back_from_far_out_lands_on_the_window_you_were_in(self):
+        """Reported 2026-09-20: "ctrl+휠로 화면 축소 후에 see the whole canvas 버튼 누르면 화면이
+        이상한 곳으로 가있어. 미니맵은 정상으로 돌아오는데."
+
+        Standing back far enough and the whole board is smaller than the screen, so **the middle of
+        the screen is empty canvas past everything** — and coming back to 1:1 held exactly that.
+        Measured before the fix: the view landed at board 375,292 with both windows off the top
+        left, while the minimap, which reads the same model, was right. It lands on the window you
+        were working in now, in the middle, which is the other half of what was asked for."""
+        self.js("""put('far', 40, 40, 400, 300); put('near', 700, 500, 400, 300);
+          P.panTo(0, 0); P.focusTile(by('far').id, {keyboard: false}); return 1;""")
+        time.sleep(0.5)
+        spot = self.js("""const b = S.getBoundingClientRect();
+          return {x: b.left + S.clientWidth / 2, y: b.top + S.clientHeight / 2,
+                  over: document.elementFromPoint(b.left + S.clientWidth / 2, b.top + S.clientHeight / 2).id};""")
+        self.assertEqual(spot["over"], "cv-scroll", "the test pointed at a window, not at empty canvas")
+        for _ in range(5):
+            self.b.ws.call("Input.dispatchMouseEvent",
+                           dict(type="mouseWheel", x=spot["x"], y=spot["y"],
+                                deltaX=0, deltaY=180, modifiers=2))
+            time.sleep(0.25)
+        time.sleep(0.5)
+        out = self.js("""const pad = document.querySelector('.cv-pad');
+          return {zoom: P.zoom(), view: P.viewBoard(), pad: [pad.offsetWidth, pad.offsetHeight],
+                  client: [S.clientWidth, S.clientHeight]};""")
+        self.assertLess(out["zoom"], 0.7, "it did not stand far enough back to show the fault: %r" % (out,))
+        self.assertGreater(out["view"]["w"], out["pad"][0],
+                           "the screen does not reach past the board — the fault needs that: %r" % (out,))
+        self.b.ev("document.getElementById('fit').click()")
+        time.sleep(1.0)
+        back = self.js("""const b = S.getBoundingClientRect(), q = by('far').el.getBoundingClientRect();
+          return {zoom: P.zoom(), mid: [q.left + q.width / 2 - b.left, q.top + q.height / 2 - b.top],
+                  want: [S.clientWidth / 2, S.clientHeight / 2]};""")
+        self.assertEqual(back["zoom"], 1, "it did not come back to 1:1: %r" % (back,))
+        for i, side in enumerate(("across", "down")):
+            self.assertLess(abs(back["mid"][i] - back["want"][i]), 24,
+                            "the window it came back to is not in the middle %s: %r" % (side, back))
+
+    def test_standing_back_does_not_leave_the_room_behind(self):
+        """The floor has to cover the screen, and under 1:1 the screen shows more board than there
+        is — so the pad is given the shortfall. Only the pad: write it into the world and standing
+        back once would leave several screens of slack that come back to 1:1 with you. Measured
+        before the fix: 1112 wide before, 1636 after."""
+        self.js("put('far', 40, 40, 400, 300); put('near', 700, 500, 400, 300); P.panTo(0, 0); return 1;")
+        time.sleep(0.4)
+        pad = "const p = document.querySelector('.cv-pad'); return [p.offsetWidth, p.offsetHeight];"
+        was = self.js(pad)
+        self.js("P.setZoom(0.4); return 1;")
+        time.sleep(0.5)
+        small = self.js(pad)
+        self.assertGreaterEqual(small[0], self.js("return S.clientWidth;") - 1,
+                                "the floor stopped covering the screen: %r" % (small,))
+        self.js("P.setZoom(1); return 1;")
+        time.sleep(0.5)
+        self.assertEqual(self.js(pad), was, "standing back and coming home left slack behind")
+
+    def test_standing_back_shows_them_all_and_the_windows_still_work(self):
+        """The button is the shortcut, not the feature. What it replaced was a mode: no scrolling, no
+        pointer on a window, a click to come back out. This one is a scale and nothing else, so the
+        canvas still scrolls and a window still takes the pointer while it is on."""
         self.js("put('far', 40, 40, 400, 300); return 1;")
         self.js("put('near', 60, 1500, 400, 300); P.panTo(0, 0); return 1;")   # a known place to start
         time.sleep(0.4)
-        look = """(()=>{const S=document.getElementById('cv-scroll'), b=S.getBoundingClientRect();
-          const t0=[...window.palmar.tiles.values()][0];
-          return {seen:[...window.palmar.tiles.values()].filter(t=>{const q=t.el.getBoundingClientRect();
-                    return q.width>1 && q.right>b.left && q.left<b.right && q.bottom>b.top && q.top<b.bottom;})
-                    .map(t=>t.s.name).sort(),
-                  fit: window.palmar.fitting(),
-                  scrollable: (S.scrollHeight-S.clientHeight) + (S.scrollWidth-S.clientWidth),
-                  pe: getComputedStyle(t0.el).pointerEvents};})()"""
-        before = self.b.ev(look)
+        look = """const b = S.getBoundingClientRect();
+          const t0 = [...P.tiles.values()][0];
+          return {seen: [...P.tiles.values()].filter((t) => {const q = t.el.getBoundingClientRect();
+                    return q.width > 1 && q.right > b.left && q.left < b.right && q.bottom > b.top && q.top < b.bottom;})
+                    .map((t) => t.s.name).sort(),
+                  zoom: P.zoom(), pe: getComputedStyle(t0.el).pointerEvents,
+                  pressed: document.getElementById('fit').getAttribute('aria-pressed')};"""
+        before = self.js(look)
         self.assertEqual(before["seen"], ["far"], "both were already on screen: %r" % (before,))
         self.b.ev("document.getElementById('fit').click()")
-        time.sleep(0.6)
-        fitted = self.b.ev(look)
-        self.assertEqual(fitted["seen"], ["far", "near"], "fitting did not show them all: %r" % (fitted,))
-        self.assertEqual(fitted["scrollable"], 0, "there is still somewhere to scroll: %r" % (fitted,))
-        self.assertEqual(fitted["pe"], "none", "a window could still be dragged or typed into")
-        self.assertEqual(self.b.ev("document.getElementById('fit').getAttribute('aria-pressed')"), "true")
-        at = self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name==='near');
-          const r=t.el.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+r.height/2};})()""")
-        for kind in ("mousePressed", "mouseReleased"):
-            self.b.ws.call("Input.dispatchMouseEvent",
-                           dict(type=kind, button="left", x=at["x"], y=at["y"], clickCount=1, buttons=0 if "Rel" in kind else 1))
         time.sleep(0.8)
-        back = self.b.ev(look)
-        self.assertFalse(back["fit"], "the click did not come back out: %r" % (back,))
-        self.assertEqual(back["seen"], ["near"],
-                         "it came back somewhere other than what was pointed at: %r" % (back,))
-        self.assertEqual(back["pe"], "auto", "the windows did not take their input back")
+        back = self.js(look)
+        self.assertEqual(back["seen"], ["far", "near"], "standing back did not show them all: %r" % (back,))
+        self.assertLess(back["zoom"], 1, "it moved the view instead of the scale: %r" % (back,))
+        self.assertEqual(back["pressed"], "true", "the button does not read as on")
+        self.assertEqual(back["pe"], "auto", "the windows stopped taking input — that was the old mode")
+        self.b.ev("document.getElementById('fit').click()")
+        time.sleep(0.8)
+        home = self.js(look)
+        self.assertEqual(home["zoom"], 1, "a second press did not come back to 1:1: %r" % (home,))
+        self.assertEqual(home["pressed"], "false")
 
     def test_tidy_does_not_leave_you_staring_between_two_windows(self):
         """One window at the top right and one at the bottom left: the corner of the box they make is

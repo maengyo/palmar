@@ -765,15 +765,13 @@ body.ui-mono { --ui: var(--mono); }
 .cv-scroll::-webkit-scrollbar-thumb:hover { background: var(--ink-3); background-clip: padding-box; }
 .cv-scroll::-webkit-scrollbar-thumb:active { background: var(--accent); background-clip: padding-box; }
 .cv.has-max .cv-scroll { overflow: hidden; }
-/* **Seeing the whole canvas: drawn smaller, not resized.** No scrolling while fitted — that is what
-   keeps every screen-to-board conversion out of it — and the windows take no pointer events at all,
-   which is the whole of "view only": no drag, no typing, no grip. The click belongs to the floor,
-   which takes you back to what you pointed at. */
-.cv.fit .cv-scroll { overflow: hidden; cursor: zoom-in; }
-.cv.fit .cv-world { transform-origin: 0 0; }
-.cv.fit .tile { pointer-events: none; }
-/* The scale moves in one step, so it reads as one gesture rather than the windows drifting apart. */
-.cv.fit .cv-world, .cv .cv-world { transition: transform .2s cubic-bezier(.2,.8,.2,1); }
+/* **Looking from further away: drawn smaller, not resized.** The world is scaled about its own
+   top-left corner, which is the corner the pad's arithmetic is written from — any other origin and
+   `pad = zoom × (origin + board)` stops being true. Everything else still works while zoomed out:
+   the canvas scrolls, a window takes the pointer, a terminal takes the keys. It is a view, not a
+   mode. The scale moves in one step, so it reads as one gesture rather than the windows drifting
+   apart — and text inside a scaled box is the browser's business, not something palmar re-measures. */
+.cv .cv-world { transform-origin: 0 0; transition: transform .2s cubic-bezier(.2,.8,.2,1); }
 @media (prefers-reduced-motion: reduce) { .cv .cv-world { transition: none; } }
 /* The button is pressed while it is on, like the other two-state controls in this row. */
 .tidy[aria-pressed="true"] { background: var(--accent-soft, rgba(127,176,205,.18)); }
