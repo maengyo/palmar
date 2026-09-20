@@ -49,6 +49,74 @@ class Builds(unittest.TestCase):
         self.assertEqual(r.returncode, 0, (r.stderr or "")[-2000:])
 
 
+@unittest.skipUnless(sys.platform == "darwin", "the menu bar is a macOS thing")
+@unittest.skipUnless(can_build_app(), "nothing here can build the window")
+class TheMenuBar(unittest.TestCase):
+    """**On macOS a menu is not decoration — it is where the keyboard lives.** This binary had none,
+    and three things followed. A window the green button sent to full screen could not come back:
+    `⌃⌘F` is a menu item's shortcut, and the title bar that slides down at the top of the screen
+    slides down with the menu bar, which was not there either (user, 2026-09-21). `⌘Q` did nothing.
+    And `⌘C`/`⌘V` are `copy:` and `paste:` sent down the responder chain by the Edit menu — with no
+    Edit menu there is nothing to send them.
+
+    The window needs a display, so what it does cannot be asserted here. What the bar **holds** can:
+    the app prints it on `--print-menu`, which is the only proof available without a hand."""
+
+    @classmethod
+    def setUpClass(cls):
+        r = subprocess.run(["cargo", "build", "--release"], cwd=APP,
+                           capture_output=True, text=True, timeout=1800)
+        if r.returncode != 0:
+            raise unittest.SkipTest((r.stderr or "")[-800:])
+        cls.bin = os.path.join(APP, "target", "release", "palmar-app")
+
+    def menu(self):
+        # It needs a daemon to point at, and one that is not this machine's own.
+        from tests.helpers import Daemon
+        d = Daemon().start()
+        try:
+            p = subprocess.Popen([self.bin, d.url, "--print-menu"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            time.sleep(5)
+            p.terminate()
+            try:
+                out = p.communicate(timeout=8)[0]
+            except Exception:
+                p.kill()
+                out = p.communicate()[0]
+        finally:
+            d.stop()
+        return dict(
+            (line.split(":", 1)[0], line.split(":", 1)[1])
+            for line in (out or "").strip().splitlines() if ":" in line)
+
+    def test_the_four_menus_and_what_they_carry(self):
+        m = self.menu()
+        self.assertTrue(m, "the app printed no menu bar at all")
+        self.assertIn("palmar", m)
+        self.assertIn("Quit palmar [q]", m["palmar"], "there is no way to quit from the keyboard")
+        # The one that carries the clipboard. Without it ⌘C and ⌘V reach nothing.
+        self.assertIn("Edit", m)
+        for want in ("Copy [c]", "Paste [v]", "Cut [x]", "Select All [a]"):
+            self.assertIn(want, m["Edit"], "the Edit menu is missing %s: %r" % (want, m["Edit"]))
+        # The way out of full screen, which is the whole reason this exists.
+        self.assertIn("View", m)
+        self.assertIn("Enter Full Screen [^f]", m["View"],
+                      "full screen has no way back on the keyboard: %r" % (m["View"],))
+        # Zoom is what Windows calls maximize, and unlike full screen it toggles back.
+        self.assertIn("Window", m)
+        self.assertIn("Zoom", m["Window"])
+        self.assertIn("Minimize [m]", m["Window"])
+
+    def test_the_edit_menu_is_not_padded_out_by_the_system(self):
+        """AppKit adds items to any menu called "Edit" by itself — dictation and the character
+        palette — and here it added them three times over (measured by reading the bar back). Two
+        defaults are the switch for them; a terminal has no use for either."""
+        edit = self.menu().get("Edit", "")
+        for unwanted in ("Dictation", "Emoji"):
+            self.assertNotIn(unwanted, edit, "the system padded the Edit menu out: %r" % (edit,))
+
+
 class Promises(unittest.TestCase):
     """Two claims in app/src/main.rs that the Python side has to keep true, read out of the source
     so that deleting one of them here breaks a test rather than the app.

@@ -9,6 +9,18 @@ daemon — and your shells — running, exactly as closing a browser tab always 
 To stop the daemon too — closing the window never does — `palmar --stop`, or `python3 -m palmar
 --stop` from the checkout.
 
+**The menu bar, on macOS.** There was none, and a menu there is not decoration — it is where the
+keyboard lives. Three things followed from its absence. A window the green button sent to full
+screen could not come back: `⌃⌘F` is a menu item's shortcut, and the title bar that slides down when
+the pointer reaches the top of the screen slides down with the menu bar, which was not there either.
+`⌘Q` did nothing. And `⌘C`/`⌘V` are `copy:` and `paste:` sent down the responder chain by the Edit
+menu — with no Edit menu there is nothing to send them, which is the usual reason the clipboard does
+nothing in a Mac program built this way. Four menus now, all of them standard AppKit selectors and
+no new dependency: **palmar** (Hide · Quit `⌘Q`), **Edit** (Undo · Cut · Copy · Paste · Select All),
+**View** (Enter Full Screen `⌃⌘F`) and **Window** (Minimize `⌘M` · Zoom). Zoom is what Windows calls
+maximize, and unlike full screen it toggles back. The app prints the bar on `--print-menu`, which is
+how `tests/test_app.py` checks it without a hand on the keyboard.
+
 **Notifications.** WKWebView has no Notification API, so in this window the page asks the daemon
 (`POST /api/notify`) and the daemon asks the OS — `osascript` on a Mac, `notify-send` on Linux. The
 bell in the top row turns that on; the OS notification cannot be clicked through to the terminal.

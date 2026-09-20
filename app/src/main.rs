@@ -391,6 +391,175 @@ fn set_dock_icon() {
     }
 }
 
+/// **The menu bar, because on macOS a menu is not decoration — it is where the keyboard lives.**
+///
+/// This binary had none, and three things followed from that. A window sent to full screen by the
+/// green button could not come back: `⌃⌘F` is a *menu item's* shortcut, and the title bar that slides
+/// down when the pointer reaches the top of the screen slides down with the menu bar, which was not
+/// there either (user, 2026-09-21: "최대화하면 다시 창 크기 돌려놓는 기능이 없네. 원래 맨위로
+/// 마우스 가져다 대면 창이 떠야하는데 안떠"). `⌘Q` did nothing. And `⌘C`/`⌘V` are `copy:` and
+/// `paste:` sent down the responder chain by the Edit menu — with no Edit menu there is nothing to
+/// send them, which is the usual reason the clipboard does nothing in a bare Mac app.
+///
+/// **No new dependency.** `cocoa` and `objc` are already here for the Dock tile, and every item
+/// below is a standard AppKit selector — AppKit does the work, this only says which words go where.
+/// Nothing is invented: these are the same four menus and the same shortcuts every Mac app has.
+#[cfg(target_os = "macos")]
+fn set_menu_bar() {
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::NSString;
+    use objc::{class, msg_send, sel, sel_impl};
+    unsafe {
+        let s = |t: &str| NSString::alloc(nil).init_str(t);
+        // title, selector, key equivalent. An empty key is an item you can only click.
+        let item = |title: &str, selector: objc::runtime::Sel, key: &str| -> id {
+            let it: id = msg_send![class!(NSMenuItem), alloc];
+            let it: id = msg_send![it, initWithTitle: s(title) action: selector keyEquivalent: s(key)];
+            let _: () = msg_send![it, autorelease];
+            it
+        };
+        let separator = || -> id { msg_send![class!(NSMenuItem), separatorItem] };
+        let menu = |title: &str, items: Vec<id>| -> id {
+            let m: id = msg_send![class!(NSMenu), alloc];
+            let m: id = msg_send![m, initWithTitle: s(title)];
+            for it in items {
+                let _: () = msg_send![m, addItem: it];
+            }
+            let holder: id = msg_send![class!(NSMenuItem), alloc];
+            let holder: id = msg_send![holder, initWithTitle: s(title) action: sel!(noop) keyEquivalent: s("")];
+            let _: () = msg_send![holder, autorelease];
+            let _: () = msg_send![holder, setSubmenu: m];
+            holder
+        };
+
+        // **AppKit adds items to any menu called "Edit".** Dictation and the character palette go in
+        // by themselves, and here they went in three times over (measured by reading the bar back).
+        // These two defaults are the switch for them — palmar has no use for either, and a terminal
+        // least of all. Set before the bar is installed, or the additions are already made.
+        let defaults: id = msg_send![class!(NSUserDefaults), standardUserDefaults];
+        for key in ["NSDisabledDictationMenuItem", "NSDisabledCharacterPaletteMenuItem"] {
+            let _: () = msg_send![defaults, setBool: true forKey: s(key)];
+        }
+
+        let bar: id = msg_send![class!(NSMenu), alloc];
+        let bar: id = msg_send![bar, init];
+
+        // The first menu is the application's, whatever its title — macOS takes the name from the
+        // process, which is `palmar-app` until this is a real bundle (#12).
+        let _: () = msg_send![bar, addItem: menu("palmar", vec![
+            item("Hide palmar", sel!(hide:), "h"),
+            item("Hide Others", sel!(hideOtherApplications:), ""),
+            item("Show All", sel!(unhideAllApplications:), ""),
+            separator(),
+            // The window goes; the daemon does not. That is the same promise the red button makes.
+            item("Quit palmar", sel!(terminate:), "q"),
+        ])];
+
+        // **The one that carries the clipboard.** Without it `⌘C` and `⌘V` reach nothing.
+        let _: () = msg_send![bar, addItem: menu("Edit", vec![
+            item("Undo", sel!(undo:), "z"),
+            item("Redo", sel!(redo:), "Z"),
+            separator(),
+            item("Cut", sel!(cut:), "x"),
+            item("Copy", sel!(copy:), "c"),
+            item("Paste", sel!(paste:), "v"),
+            item("Select All", sel!(selectAll:), "a"),
+        ])];
+
+        // The way out of full screen, and the way in. `toggleFullScreen:` is what the green button
+        // calls, so this is the same door from the other side.
+        let _: () = msg_send![bar, addItem: menu("View", vec![
+            item("Enter Full Screen", sel!(toggleFullScreen:), "\u{f}"),   // ⌃⌘F — AppKit adds ⌃
+        ])];
+
+        let _: () = msg_send![bar, addItem: menu("Window", vec![
+            item("Minimize", sel!(performMiniaturize:), "m"),
+            // Zoom is what Windows calls maximize, and unlike full screen it toggles back.
+            item("Zoom", sel!(performZoom:), ""),
+        ])];
+
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![app, setMainMenu: bar];
+    }
+}
+
+/// `⌃⌘F` is a `keyEquivalent` of "f" with the control mask on top, and the mask is set separately
+/// from the key. Kept beside the menu so the two cannot drift apart.
+#[cfg(target_os = "macos")]
+fn full_screen_key(bar_item_index: i64) {
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::NSString;
+    use objc::{class, msg_send, sel, sel_impl};
+    const COMMAND: u64 = 1 << 20;
+    const CONTROL: u64 = 1 << 18;
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let bar: id = msg_send![app, mainMenu];
+        let holder: id = msg_send![bar, itemAtIndex: bar_item_index];
+        let m: id = msg_send![holder, submenu];
+        let it: id = msg_send![m, itemAtIndex: 0i64];
+        let _: () = msg_send![it, setKeyEquivalent: NSString::alloc(nil).init_str("f")];
+        let _: () = msg_send![it, setKeyEquivalentModifierMask: COMMAND | CONTROL];
+    }
+}
+
+/// What the menu bar ended up holding, for `--doctor`-style proof that it is actually installed.
+/// Reading it back is the only check available without a hand on the keyboard.
+#[cfg(target_os = "macos")]
+fn menu_bar_summary() -> String {
+    use cocoa::base::{id, nil};
+    use objc::{class, msg_send, sel, sel_impl};
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let bar: id = msg_send![app, mainMenu];
+        if bar == nil {
+            return "(no menu bar)".into();
+        }
+        let n: i64 = msg_send![bar, numberOfItems];
+        let mut out = Vec::new();
+        for i in 0..n {
+            let holder: id = msg_send![bar, itemAtIndex: i];
+            let sub: id = msg_send![holder, submenu];
+            let title: id = msg_send![sub, title];
+            let mut names = Vec::new();
+            let k: i64 = msg_send![sub, numberOfItems];
+            for j in 0..k {
+                let it: id = msg_send![sub, itemAtIndex: j];
+                let t: id = msg_send![it, title];
+                let key: id = msg_send![it, keyEquivalent];
+                let mask: u64 = msg_send![it, keyEquivalentModifierMask];
+                let t = nsstring(t);
+                let key = nsstring(key);
+                if t.is_empty() { continue; }
+                names.push(if key.is_empty() { t } else {
+                    format!("{} [{}{}{}]", t,
+                            if mask & (1 << 18) != 0 { "^" } else { "" },
+                            if mask & (1 << 17) != 0 { "shift-" } else { "" },
+                            key)
+                });
+            }
+            out.push(format!("{}: {}", nsstring(title), names.join(" · ")));
+        }
+        out.join("\n")
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn nsstring(s: cocoa::base::id) -> String {
+    use cocoa::base::nil;
+    use objc::{msg_send, sel, sel_impl};
+    unsafe {
+        if s == nil {
+            return String::new();
+        }
+        let ptr: *const std::os::raw::c_char = msg_send![s, UTF8String];
+        if ptr.is_null() {
+            return String::new();
+        }
+        std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned()
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "linux")]
     tune_for_wslg();
@@ -532,6 +701,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if !dock_icon_set {
             dock_icon_set = true;
             set_dock_icon();
+            // Same reason as the tile: before `run` there is no application to hang a menu on.
+            set_menu_bar();
+            full_screen_key(2);
+            if std::env::args().any(|a| a == "--print-menu") {
+                println!("{}", menu_bar_summary());
+            }
         }
         if let Event::WindowEvent {
             event: WindowEvent::CloseRequested,
