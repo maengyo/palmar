@@ -686,7 +686,9 @@ body.ui-mono { --ui: var(--mono); }
   background: var(--rail); border-bottom: 1px solid var(--line);
 }
 .cvbar .tabs { flex: 1; min-width: 0; border-bottom: 0; background: transparent; }
-/* 26px like every other button here; undo is a word, so it grows to fit (2026-09-15: "너무 작아서 깨져 보여"). */
+/* 26px like every other button here. `min-width` rather than a width because the row used to hold a
+   word (undo, until 2026-09-20) and a toast's undo still does — one shape for both (2026-09-15:
+   "너무 작아서 깨져 보여"). */
 .tidy {
   flex: none; align-self: center; margin: 0 4px 0 2px;
   min-width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line-2);

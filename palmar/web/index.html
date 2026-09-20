@@ -57,7 +57,17 @@
            push it away (the strip scrolls sideways, and inside it the button gets shoved to the end like ＋). -->
       <div class="cvbar">
         <div class="tabs" id="tabs" role="tablist" aria-label="canvases"></div>
-        <button id="undo" class="tidy" disabled title="undo — nothing has moved yet">undo</button>
+      <!-- Undo: the arrow that goes back on itself. It was the word "undo" until 2026-09-20 — the
+           only word in a row of drawings, which made it read as a different kind of control than
+           the three beside it. The word lives on in `aria-label` and in the title, which is where
+           it says **what** would be undone anyway ("undo moving a window"). -->
+      <button id="undo" class="tidy" type="button" disabled
+                aria-label="undo" title="undo — nothing has moved yet">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H9"/>
+          </svg>
+        </button>
       <button class="tidy" id="tidy" type="button"
                 title="tidy this canvas — pull the windows back to the corner">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -66,20 +76,23 @@
             <rect x="8" y="8" width="5" height="5" rx="1"/><rect x="8" y="16" width="9" height="4" rx="1"/>
           </svg>
         </button>
-      <!-- Gather: four arrows pointing inward. Beside tidy because they are the same kind of thing —
-           a thing that moves windows and only when a hand asks for it. -->
+      <!-- Gather: four arrows pointing **inward**, the arrowheads at the inner ends. They pointed
+           outward until 2026-09-20, which is the drawing every other program uses for "make this
+           bigger" — and this button closes the gaps up (user: "축소 느낌이니까"). Beside tidy
+           because they are the same kind of thing: moves windows, and only when a hand asks. -->
       <button class="tidy" id="gather" type="button"
                 title="bring them closer — keeps the arrangement, closes the gaps">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M3 3l5 5M8 3H3v5"/><path d="M21 3l-5 5M16 3h5v5"/>
-            <path d="M3 21l5-5M8 21H3v-5"/><path d="M21 21l-5-5M16 21h5v-5"/>
+            <path d="M3 3l5 5M8 3v5H3"/><path d="M21 3l-5 5M16 3v5h5"/>
+            <path d="M3 21l5-5M8 21v-5H3"/><path d="M21 21l-5-5M16 21v-5h5"/>
           </svg>
         </button>
-      <!-- Fit: a frame with four corners. Beside the other two because all three answer "where is
-           everything", and this is the one that answers it without moving a window. -->
+      <!-- Standing back: a frame with four corners. Beside the other two because all three answer
+           "where is everything", and this is the one that answers it without moving a window. It is
+           a shortcut for the wheel gesture, so the title is rewritten from app.js as the scale moves. -->
       <button class="tidy" id="fit" type="button" aria-pressed="false"
-                title="see the whole canvas — click a window to come back to it">
+                title="see the whole canvas — or ctrl and the wheel over the empty canvas">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M3 8V3h5"/><path d="M21 8V3h-5"/><path d="M3 16v5h5"/><path d="M21 16v5h-5"/>

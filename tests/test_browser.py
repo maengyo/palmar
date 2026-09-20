@@ -3442,6 +3442,22 @@ class TopRow(unittest.TestCase):
             self.assertGreaterEqual(r[k], 26, "%s is %spx tall" % (k, r[k]))
         self.assertGreaterEqual(r["tab"], 13, "the canvas tab text is %spx" % r["tab"])
 
+    def test_the_row_is_drawings_and_every_one_of_them_has_a_name(self):
+        """undo was the only word in a row of drawings, so it read as a different kind of control
+        (user, 2026-09-20). It is a drawing now — which means the name it used to carry on its face
+        has to be carried somewhere a screen reader still finds it."""
+        r = self.b.ev("""(()=>{const out={};
+          for (const id of ['undo','tidy','gather','fit']) {
+            const b = document.getElementById(id);
+            out[id] = {svg: !!b.querySelector('svg'), text: b.textContent.trim(),
+                       name: b.getAttribute('aria-label') || b.title};
+          }
+          return out;})()""")
+        for k, v in r.items():
+            self.assertTrue(v["svg"], "%s is not a drawing: %r" % (k, v))
+            self.assertEqual(v["text"], "", "%s still shows a word: %r" % (k, v))
+            self.assertTrue(v["name"], "%s has no name for a screen reader: %r" % (k, v))
+
     def test_the_options_list_holds_the_shortcuts_and_the_settings(self):
         r = self.b.ev("""(()=>{document.getElementById('options').click();
           const m=document.getElementById('options-menu');
