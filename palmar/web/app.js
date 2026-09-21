@@ -218,6 +218,7 @@ const LS_WATCH = 'palmar.watchgroups';
 let watchOn = false;
 try { watchOn = localStorage.getItem(LS_WATCH) === '1'; } catch (e) {}
 const watchWas = new Map();
+const watchMoves = [];        // what `place` did since the last report — see place()
 function watchGroups() {
   if (!watchOn) return;
   const now = new Map();
@@ -233,10 +234,26 @@ function watchGroups() {
     // A member joining or leaving changes the shape for an honest reason; only a set that stayed
     // the same and moved anyway is worth a word.
     if (was && was.ids === ids && was.shape !== shape) {
-      console.warn('[palmar] group ' + g + ' changed shape\n  was: ' + was.shape +
-                   '\n  now: ' + shape + '\n' + new Error('here').stack);
+      //: **Sideways is a resize doing its job; downwards is the bug.** A member that leaves its row
+      //: while nobody grew taller is the diagonal that keeps being reported and keeps not
+      //: reproducing here (user, 2026-09-18 and again 2026-09-21). Both are printed, and the one
+      //: worth sending is marked, so a report can be pasted rather than described.
+      const dropped = list.some(([id, , y]) => {
+        const old = (was.rows || {})[id];
+        return old !== undefined && Math.abs(y - old) > GAP;
+      });
+      console.warn('[palmar] group ' + g + (dropped ? ' — A MEMBER LEFT ITS ROW' : ' changed shape') +
+                   '\n  was: ' + was.shape + '\n  now: ' + shape +
+                   '\n  sizes: ' + list.map(([id]) => (layout[id].w + 'x' + layout[id].h)).join(' | ') +
+                   '\n  moved by:\n' + (watchMoves.length
+                     ? watchMoves.map((m) => '    ' + m.id + ' ' + m.from + ' -> ' + m.to + '  by ' + m.by).join('\n')
+                     : '    (nothing went through place — a hand, or persist)') +
+                   '\n' + new Error('here').stack);
     }
-    watchWas.set(g, { ids: ids, shape: shape });
+    watchMoves.length = 0;
+    const rows = {};
+    for (const [id, , y] of list) rows[id] = y;
+    watchWas.set(g, { ids: ids, shape: shape, rows: rows });
   }
   for (const g of [...watchWas.keys()]) if (!now.has(g)) watchWas.delete(g);
 }
@@ -2543,8 +2560,18 @@ function groupMembers(g) {
   return [...tiles.values()].filter((t) => layout[t.id] && layout[t.id].g === g).map((t) => t.id);
 }
 
+//: Every move a window makes that a hand did not make goes through here — push-aside, closing a
+//: group up, tidy. **With the watcher on it also says who moved it**, which is the question a shape
+//: that changed by itself actually asks. One frame of the stack, so the line stays readable.
 function place(id, x, y) {
   const t = tiles.get(id);
+  const was = layout[id];
+  if (watchOn && was && (was.x !== x || was.y !== y)) {
+    const at = (new Error().stack || '').split('\n')[2] || '';
+    watchMoves.push({ id, from: [was.x, was.y], to: [x, y],
+                      by: (at.trim().split(/[ (@]/)[1] || at.trim()).slice(0, 40) });
+    if (watchMoves.length > 40) watchMoves.shift();
+  }
   layout[id] = Object.assign({}, layout[id], { x, y });
   if (t) { t.el.style.left = x + 'px'; t.el.style.top = y + 'px'; }
 }
@@ -2976,6 +3003,12 @@ function applyPush(moves) {
   for (const m of moves) {
     const t = tiles.get(m.id), r = layout[m.id];
     if (!t || !r) continue;
+    // This does not go through `place` — it writes the intended value straight in — so the watcher
+    // has to be told here too, or the one path most likely to be at fault is the one it cannot see.
+    if (watchOn && (r.x !== m.x || r.y !== m.y)) {
+      watchMoves.push({ id: m.id, from: [r.x, r.y], to: [m.x, m.y], by: 'pushAside' });
+      if (watchMoves.length > 40) watchMoves.shift();
+    }
     // **Write the intended value; never read it back.** left/top are mid-transition numbers while the
     // slide runs — the same trap tidyCanvas documents, and saving one of those puts the old position back.
     t.el.style.left = m.x + 'px';
