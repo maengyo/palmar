@@ -1947,6 +1947,73 @@ class Grouping(unittest.TestCase):
         self.assertEqual(r["stored"], [900, 700],
                          "clicking a window mid-slide moved it on the board: %r" % (r,))
 
+    def test_a_wider_and_shorter_window_still_pushes_its_neighbour_sideways(self):
+        """**The one four sweeps missed, because all four only ever grew the window.** A corner grip
+        makes a window wider and shorter at once — that is the ordinary way a hand widens one — and
+        then the way down is shorter than the way across: widen by 200 while the height drops 60 and
+        "down" is 152px against "right" at 200px. The neighbour took the short way and left the row
+        the resize was meant to keep (user, 2026-09-18 and again 2026-09-21; measured here: b from
+        y=200 to y=352, and to y=48 when it was the shorter of the two).
+
+        Which way a pair is lying is a property of the pair, not of the gesture: side by side, their
+        centres are further apart across than down."""
+        r = self.bench("""
+          const A = put('g1', 200, 200, 300, 200), B = put('g2', 512, 200, 300, 200);
+          P.joinGroups(A, B);
+          const y0 = L[B].y;
+          // Wider by 200, shorter by 60 — the corner drag that goes right and drifts up.
+          L[A] = Object.assign({}, L[A], {w: 500, h: 140});
+          by('g1').el.style.width = '500px'; by('g1').el.style.height = '140px';
+          P.settle(A, {compact: true, dir: 'r'});
+          return {a: [L[A].x, L[A].y, L[A].w, L[A].h], b: [L[B].x, L[B].y], y0: y0,
+                  over: P.hits(L[A], L[B])};""")
+        self.assertFalse(r["over"], "the grown window is sitting on its neighbour: %r" % (r,))
+        self.assertEqual(r["b"][1], r["y0"], "the neighbour left its row: %r" % (r,))
+        self.assertGreaterEqual(r["b"][0], r["a"][0] + r["a"][2], "it did not come across: %r" % (r,))
+
+    def test_a_short_neighbour_is_not_pushed_over_the_top_either(self):
+        """The same fault upwards: with the neighbour the shorter of the two, "up" was 152px and
+        "right" 200px, and it went up — out of the row, above the window it belongs beside."""
+        r = self.bench("""
+          const A = put('g1', 200, 200, 300, 200), B = put('g2', 512, 200, 300, 140);
+          P.joinGroups(A, B);
+          const y0 = L[B].y;
+          L[A] = Object.assign({}, L[A], {w: 500});
+          by('g1').el.style.width = '500px';
+          P.settle(A, {compact: true, dir: 'r'});
+          return {b: [L[B].x, L[B].y], y0: y0};""")
+        self.assertEqual(r["b"][1], r["y0"], "the short neighbour was pushed over the top: %r" % (r,))
+
+    def test_a_stacked_pair_is_still_pushed_down(self):
+        """The rule has to cut both ways, or it has only moved the fault. One window above another is
+        a column and stays one: growing the top one pushes the bottom one down, not sideways."""
+        r = self.bench("""
+          const A = put('g1', 200, 200, 300, 200), B = put('g2', 200, 412, 300, 200);
+          P.joinGroups(A, B);
+          const x0 = L[B].x;
+          L[A] = Object.assign({}, L[A], {h: 340});
+          by('g1').el.style.height = '340px';
+          P.settle(A, {compact: true, dir: 'b'});
+          return {a: [L[A].y, L[A].h], b: [L[B].x, L[B].y], x0: x0};""")
+        self.assertEqual(r["b"][0], r["x0"], "the stacked neighbour was pushed sideways: %r" % (r,))
+        self.assertGreaterEqual(r["b"][1], r["a"][0] + r["a"][1], "it did not move down: %r" % (r,))
+
+    def test_growing_downward_does_not_send_a_side_neighbour_down_with_it(self):
+        """The fault the old rule was written for, kept: growing the left one **downward** leaves a
+        few pixels of shared column with the one beside it, and following the grown direction sent it
+        416px down to escape three (user, 2026-09-18, measured: b from y=200 to y=616). A pair lying
+        side by side moves sideways whatever the hand did, so this is now the same answer as above."""
+        r = self.bench("""
+          const A = put('g1', 200, 200, 300, 200), B = put('g2', 509, 200, 300, 200);
+          P.joinGroups(A, B);
+          const y0 = L[B].y;
+          L[A] = Object.assign({}, L[A], {h: 616});
+          by('g1').el.style.height = '616px';
+          P.settle(A, {compact: true, dir: 'b'});
+          return {b: [L[B].x, L[B].y], y0: y0};""")
+        self.assertEqual(r["b"][1], r["y0"],
+                         "three pixels of shared column sent it down past the bottom: %r" % (r,))
+
     def test_resizing_a_grouped_window_leaves_its_neighbour_on_the_row(self):
         """The symptom the above was found from. Two side by side, grow the left one, and the right
         one must come across — never down and across."""

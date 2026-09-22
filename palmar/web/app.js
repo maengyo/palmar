@@ -2916,21 +2916,28 @@ function shove(p, r, dir) {
   // up can run out of room; right and down never do, so there is always a way out. Ties go to the two
   // directions the canvas grows in, which is why those are first in the list.
   const open = ways.filter((w) => w.x >= 0 && w.y >= 0);
-  const best = open.reduce((m, w) => (w.by < m.by ? w : m));
-  // **Keep going the way it was already going — when it is barely further.** A row of windows slides
-  // over as a row instead of scattering, and every step of a cascade leads away from the window that
-  // started it, which is what makes it stop. That rule came in because a neighbour *a few pixels*
-  // closer to the bottom than to the right went under a window that had grown sideways, breaking the
-  // row that the gesture meant to keep.
+  // **A row stays a row — and what says so is where the two are, not what the hand just did.**
   //
-  // **A few pixels is the whole of it, and it was taken as any number at all.** Two grouped windows
-  // side by side, and growing the left one downward left three pixels of shared column with the one
-  // beside it — three pixels out to the right, or four hundred and sixteen down past the bottom it
-  // had just grown. It went down, every time, and each further resize sent it down again (user,
-  // 2026-09-18, measured: b moved from y=200 to y=616). So the preference wins a tie or near enough
-  // to one, and never a landslide.
-  const same = dir && open.find((w) => w.d === dir);
-  return (same && same.by - best.by <= GAP) ? same : best;
+  // The way the anchor grew (`dir`) used to decide that on its own, and it had to be clamped to
+  // near-ties after growing one window *downward* sent its side neighbour 416px down to escape
+  // three pixels of shared column (user, 2026-09-18, measured: b from y=200 to y=616). The clamp
+  // stopped the landslide and cost the other half of the same promise: widen a window by 200 while
+  // its height shrinks and "down" becomes 152px against "right" at 200px, so the neighbour drops out
+  // of the row the resize was meant to keep (user, 2026-09-21). Four sweeps missed that because all
+  // four only ever grew the window; it wants a corner drag that gets wider and shorter at once,
+  // which is the ordinary way a hand makes a window wider.
+  //
+  // Which way a pair is lying is a property of the pair. Side by side, their centres are further
+  // apart across than down, and they move across; stacked, the other way. `dir` still breaks a tie
+  // within that axis, and the shortest way out still decides which end of it.
+  const sideways = Math.abs((p.x + p.w / 2) - (r.x + r.w / 2))
+                >= Math.abs((p.y + p.h / 2) - (r.y + r.h / 2));
+  const want = sideways ? ['r', 'l'] : ['b', 't'];
+  const along = open.filter((w) => want.indexOf(w.d) >= 0);
+  const ways2 = along.length ? along : open;          // both ends of that axis walled in: take any
+  const pick = ways2.reduce((m, w) => (w.by < m.by ? w : m));
+  const same = dir && ways2.find((w) => w.d === dir);
+  return (same && same.by - pick.by <= GAP) ? same : pick;
 }
 
 // Resolve every overlap on one canvas while holding `anchorId` still — the window the hand just placed is
