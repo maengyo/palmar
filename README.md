@@ -21,7 +21,13 @@ waiting longest sits at the top of the list, even if its window is off-screen.
 **A window stays where you put it.** Drag it, size it, and the shell's rows and columns follow;
 nothing is tiled and nothing is resized behind your back. Windows never overlap — drop one on
 another and the other slides aside by exactly the overlap. Hold one over another and they become a
-group that travels together. One `Ctrl`/`⌘`+`Z` undoes any of it.
+group that travels together, and a group can be given a name. One `Ctrl`/`⌘`+`Z` undoes any of it.
+
+**And the canvas is bigger than the screen.** Two buttons put it back in order — one pulls the
+windows to the corner, the other only closes the gaps and leaves the arrangement alone — and `Ctrl`
+with the wheel over the bare canvas stands back far enough to see all of it. Standing back draws the
+windows smaller; it never resizes a terminal, so nothing is told anything and nothing is measured
+again.
 
 **They keep running without you.** The daemon owns the shells, so closing the tab, or the laptop
 lid, changes nothing. Come back to the same address and everything is where you left it — same
@@ -80,8 +86,9 @@ it gets its own icon, window and Start Menu entry, and `palmar` opens that from 
 front — same daemon, same address; `palmar --new` opens another window, `palmar --stop` ends it. Lost the address: `cat ~/.palmar/run/url`.
 If 8801 is busy — a palmar on Windows beside one in WSL, say — it takes the next free port and says so.
 
-The window is a **741 KB** program that shows the same thing without a browser
-([`app/`](app/README.md)) — the OS's own webview, not Electron. `palmar` opens it when it is there;
+The window is a **712 KB** program that shows the same thing without a browser
+([`app/`](app/README.md)) — the OS's own webview, not Electron. (That is the Linux download; the
+macOS one is 1.5 MB because the single file carries both Intel and Apple Silicon.) `palmar` opens it when it is there;
 the web button inside it opens a browser, and so does `palmar --web`. Both at once is fine: one daemon
 per home, and a terminal opened in either shows up in the other, live.
 

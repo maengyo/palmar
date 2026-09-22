@@ -1,6 +1,9 @@
 # palmar in its own window
 
-`palmar-app` is a **741 KB** binary that shows palmar in a real window instead of a browser tab.
+`palmar-app` is a **712 KB** binary that shows palmar in a real window instead of a browser tab —
+that being the Linux download; the macOS one is 1.5 MB because the single file carries both Intel
+and Apple Silicon. (Both measured off the v0.1.1 release assets, not off a local build: what matters
+is the size of the thing people actually fetch.)
 
 It is not a second copy of palmar. The daemon still owns every terminal; this program finds one
 (or starts one), and points a webview at the address it prints. Closing the window leaves the
