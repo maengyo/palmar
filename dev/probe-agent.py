@@ -16,6 +16,18 @@ What is measured here is exactly what palmar decides on:
   · how often the window title (OSC 0/1/2) changes — twice or more within 3s means "working"
   · how long the quiet stretches are — the value that gauges whether the fallback is needed
 
+and, since 2026-09-23, the two things that might yet answer **"it is waiting for you"** for an
+agent that has neither hooks nor a title (docs/reports.md). Neither is screen reading; both are
+terminal state, the same class of signal as OSC 133:
+  · **the bell** (`\a`) — the oldest "look at me" there is, and the one an agent is most likely to
+    already ring. OSC sequences end in a bell too, so those are subtracted.
+  · **the cursor** (DECTCEM, `ESC[?25h` / `ESC[?25l`) — most TUIs hide it while drawing and show it
+    while waiting for a key, so the last toggle before a quiet stretch is worth knowing.
+
+**Take it to an approval prompt and leave it there a few seconds.** That moment is the whole
+question: whatever comes out then is what palmar could read; if nothing does, the honest answer is
+that this agent cannot be read and the only exact path left is a hook.
+
 This file is a dev tool. It does not go into the product (`palmar/`).
 """
 from __future__ import annotations
@@ -78,6 +90,8 @@ def main() -> int:
     t0 = time.monotonic()
     titles: list[tuple[float, str]] = []      # (time, title) — only ones that actually changed
     marks: list[float] = []                   # the times bytes arrived
+    bells: list[float] = []                   # (time) each bell that was not an OSC terminator
+    cursor: list[tuple[float, bool]] = []     # (time, shown) — DECTCEM, only when it changed
     asked: set[str] = set()
     total = 0
     last_title = None
@@ -119,11 +133,24 @@ def main() -> int:
                 for q, name in QUERIES:
                     if q in chunk:
                         asked.add(name)
+                osc_bells = 0
                 for m in OSC.finditer(chunk):
+                    if m.group(0).endswith(b"\x07"):
+                        osc_bells += 1
                     t = m.group(1).decode("utf-8", "replace")
                     if t != last_title:
                         last_title = t
                         titles.append((now, t))
+                # **A bell that is not the end of an OSC.** Every OSC here finishes with one, so
+                # counting raw \a would report the agent ringing every time it set its title.
+                rang = chunk.count(b"\x07") - osc_bells
+                for _ in range(max(0, rang)):
+                    bells.append(now)
+                # DECTCEM. Only the changes: a TUI that re-hides an already hidden cursor on every
+                # frame would otherwise read as a signal when it is a redraw.
+                for seq, shown in ((b"\x1b[?25h", True), (b"\x1b[?25l", False)):
+                    if seq in chunk and (not cursor or cursor[-1][1] != shown):
+                        cursor.append((now, shown))
             try:
                 if os.waitpid(pid, os.WNOHANG)[0]:
                     break
@@ -146,11 +173,11 @@ def main() -> int:
         except ProcessLookupError:
             pass
 
-    report(argv, time.monotonic() - t0, total, titles, marks, asked)
+    report(argv, time.monotonic() - t0, total, titles, marks, asked, bells, cursor)
     return 0
 
 
-def report(argv, dur, total, titles, marks, asked) -> None:
+def report(argv, dur, total, titles, marks, asked, bells=(), cursor=()) -> None:
     # **Keep a file copy too.** A full-screen TUI restores the screen as it exits and buries what
     # was printed here — you measure it all and then cannot find what to look at (it happened).
     lines = []
@@ -180,6 +207,22 @@ def report(argv, dur, total, titles, marks, asked) -> None:
             spans[-1][1] = t
         else:
             spans.append([t, t])
+
+    # **The two that could answer "waiting for you".** Printed before the title, because for an
+    # agent that sets no title they are the whole report.
+    say("bell (\\a, not counting the ones that end an OSC): %d" % len(bells))
+    if bells:
+        say("  at " + ", ".join("%.1fs" % t for t in bells[:10]) + (" …" if len(bells) > 10 else ""))
+        say("  → palmar could read this as \"it wants you\". It is the oldest such signal there is.")
+    else:
+        say("  → nothing to read here.")
+    say("cursor (DECTCEM): %d change%s" % (len(cursor), "" if len(cursor) == 1 else "s"))
+    if cursor:
+        say("  " + ", ".join("%.1fs %s" % (t, "shown" if sh else "hidden") for t, sh in cursor[-8:]))
+        say("  → if it ends **shown** while nothing is printing, that is a program waiting for a key.")
+    else:
+        say("  → nothing to read here.")
+    say()
 
     say("window title (OSC 0/1/2): %d change%s" % (len(titles), "" if len(titles) == 1 else "s"))
     for t, v in titles[:6]:
