@@ -18,7 +18,10 @@ menu — with no Edit menu there is nothing to send them, which is the usual rea
 nothing in a Mac program built this way. Four menus now, all of them standard AppKit selectors and
 no new dependency: **palmar** (Hide · Quit `⌘Q`), **Edit** (Undo · Cut · Copy · Paste · Select All),
 **View** (Enter Full Screen `⌃⌘F`) and **Window** (Minimize `⌘M` · Zoom). Zoom is what Windows calls
-maximize, and unlike full screen it toggles back. The app prints the bar on `--print-menu`, which is
+maximize, and unlike full screen it toggles back. All four checked by hand on 2026-09-21: full
+screen lets go of `⌃⌘F`, the title bar comes down at the top of the screen, Zoom toggles, and the
+clipboard works inside a terminal — which was on the list of what this window still owed and is off
+it now, having been the same fault all along. The app prints the bar on `--print-menu`, which is
 how `tests/test_app.py` checks it without a hand on the keyboard.
 
 **Notifications.** WKWebView has no Notification API, so in this window the page asks the daemon
