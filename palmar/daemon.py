@@ -834,6 +834,20 @@ class Session:
         self.last_paint = None       # the last small repaint inside alt — see REPEAT_MAX
         self.cwd_told = False        # has this shell ever said where it is — then we stop reading it
         self.fg_told = False         # has this shell ever said what it runs — then we stop guessing
+        #: **Two signals that are not read yet, only counted.** The bug still open is an agent with
+        #: neither hooks nor a window title: the only layer left sees "are bytes coming out", and a
+        #: menu being drawn while it waits for you looks exactly like work being printed. The bell is
+        #: the oldest "look at me" a terminal has, and DECTCEM says whether the cursor is shown —
+        #: most TUIs hide it while drawing and show it while waiting for a key. Neither is screen
+        #: reading; both are terminal state, the same class as OSC 133. Whether *this* agent emits
+        #: either is not something to guess at, and `dev/probe-agent.py` cannot ask on Windows — it
+        #: is a POSIX program. The daemon already has the bytes on every platform, so it counts here
+        #: and `--doctor` says what it saw. Nothing decides a light on them yet.
+        self.bells = 0               # bare BEL — the ones that end an OSC do not count
+        self.last_bell = None
+        self.cursor_shown = None     # DECTCEM: True shown, False hidden, None never said
+        self.last_cursor = None
+        self.dec_carry = b""         # a DECTCEM straddling a chunk boundary
         self.shell_marks = False     # has this shell ever spoken OSC 133 — then the guesses stand down
         self.cmd_start = None        # monotonic time of the last 133;C, or None between commands
         self.derived = "idle"        # status read from title and output when there are no hooks
@@ -946,6 +960,11 @@ class Session:
             # and D, which is when the layers that watch the agent are the ones still talking.
             "shell": self.shell_marks or None,
             "running": (self.cmd_start is not None) or None,
+            # Counted, not acted on — see where they are set.
+            "bells": self.bells or None,
+            "last_bell": self.last_bell,
+            "cursor_shown": self.cursor_shown,
+            "last_cursor": self.last_cursor,
             "created": self.created, "last_event": self.last_event,
             "canvas": self.canvas, "name": self.name,
             # True when this pane's last wait ended with nobody typing here (#14). The browser reads
@@ -1110,6 +1129,7 @@ class Session:
     def _scan_title(self, data: bytes) -> None:
         """Only counts. It removes nothing from the ring or from the frame going to the browser —
         xterm must receive these as-is and do its job (unlike the alt markers)."""
+        self._scan_signs(data)
         buf = self.osc_carry + data
         last = 0
         hit = False
@@ -1132,6 +1152,33 @@ class Session:
         if hit:
             self._title_tick()
             self._arm_settle()
+
+    #: **Counting a bell is not counting `\a`.** Every OSC this file reads finishes with one, so a
+    #: raw count reports an agent ringing each time it sets its title. The OSC terminators are taken
+    #: off. The cursor records only *changes* — a TUI that re-hides an already hidden cursor on every
+    #: frame is redrawing, not saying anything.
+    def _scan_signs(self, data: bytes) -> None:
+        # **A bell is one byte and cannot straddle a read**, so it is counted on what just arrived
+        # and never on the carry — carrying it counts the same bell twice, which is what the test
+        # found. The terminators to subtract are the OSCs that start in this chunk, plus one for an
+        # OSC still open from the last: `osc_carry` is the title scanner's leftover and this runs
+        # before it, so it still describes the previous read. An OSC that spans three reads
+        # over-subtracts by one; the floor at zero is the whole of the harm.
+        ends = sum(1 for m in OSC_SEEN.finditer(data) if m.group(0).endswith(b"\x07"))
+        if self.osc_carry:
+            ends += 1
+        rang = data.count(b"\x07") - ends
+        if rang > 0:
+            self.bells += rang
+            self.last_bell = time.time()
+        # **The carry is five bytes, not six.** DECTCEM is six, so five can never hold a whole one —
+        # which is what stops a sequence that was already counted from firing again off the carry.
+        buf = self.dec_carry + data
+        self.dec_carry = buf[-5:]
+        for seq, shown in ((b"\x1b[?25h", True), (b"\x1b[?25l", False)):
+            if seq in buf and self.cursor_shown is not shown:
+                self.cursor_shown = shown
+                self.last_cursor = time.time()
 
     def _arm_settle(self) -> None:
         """No bytes arrive at the moment the title stops — only a clock can tell that it stopped.
@@ -5883,6 +5930,21 @@ def doctor(port: int) -> int:
         else:
             src = "output activity — this pane sets no window title"
         out("      read from %s" % src)
+        # **What this pane has emitted that nothing reads yet.** The open question is whether an
+        # agent with no hooks and no title says "I want you" some other way; these are the two ways
+        # left, and this is how to find out without guessing (docs/reports.md).
+        ago = lambda t: "%.0fs ago" % (time.time() - t) if t else "never"
+        bell = s.get("bells")
+        cur = s.get("cursor_shown")
+        out("      bell      %s%s" % ("rung %d time%s, last %s" % (bell, "" if bell == 1 else "s",
+                                                                  ago(s.get("last_bell")))
+                                      if bell else "never rung",
+                                      "   <- could be read as \"it wants you\"" if bell else ""))
+        out("      cursor    %s" % ("never said" if cur is None else
+                                    "%s since %s%s" % ("shown" if cur else "hidden",
+                                                       ago(s.get("last_cursor")),
+                                                       "   <- a program waiting for a key looks like this"
+                                                       if cur else "")))
         out("      %s" % ("the agent field is filled by hooks. With an agent that has none it is "
                           "correctly empty, and it says nothing about the status."
                           if not s.get("agent") else "hooks are attached."))

@@ -353,6 +353,8 @@ class TheFolderAPaneIsIn(unittest.TestCase):
         f.fg, f.fg_told = None, False
         f._title_cwd = lambda t: D.Session._title_cwd(f, t)
         f._title_run = lambda t: D.Session._title_run(f, t)
+        f.bells, f.last_bell, f.cursor_shown, f.last_cursor, f.dec_carry = 0, None, None, None, b''
+        f._scan_signs = lambda data: D.Session._scan_signs(f, data)
         f._title_tick = lambda: None
         f._arm_settle = lambda: None
         return f
@@ -431,6 +433,8 @@ class WhenTheShellSaysItOutright(unittest.TestCase):
         f.fg, f.fg_told = None, False
         f._title_cwd = lambda t: D.Session._title_cwd(f, t)
         f._title_run = lambda t: D.Session._title_run(f, t)
+        f.bells, f.last_bell, f.cursor_shown, f.last_cursor, f.dec_carry = 0, None, None, None, b''
+        f._scan_signs = lambda data: D.Session._scan_signs(f, data)
         f._clear_told_fg = lambda: D.Session._clear_told_fg(f)
         f._shell_mark = lambda m: D.Session._shell_mark(f, m)
         f._title_tick = lambda: D.Session._title_tick(f)
@@ -984,6 +988,58 @@ class TheShellSaysWhatItRuns(unittest.TestCase):
         f.fg, f.fg_told, f.pid = None, False, 1
         f._fg_argv = (None, None, None)
         return f
+
+
+class WhatAPaneHasEmitted(unittest.TestCase):
+    """Two signals nothing reads yet, counted so the open question can be answered without guessing:
+    an agent with neither hooks nor a window title, where the only layer left cannot tell a menu
+    being drawn from work being printed. `dev/probe-agent.py` asks the same question but is a POSIX
+    program — the daemon has the bytes on every platform, which is why the counting is here."""
+
+    def pane(self):
+        class F:
+            pass
+        f = F()
+        f.bells, f.last_bell = 0, None
+        f.cursor_shown, f.last_cursor = None, None
+        f.dec_carry = b""
+        f.osc_carry = b""
+        return f
+
+    def test_the_bell_that_ends_a_title_is_not_a_bell(self):
+        """Every OSC palmar reads finishes with `\\a`, so a raw count has an agent ringing each time
+        it sets its title — which is most of them, most of the time."""
+        f = self.pane()
+        D.Session._scan_signs(f, b"\x1b]0;working\x07")
+        self.assertEqual(f.bells, 0)
+        D.Session._scan_signs(f, b"\x07")
+        self.assertEqual(f.bells, 1)
+        self.assertIsNotNone(f.last_bell)
+        # And one beside the other, in the same breath.
+        D.Session._scan_signs(f, b"\x1b]2;done\x07\x07")
+        self.assertEqual(f.bells, 2)
+
+    def test_the_cursor_records_changes_and_not_redraws(self):
+        """A TUI that re-hides an already hidden cursor on every frame is redrawing, not saying
+        anything — counting that would make a busy screen look like a hundred decisions."""
+        f = self.pane()
+        self.assertIsNone(f.cursor_shown, "it claims to know before anything said so")
+        D.Session._scan_signs(f, b"\x1b[?25l")
+        self.assertIs(f.cursor_shown, False)
+        first = f.last_cursor
+        D.Session._scan_signs(f, b"\x1b[?25l" * 30)
+        self.assertEqual(f.last_cursor, first, "a redraw counted as a change")
+        D.Session._scan_signs(f, b"\x1b[?25h")
+        self.assertIs(f.cursor_shown, True)
+
+    def test_a_sequence_split_across_two_reads(self):
+        """The bytes arrive in whatever sizes the PTY hands over, and six is small enough to be cut
+        in half often."""
+        f = self.pane()
+        D.Session._scan_signs(f, b"some output\x1b[?2")
+        self.assertIsNone(f.cursor_shown)
+        D.Session._scan_signs(f, b"5l and more")
+        self.assertIs(f.cursor_shown, False, "a cursor sequence cut across two reads was lost")
 
 
 URL = "http://127.0.0.1:8801/?k=abc123"
