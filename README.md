@@ -4,7 +4,7 @@
 
 **Many terminals, one place, and each one keeps where you put it.**
 
-![palmar: three terminals on a canvas. Each carries a light — one working, one waiting for you, one finished. Two are dragged together into a group and travel as one until a held Alt takes one back out, and a PDF opens in a window of its own](docs/img/palmar.gif)
+![palmar: three terminals on a canvas. Each carries a light — one working, one waiting for you, one finished. Two are dragged together into a named group and travel as one until a held Alt takes one back out, a PDF opens in a window of its own, and Ctrl with the wheel stands back far enough to see all of it](docs/img/palmar.gif)
 
 > palmar runs no model, calls no API, and sends your work nowhere. It opens shells and shows you
 > where they are. The agents are the ones you already run.

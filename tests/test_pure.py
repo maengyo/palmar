@@ -1042,6 +1042,42 @@ class WhatAPaneHasEmitted(unittest.TestCase):
         self.assertIs(f.cursor_shown, False, "a cursor sequence cut across two reads was lost")
 
 
+class SeeingAndClosingWithoutABrowser(unittest.TestCase):
+    """`--list` and `--close` (#20). If the page will not open — a port taken, a remote shell with no
+    display, a UI that broke — there was no way to see what is running or close one of them, and
+    `pkill` takes every pane at once. Both go through endpoints the browser already uses, with the
+    token out of `run/token`, so there is no new daemon surface to get wrong.
+
+    The parts that can be checked without a daemon are here; `tests/test_daemon.py` drives the real
+    thing."""
+
+    def test_a_home_path_is_written_as_a_tilde(self):
+        """It is what the rail does, and it also keeps a home path out of anything pasted out of this
+        list — the one place a `--list` is most likely to end up is somebody else's screen."""
+        home = str(D.Path.home())
+        self.assertEqual(D.short_home(home), "~")
+        self.assertEqual(D.short_home(os.path.join(home, "work", "x")),
+                         os.path.join("~", "work", "x"))
+        self.assertEqual(D.short_home("/tmp/elsewhere"), "/tmp/elsewhere")
+
+    def test_the_same_folder_under_its_other_name(self):
+        """On a Mac `$HOME` is under `/var`, a link to `/private/var`, and the daemon answers with the
+        resolved one. A literal compare left the whole path on screen — which is what this is for."""
+        real = os.path.realpath(str(D.Path.home()))
+        if real == str(D.Path.home()):
+            self.skipTest("home is not reached through a link on this machine")
+        self.assertEqual(D.short_home(real), "~")
+
+    def test_nothing_to_ask_says_which_file_is_missing(self):
+        """The answer to "it printed nothing" has to name the file, or the next step is guesswork."""
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.object(D, "TOKEN_FILE", D.Path(home) / "run" / "token"):
+                status, why = D.ask_daemon("/api/sessions")
+        self.assertEqual(status, 0)
+        self.assertIn("token", why)
+        self.assertIn("daemon running", why)
+
+
 URL = "http://127.0.0.1:8801/?k=abc123"
 
 

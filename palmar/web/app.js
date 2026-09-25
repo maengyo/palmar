@@ -5458,6 +5458,15 @@ function boot() {
   // The shortcut guidance has to name this machine's keys. The handling side had long taken both metaKey and
   // ctrlKey (keydown below), but the guidance alone was nailed to ⌘, so on Linux·WSL it pointed at a key that is
   // not there. The default in the HTML is Ctrl — non-Mac is the wider case, and if detection fails, not changing is safer.
+  // **A tooltip is guidance too.** The rails' fold buttons had `⌘` written into the HTML, so on
+  // Linux and Windows they named a key that is not on the keyboard — the same fault as the search
+  // hint (#17), in the one place a person finds out the shortcut exists at all. They follow the
+  // rule the rest of the page follows now: Ctrl in the markup, swapped here on a Mac. The right
+  // rail's was wrong twice over — it takes Shift as well, and never said so.
+  if (IS_MAC) {
+    for (const el of document.querySelectorAll('[data-kmod][title]'))
+      el.title = el.title.replace('Ctrl', '⌘');
+  }
   if (IS_MAC) {
     const k = document.getElementById('kmod');
     if (k) k.firstElementChild.textContent = '⌘';

@@ -244,8 +244,8 @@
   <div class="body">
     <!-- Re-open tabs, shown only when a rail is collapsed. A collapsed rail is 0 wide, so without
          these there is nothing left to click to bring it back. -->
-    <button class="rail-open l" id="open-l" type="button" hidden title="show the terminal list" aria-label="show the terminal list"><i>›</i></button>
-    <button class="rail-open r" id="open-r" type="button" hidden title="show the right rail" aria-label="show the right rail"><i>‹</i></button>
+    <button class="rail-open l" id="open-l" type="button" hidden data-kmod title="show the terminal list (Ctrl \)" aria-label="show the terminal list"><i>›</i></button>
+    <button class="rail-open r" id="open-r" type="button" hidden data-kmod title="show the right rail (Ctrl Shift \)" aria-label="show the right rail"><i>‹</i></button>
     <!-- The rail-edge grips (#19). Laid on the boundary, not in a grid cell — see `.rz` in style.css. -->
     <div class="rz l" id="rz-l" role="separator" aria-orientation="vertical" tabindex="0"
          aria-label="resize the terminal list — arrow keys, or double-click to reset"></div>
@@ -255,7 +255,7 @@
     <aside class="rail left">
       <!-- ＋ here: the list of terminals is where a new one belongs, the same way the folder tree has
            its own ＋ — the launcher that used to live in the right rail is gone (2026-09-15). -->
-      <div class="rh"><span class="t">Terminals <span class="n" id="count">0</span></span><span class="sp"></span><span class="ib plus" id="newterm" role="button" tabindex="0" title="new terminal, in your home folder (Ctrl/⌘ ⏎)">+</span><button class="rail-fold" id="fold-l" type="button" title="collapse (⌘\)" aria-label="collapse the terminal list">‹</button></div>
+      <div class="rh"><span class="t">Terminals <span class="n" id="count">0</span></span><span class="sp"></span><span class="ib plus" id="newterm" role="button" tabindex="0" title="new terminal, in your home folder (Ctrl/⌘ ⏎)">+</span><button class="rail-fold" id="fold-l" type="button" data-kmod title="collapse (Ctrl \)" aria-label="collapse the terminal list">‹</button></div>
       <div class="scroll" id="list"></div>
       <!-- The line that says where status comes from. Not a value asked of the daemon — a stated fact.
            **No listing of agent names** — reading by title (protocol.md "제목으로 읽기") works with
@@ -297,7 +297,7 @@
            processes, so opening eight of them is a thing a person presses once. Hidden unless there
            is something to offer, and gone once anything has been opened. -->
       <div class="restore" id="restore" hidden></div>
-      <div class="rh"><button class="rail-fold r" id="fold-r" type="button" title="collapse (⌘\)" aria-label="collapse the right rail">›</button><span class="t">Directories</span><span class="sp"></span><span class="ib plus" id="mkdir" title="new folder">+</span><span class="ib" id="refresh" title="refresh">↻</span></div>
+      <div class="rh"><button class="rail-fold r" id="fold-r" type="button" data-kmod title="collapse (Ctrl Shift \)" aria-label="collapse the right rail">›</button><span class="t">Directories</span><span class="sp"></span><span class="ib plus" id="mkdir" title="new folder">+</span><span class="ib" id="refresh" title="refresh">↻</span></div>
       <div class="scroll">
         <div class="tree" id="tree"></div>
         <div class="hint2" id="tree-hint">click a file to view it · read when expanded</div>

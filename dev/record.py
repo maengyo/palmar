@@ -114,6 +114,17 @@ class Take:
         self.br.ws.call("Input.dispatchMouseEvent",
                         dict(type=kind, x=x, y=y, button="left", **kw))
 
+    def wheel(self, x, y, steps, dy, pause=0.0):
+        """Ctrl and the wheel, filming every notch. **The real gesture** — calling `setZoom` would
+        record the scale changing and not the thing a person does to change it."""
+        for _ in range(steps):
+            self.br.ws.call("Input.dispatchMouseEvent",
+                            dict(type="mouseWheel", x=x, y=y, deltaX=0, deltaY=dy, modifiers=2))
+            self.frame()
+            time.sleep(1.0 / FPS_CAP)
+        if pause:
+            self.hold(pause)
+
     def drag(self, x0, y0, x1, y1, steps=14, alt=False, pause=0.0):
         """Press, travel, let go — filming every step.
 
@@ -246,7 +257,7 @@ def run(out_dir: str, keep: bool) -> int:
         # which it was joining ("위쪽에 그룹핑 되다가 아래쪽 되다가", 2026-09-17). The two that join sit
         # side by side at the top; the third is well below, and the minimap owns the bottom-right.
         d.raw("PUT", "/api/layout", {"layout": {
-            a["id"]: {"x": 24, "y": 24, "w": 430, "h": 250, "z": 3, "g": GREEN_GROUP},
+            a["id"]: {"x": 24, "y": 24, "w": 430, "h": 250, "z": 3, "g": GREEN_GROUP, "gn": "api"},
             b["id"]: {"x": 510, "y": 24, "w": 320, "h": 250, "z": 2},
             c["id"]: {"x": 24, "y": 350, "w": 430, "h": 210, "z": 1},
         }})
@@ -293,7 +304,31 @@ def run(out_dir: str, keep: bool) -> int:
         # ④ a file opens in a window like any other
         br.ev("window.palmar.openViewer(%s, null, {x: 300, y: 40})"
               % json.dumps(os.path.join(proj, "handbook.pdf")))
-        take.hold(3.4)
+        take.hold(2.4)
+
+        # ⑤ **stand back.** The canvas is bigger than the screen and the README says so; the picture
+        # did not. Ctrl and the wheel over the bare floor — the gesture itself, over a point with no
+        # window under it, because that is the only place it takes. It draws the windows smaller and
+        # tells no terminal anything, which is the half of it a still frame cannot say.
+        bare = br.ev("""(()=>{const s=document.getElementById('cv-scroll');
+          const b=s.getBoundingClientRect();
+          // Low and to the left of the minimap: empty floor in every take so far.
+          const x=b.left+90, y=b.bottom-70;
+          return document.elementFromPoint(x,y)===s ? {x:x,y:y} : null;})()""")
+        # **Three notches, not seven.** Seven took it to the floor of the scale (0.2) and the windows
+        # became specks in a corner — a picture of empty canvas. Three lands near 0.55, which is far
+        # enough back to hold all of it and close enough to still read the lights.
+        #
+        # **And the way home is the button, not the wheel back.** Wheeling back holds the point under
+        # the pointer, and the pointer has to be on bare floor for the gesture to take at all — so it
+        # came home centred on empty canvas with the windows out of frame, which is a poor last thing
+        # to show anybody. The button lands on the window you were working in.
+        if bare:
+            take.wheel(bare["x"], bare["y"], steps=3, dy=60, pause=1.5)
+            br.ev("(()=>{document.getElementById('fit').click(); return 1;})()")
+            take.hold(1.6)
+        else:
+            take.hold(1.0)
 
         errs = br.errors()
         if errs:

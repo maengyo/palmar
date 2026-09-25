@@ -88,8 +88,9 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+import urllib.error
 import urllib.request
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from . import PROTOCOL, __version__
 # **One seam instead of thirty-nine.** The daemon talks to a Pty object, never to a master fd —
@@ -5225,6 +5226,99 @@ def raise_windows_window() -> bool:
     return True
 
 
+#: **The two things you cannot do without a browser** (#20). If the page will not open — a port
+#: taken, a remote shell with no display, a UI that broke — there was no way to see what is running
+#: or to close one of them, and `pkill` is not an answer: it takes every pane at once.
+#:
+#: **No new daemon surface.** Both go through endpoints the browser already uses, with the token out
+#: of `run/token`, the way `--stop` and `--doctor` already reach a running daemon. Anything this
+#: could do, a person with that token could do with `curl` — which is the point: it is the same
+#: authority, not a second one.
+def ask_daemon(path: str, method: str = "GET", timeout: float = 5.0):
+    """(status, body) from the running daemon, or (0, reason) when there is nobody to ask."""
+    try:
+        token = TOKEN_FILE.read_text("utf-8").strip()
+    except OSError:
+        return 0, "no token file (%s) — is a daemon running for this HOME?" % TOKEN_FILE
+    try:
+        url = URL_FILE.read_text("utf-8").strip()
+    except OSError:
+        return 0, "no address (%s) — is a daemon running for this HOME?" % URL_FILE
+    base = url.split("/?")[0]
+    req = urllib.request.Request(base + path + ("&" if "?" in path else "?") + "token=" + token,
+                                 headers={"Origin": base}, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+            return r.status, (json.loads(raw) if raw else None)
+    except urllib.error.HTTPError as e:
+        return e.code, None
+    except Exception as e:
+        return 0, "%s would not answer — %s" % (base, e)
+
+
+def list_sessions() -> int:
+    """`palmar --list` — one line per pane: id, light, what is running, and where.
+
+    The id is first and on its own, because the only thing to do with this list is to paste one of
+    them into `--close`."""
+    status, body = ask_daemon("/api/sessions")
+    if status == 0:
+        print(body, file=sys.stderr)
+        return 1
+    if status != 200:
+        print("the daemon answered %d" % status, file=sys.stderr)
+        return 1
+    rows = (body or {}).get("sessions") if isinstance(body, dict) else (body or [])
+    rows = rows or []
+    if not rows:
+        print("no terminals open.")
+        return 0
+    # Longest first so the columns line up without a table library.
+    w = max(len(str(r.get("id", ""))) for r in rows)
+    for r in rows:
+        name = r.get("name") or r.get("fg") or "shell"
+        where = short_home(r.get("cwd") or "")
+        print("%-*s  %-8s %-14s %s" % (w, r.get("id", ""), r.get("status", "?"), name[:14], where))
+    print("\n%d terminal%s — `palmar --close <id>` closes one." % (len(rows), "" if len(rows) == 1 else "s"))
+    return 0
+
+
+def close_session(sid: str) -> int:
+    """`palmar --close <id>` — the same DELETE the window's × sends, so a pane closed from here and
+    one closed from the page end the same way: the shell gets its SIGHUP and the page is told."""
+    status, body = ask_daemon("/api/sessions/" + quote(str(sid), safe=""), method="DELETE")
+    if status == 0:
+        print(body, file=sys.stderr)
+        return 1
+    if status == 404:
+        print("no terminal with that id — `palmar --list` shows them.", file=sys.stderr)
+        return 1
+    if status not in (200, 204):
+        print("the daemon answered %d" % status, file=sys.stderr)
+        return 1
+    print("closed %s." % sid)
+    return 0
+
+
+def short_home(path: str) -> str:
+    """`~` for the home directory, the way the rail writes it. Cosmetic, and it also keeps a home
+    path out of anything pasted from this list."""
+    try:
+        home = str(Path.home())
+    except Exception:
+        return path
+    # **And the same folder by its other name.** On a Mac `$HOME` is under `/var`, which is a link to
+    # `/private/var`, and the daemon answers with the resolved one — so a literal compare leaves the
+    # whole path on screen, which is the thing this is here to avoid.
+    for h in (home, os.path.realpath(home)):
+        if path == h:
+            return "~"
+        if h and path.startswith(h + os.sep):
+            return "~" + path[len(h):]
+    return path
+
+
 def ask_focus(url: str) -> int:
     """`POST /api/focus` on the running daemon: it tells every open page to come forward and says how
     many there are. -1 when there is no daemon to ask."""
@@ -6217,6 +6311,10 @@ def cli() -> None:
                     help="open another window even when one is already open")
     # Closing a window does not stop the daemon — it holds live shells, and that is the point. So
     # there has to be a way to say stop, and it is this one (asked for 2026-09-11).
+    ap.add_argument("--list", action="store_true", dest="list_",
+                    help="list the terminals this HOME's daemon has, and exit")
+    ap.add_argument("--close", metavar="ID",
+                    help="close one terminal by id (`--list` shows the ids), and exit")
     ap.add_argument("--stop", action="store_true",
                     help="stop this HOME's daemon (the shells in it die with it)")
     # **Detached is the default**, because the daemon outliving the terminal is the point of it
@@ -6225,6 +6323,10 @@ def cli() -> None:
     ap.add_argument("--foreground", action="store_true",
                     help="stay attached to this terminal (Ctrl-C stops it); detaching is the default")
     args = ap.parse_args()
+    if args.list_:
+        raise SystemExit(list_sessions())
+    if args.close:
+        raise SystemExit(close_session(args.close))
     if args.stop:
         raise SystemExit(stop_daemon())
     if args.doctor:

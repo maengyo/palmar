@@ -2149,6 +2149,61 @@ class StopTrustsTheLock(unittest.TestCase):
         self.assertIn("not palmar's", r.stdout)
 
 
+class SeeingAndClosingWithoutABrowser(unittest.TestCase):
+    """`--list` and `--close` (#20). The point of them is the moment the page will not open, so they
+    are driven the way a person would — the real CLI against a real daemon, not the functions."""
+
+    def cli(self, home, *args):
+        from tests.helpers import PYTHON, REPO
+        return subprocess.run([PYTHON, "-m", "palmar", *args], cwd=REPO, capture_output=True,
+                              text=True, timeout=60,
+                              env=dict(os.environ, HOME=home, PYTHONPATH=REPO))
+
+    def test_it_lists_them_and_closes_one(self):
+        with Daemon() as d:
+            for n in ("build", "notes"):
+                d.post("/api/sessions", {"cwd": d.home, "name": n})
+            time.sleep(2)
+            out = self.cli(d.home, "--list")
+            self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+            self.assertIn("build", out.stdout)
+            self.assertIn("notes", out.stdout)
+            self.assertIn("2 terminals", out.stdout)
+            # The id comes first and alone, because pasting one into --close is the only thing to do
+            # with this list.
+            sid = out.stdout.splitlines()[0].split()[0]
+            gone = self.cli(d.home, "--close", sid)
+            self.assertEqual(gone.returncode, 0, gone.stdout + gone.stderr)
+            self.assertIn("closed", gone.stdout)
+            # **The daemon agrees, not just the CLI.** Closing has to be the same DELETE the page's
+            # × sends, or there are two ways to close a pane and one of them is nobody's.
+            time.sleep(1)
+            got = d.get("/api/sessions")
+            left = [x["id"] for x in (got["sessions"] if isinstance(got, dict) else got)]
+            self.assertNotIn(sid, left)
+            self.assertIn("1 terminal —", self.cli(d.home, "--list").stdout)
+
+    def test_an_id_that_is_not_there_says_where_to_look(self):
+        with Daemon() as d:
+            r = self.cli(d.home, "--close", "nosuchid")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("--list", r.stderr)
+
+    def test_an_empty_daemon_says_so_rather_than_printing_a_blank(self):
+        with Daemon() as d:
+            r = self.cli(d.home, "--list")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("no terminals open", r.stdout)
+
+    def test_with_no_daemon_it_names_the_file_it_wanted(self):
+        """"It printed nothing" is not an answer anybody can act on."""
+        home = tempfile.mkdtemp(prefix="palmar-nolist-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        r = self.cli(home, "--list")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("daemon running", r.stderr)
+
+
 class ThePageIsFenced(unittest.TestCase):
     def test_index_html_carries_a_script_src_policy_with_a_nonce(self):
         with Daemon() as d:
