@@ -2056,12 +2056,18 @@ class Grouping(unittest.TestCase):
                   opacity: getComputedStyle(tag).opacity,
                   covered: over.left < q.right && over.right > q.left
                            && over.top < q.bottom && over.bottom > q.top,
+                  // **A chip, not bare text.** The gap above a frame is not always empty, and
+                  // coloured text with nothing behind it read as something scribbled into the
+                  // terminal underneath (user, 2026-09-27).
+                  bg: getComputedStyle(tag).backgroundColor,
                   touched: hit && (hit === tag || tag.contains(hit)) ? 'the name' : (hit && hit.className)};""")
         self.assertEqual(r["text"], "deploy")
         self.assertEqual(r["parent"], "cv-names", "the name is not in the layer above the windows")
         self.assertEqual(r["opacity"], "1", "something is fading the name: %r" % (r,))
         self.assertTrue(r["covered"], "the window was not in the way — this test proves nothing: %r" % (r,))
         self.assertEqual(r["touched"], "the name", "a window is on top of the group's name: %r" % (r,))
+        self.assertNotIn(r["bg"], ("rgba(0, 0, 0, 0)", "transparent"),
+                         "the name has nothing behind it — over a window it reads as terminal text")
 
     def test_the_names_layer_moves_with_the_world(self):
         """Two layers over one board only work while they agree. They are written from one place in

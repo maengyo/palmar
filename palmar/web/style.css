@@ -863,11 +863,24 @@ body.ui-mono { --ui: var(--mono); }
    is 16% opaque and a label in there is 16% opaque too — and **not among the windows** either, where
    a tile's ever-climbing z-index covered it. It lives in `.cv-names`, which is a layer above them. */
 .gname {
-  position: absolute; transform: translateY(-1.35em);
+  /* **It sits on the frame's top-left corner, so `-100%` and not an em.** The anchor is the corner
+     itself; taking the label's own height off it puts the whole of it in the gap above the frame
+     whatever the font metrics turn out to be, which `-1.35em` only guessed at. */
+  position: absolute; transform: translateY(calc(-100% - 2px));
   font-size: 11px; font-weight: 600; line-height: 1.25; letter-spacing: .01em;
   color: color-mix(in srgb, var(--group) 62%, var(--ink));
   pointer-events: auto; cursor: text; user-select: none;
   max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* **It is a chip, because the gap above a frame is not always empty.** Another window can be
+     sitting exactly there, and bare coloured text over a terminal reads as something scribbled
+     into the terminal rather than as the group's name (user, 2026-09-27: "터미널과 겹쳐 있는데
+     의도된거야?"). It was hidden behind that window before the names got a layer of their own —
+     moving it up made an old collision visible, not a new one. The ground colour punches a hole in
+     whatever is behind, and the group's own colour on the edge says whose name it is. */
+  padding: 1px 6px; border-radius: 6px;
+  background: var(--ground);
+  border: 1px solid color-mix(in srgb, var(--group) 42%, transparent);
+  box-shadow: 0 1px 3px rgba(0,0,0,.18);
   transition: left .35s cubic-bezier(.2,.8,.2,1), top .35s cubic-bezier(.2,.8,.2,1);
 }
 .gname.carried { transition: none; }
