@@ -813,6 +813,43 @@ body.ui-mono { --ui: var(--mono); }
    origin the windows are placed from, so there is room on the left and above too — scrollLeft
    cannot go below zero, so slack up there has to come from moving the origin, not the scroll.
    Neither takes a pointer: pressing empty space must still reach `.cv-scroll` and pan. */
+/* ── the empty canvas ──────────────────────────────────────
+   **It sits over the canvas, not in it.** Inside `.cv-scroll` it would take a board position and
+   scroll away from the middle the moment anybody panned; the point of it is to be where the eye
+   already is. Nothing here takes a pointer except the button — a press on the canvas still pans. */
+.cv-empty {
+  position: absolute; inset: 0; z-index: 4;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  pointer-events: none; text-align: center; padding: 0 16px;
+}
+.cv.has-panes .cv-empty { display: none; }
+.cv-empty p {
+  margin: 0; font-size: 15px; font-weight: 500; letter-spacing: .01em;
+  color: var(--ink-2); opacity: .62;
+}
+.cv-empty small { font-size: 11.5px; color: var(--ink-3); opacity: .5; }
+.cv-empty kbd {
+  font: inherit; font-size: 11px; padding: 1px 5px; margin: 0 1px;
+  border: 1px solid var(--line-2); border-radius: 4px; background: var(--kbd); color: var(--kbd-ink);
+}
+/* **Translucent, and solid under the hand** (user, 2026-09-27: 반투명하게). Faint enough that an
+   empty canvas still reads as empty rather than as a screen asking for something; it comes up to
+   full as soon as the pointer is on it, so there is no doubt it is a button. */
+.cv-empty-go {
+  pointer-events: auto; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600;
+  padding: 9px 20px; border-radius: 9px;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  opacity: .62; transition: opacity .15s, background-color .15s, border-color .15s;
+  -webkit-app-region: no-drag;
+}
+.cv-empty-go:hover, .cv-empty-go:focus-visible {
+  opacity: 1; background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 62%, transparent);
+}
+.cv-empty-go:active { transform: translateY(.5px); }
+@media (prefers-reduced-motion: reduce) { .cv-empty-go { transition: none; } }
+
 .cv-pad, .cv-world, .cv-names { position: absolute; left: 0; top: 0; pointer-events: none; }
 .cv-pad { z-index: 0; }
 /* **`isolation` and not a z-index.** A tile's z-index goes ++ on every focus for ever, and penning

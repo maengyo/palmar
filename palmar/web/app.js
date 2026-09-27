@@ -2005,7 +2005,24 @@ function tidySlack(canvasId) {
 //: grey, and the other half of what it does, taking you back to what you were working in, could not
 //: be reached at all (user, 2026-09-17: "특정 터미널을 옮겨야만 버튼이 활성화되서 불편한거같아").
 //: A canvas with a window on it always has somewhere to take you. Only an empty one has not.
+//: **An empty canvas says what to do with it** (#13 "first run"; shape asked for 2026-09-27 —
+//: middle of the screen, in English, with a translucent button). It is painted from the same place
+//: as the tidy button because it asks the same question — is there anything on this canvas — and
+//: two places that count the same windows drift apart.
+//:
+//: **A window with no place on the board still counts.** `paintTidy` wants `layout[t.id]`, because
+//: a window it cannot place is one it cannot tidy; this wants only "is anything here", or a canvas
+//: whose windows have not been laid out yet flashes the invitation over them.
+function paintEmpty() {
+  if (!cv) return;
+  const here = current === null
+    ? tiles.size > 0
+    : [...tiles.values()].some((t) => t.s.canvas === current);
+  cv.classList.toggle('has-panes', here);
+}
+
 function paintTidy() {
+  paintEmpty();
   const b = document.getElementById('tidy');
   if (!b) return;
   const any = current !== null && [...tiles.values()].some((t) => t.s.canvas === current && layout[t.id]);
@@ -4265,6 +4282,9 @@ function renderByStatus() {
 }
 
 function renderList() {
+  // An empty canvas says what to do with it, and this is the function that runs whenever the answer
+  // to "is anything here" could have changed — a pane arriving, one going, a canvas switch.
+  paintEmpty();
   // #31 ④: rebuilding the list with a confirm strip open **drops that strip's focus onto body.**
   // The `yes.focus()` in askClose, reached through the openRowConfirm buildItem calls, does nothing because the row
   // is not attached to the document yet (focus() on a detached element is ignored). The strip still looks right
@@ -5666,6 +5686,11 @@ function boot() {
     ev.preventDefault();
     setZoom(zoom * Math.exp(-ev.deltaY / 300), { x: ev.clientX, y: ev.clientY });
   }, { passive: false });
+  const emptyGo = document.getElementById('cv-empty-go');
+  if (emptyGo) emptyGo.addEventListener('click', () => newTerminal());
+  const emptyKey = document.getElementById('kmod-empty');
+  if (emptyKey && IS_MAC) emptyKey.textContent = '⌘';
+  paintEmpty();
   const tidyBtn = document.getElementById('tidy');
   // `byHand`: a person pressed it, so the view is allowed to go where the windows went. Auto-tidy
   // (the two calls above, on a pane disappearing) must not — nobody asked for that one.

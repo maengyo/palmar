@@ -271,6 +271,21 @@
     <section class="cvcol">
       <main class="cv" id="cv">
         <div class="cv-scroll" id="cv-scroll"></div>
+        <!-- **What an empty canvas says.** Until now it said nothing: one line of install, and the
+             first thing a person saw was a dot grid and no way of knowing what to do with it
+             (#13 "first run"). It is in the middle because that is where the eye lands on an empty
+             screen, and it is faint because it is furniture, not a dialog — the moment a terminal
+             exists it has no business being the brightest thing on the canvas.
+             Hidden by `.cv.has-panes`, which app.js toggles; a canvas with windows never draws it,
+             so there is nothing to fade out and nothing to lay out behind them. -->
+        <div class="cv-empty" id="cv-empty" aria-live="polite">
+          <p>Open a terminal to begin.</p>
+          <button class="cv-empty-go" id="cv-empty-go" type="button">Open a terminal</button>
+          <!-- The rail beside it already says "press + or Ctrl ⏎ to open one at home", so this does
+               not repeat the sentence — only the key, which is the part worth carrying and the part
+               that is gone when the rail is folded. -->
+          <small><kbd id="kmod-empty">Ctrl</kbd><kbd>&#8629;</kbd></small>
+        </div>
         <!-- One minimap only, for the canvas you are looking at (⑪).
              The daemon does not even know it is there (protocol.md "없는 것"). -->
         <!-- Shown only while the right rail is folded (style.css body.fold-r .fab): the rail's

@@ -26,6 +26,88 @@ from tests.helpers import Daemon
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class TheEmptyCanvas(unittest.TestCase):
+    """**What the first screen says** (#13 "first run"). Install is one line, and what came up after
+    it was a dot grid with nothing on it and no way of knowing what to do — so the canvas says it,
+    in the middle, where the eye lands on an empty screen (shape asked for 2026-09-27).
+
+    Its own daemon, because it needs a canvas with nothing on it and every other class here opens
+    panes in setUpClass."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def look(self):
+        return self.b.ev("""(()=>{const e=document.getElementById('cv-empty');
+          const g=document.getElementById('cv-empty-go'), r=g.getBoundingClientRect();
+          const mid=document.elementFromPoint(r.left+r.width/2, r.top+r.height/2);
+          return {shown: getComputedStyle(e).display !== 'none',
+                  words: e.querySelector('p').textContent.trim(),
+                  faint: parseFloat(getComputedStyle(g).opacity),
+                  pressable: mid === g || g.contains(mid),
+                  // 120px above the button is the invitation's own box. A press there has to reach
+                  // the floor, or the canvas would stop panning wherever this thing is.
+                  above: (document.elementFromPoint(r.left+r.width/2, r.top-120)||{}).id};})()""")
+
+    def test_it_says_what_to_do_and_the_button_is_pressable(self):
+        r = self.look()
+        self.assertTrue(r["shown"], "an empty canvas says nothing: %r" % (r,))
+        self.assertTrue(r["words"], "the invitation has no words")
+        self.assertTrue(r["pressable"], "the button cannot be pressed: %r" % (r,))
+        # Translucent on purpose — furniture, not a dialog. Solid would make an empty canvas read as
+        # a screen demanding something.
+        self.assertLess(r["faint"], 0.9, "the button is not translucent: %r" % (r,))
+        self.assertGreater(r["faint"], 0.3, "it is too faint to find: %r" % (r,))
+
+    def test_it_does_not_take_the_canvas_hostage(self):
+        """It covers the whole canvas, so if it took pointer events the floor could not be panned
+        and nothing could be dropped on it. Only the button takes them."""
+        self.assertEqual(self.look()["above"], "cv-scroll",
+                         "a press beside the button does not reach the canvas")
+
+    def test_pressing_it_opens_a_terminal_and_the_invitation_goes(self):
+        self.b.ev("document.getElementById('cv-empty-go').click()")
+        for _ in range(60):
+            time.sleep(0.5)
+            if self.b.ev("window.palmar.tiles.size") >= 1:
+                break
+        self.assertGreaterEqual(self.b.ev("window.palmar.tiles.size"), 1,
+                                "the button opened nothing")
+        self.assertFalse(self.look()["shown"],
+                         "the invitation is still there with a terminal on the canvas")
+        self.assertEqual(self.b.errors(), [])
+
+    def test_and_it_comes_back_when_the_last_one_goes(self):
+        """It is painted from renderList, which is what runs whenever the answer to "is anything
+        here" can have changed — a pane arriving, a pane going, a canvas switch.
+
+        **It opens its own pane rather than using the one the test above left.** unittest runs these
+        alphabetically, so leaning on that one is leaning on the sort order of their names."""
+        mine = self.d.post("/api/sessions", {"cwd": self.d.home, "name": "lastone"})
+        for _ in range(40):
+            time.sleep(0.5)
+            if self.b.ev("window.palmar.tiles.size") >= 1:
+                break
+        self.assertFalse(self.look()["shown"], "a pane arrived and the invitation stayed")
+        for sid in self.b.ev("[...window.palmar.tiles.keys()]"):
+            self.d.delete("/api/sessions/" + sid)
+        for _ in range(40):
+            time.sleep(0.5)
+            if self.b.ev("window.palmar.tiles.size") == 0:
+                break
+        self.assertEqual(self.b.ev("window.palmar.tiles.size"), 0)
+        self.assertTrue(self.look()["shown"], "the canvas is empty again and says nothing")
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
 class Page(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
