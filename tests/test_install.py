@@ -9,6 +9,7 @@ import json
 import io
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -31,6 +32,92 @@ class Install(unittest.TestCase):
         if extra_env:
             env.update(extra_env)
         return subprocess.run(["/bin/sh", INSTALL], capture_output=True, text=True, timeout=60, env=env)
+
+    def checker(self, path, ours, group):
+        """Run the ownership check that lives inside install.sh, with `grp` and `pwd` standing in.
+
+        **The group scheme is the thing being decided, and a machine only has one.** This Mac puts
+        everyone in `staff`; a GitHub runner is `runner:docker`; Debian, Ubuntu and WSL give each
+        user a private group of their own name. Testing the decision on whichever of those the test
+        happens to run on tests the machine, not palmar — so both are handed to it."""
+        src = io.open(INSTALL, encoding="utf-8").read()
+        # The opening marker has the `|| die ...` on the same line, so the body starts at the
+        # newline after it, not at the marker.
+        start = src.index("\n", src.index("<<'OWN_EOF'")) + 1
+        body = src[start:src.index("\nOWN_EOF\n", start)]
+        drive = (
+            "import os, sys, types\n"
+            "me = os.getuid()\n"
+            "u = types.SimpleNamespace(pw_name='me', pw_gid=500)\n"
+            "g = types.SimpleNamespace(gr_name=%r, gr_gid=500, gr_mem=%r)\n"
+            "pwd = types.ModuleType('pwd'); pwd.getpwuid = lambda _uid: u\n"
+            "grp = types.ModuleType('grp'); grp.getgrgid = lambda _gid: g\n"
+            "sys.modules['pwd'] = pwd; sys.modules['grp'] = grp\n"
+        ) % (group[0], group[1]) + body
+        f = os.path.join(tempfile.mkdtemp(prefix="palmar-chk-"), "chk.py")
+        self.addCleanup(shutil.rmtree, os.path.dirname(f), ignore_errors=True)
+        io.open(f, "w", encoding="utf-8").write(drive)
+        return subprocess.run([sys.executable, f, path, "1" if ours else "0"],
+                              capture_output=True, text=True, timeout=60)
+
+    def test_a_group_writable_bin_is_tightened_when_the_group_is_yours_alone(self):
+        """**A umask of 002 stopped the install dead** (user, 2026-09-30, on a WSL):
+        `~/.local/bin, or a directory above it, is not yours alone`. Debian, Ubuntu and most WSL
+        images give each user a private group and ship that umask, so `mkdir -p ~/.local/bin` makes
+        a group-writable directory — and the installer had just made it itself and then refused to
+        install into it. A group of one is not a second account, so the bit is closed, not the
+        install; the daemon has taken the same line with ~/.palmar since #29."""
+        d = tempfile.mkdtemp(prefix="palmar-priv-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        os.chmod(d, 0o775)
+        r = self.checker(d, True, ("me", []))          # the private group: my name, nobody else
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("tightened", r.stdout)
+        self.assertFalse(stat.S_IMODE(os.stat(d).st_mode) & 0o022,
+                         "it said tightened and did not tighten")
+
+    def test_a_shared_group_is_still_refused(self):
+        """That is the case the check exists for: `staff`, `users`, a project group — a second
+        account that can replace every command on your PATH. The name is the test and not the gid,
+        because a system where everyone shares one primary group would pass a "is it mine" test
+        while being exactly the thing to refuse."""
+        for group in (("staff", ["root"]), ("me", ["someone-else"]), ("users", [])):
+            d = tempfile.mkdtemp(prefix="palmar-shared-")
+            self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+            os.chmod(d, 0o775)
+            r = self.checker(d, True, group)
+            self.assertNotEqual(r.returncode, 0, "group %r was accepted" % (group,))
+            self.assertIn("writable by group (mode 0775)", r.stderr, r.stderr)
+            self.assertEqual(stat.S_IMODE(os.stat(d).st_mode), 0o775,
+                             "it changed a directory it had just refused")
+
+    def test_it_never_tightens_what_it_did_not_make(self):
+        """`$SRC` — the checkout — is passed with the flag off. Loose is loose there and palmar
+        says so rather than reaching into somebody else's tree."""
+        d = tempfile.mkdtemp(prefix="palmar-notours-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        os.chmod(d, 0o775)
+        r = self.checker(d, False, ("me", []))
+        self.assertNotEqual(r.returncode, 0, "it tightened a directory it did not create")
+        self.assertEqual(stat.S_IMODE(os.stat(d).st_mode), 0o775)
+
+    def test_a_directory_above_is_named_and_not_tightened(self):
+        """A parent is not palmar's to change, and on a shared machine it may be deliberate — so it
+        refuses. **By name**: the old message gave the leaf and then three things it might be, which
+        is not something anybody can act on."""
+        top = tempfile.mkdtemp(prefix="palmar-loose-")
+        self.addCleanup(shutil.rmtree, top, ignore_errors=True)
+        os.chmod(top, 0o777)
+        r = self.run_install(extra_env={"PALMAR_PREFIX": os.path.join(top, "deep", "p"),
+                                        "PALMAR_APP_URL": "/nonexistent/palmar-app"})
+        self.assertNotEqual(r.returncode, 0, "it installed under a world-writable parent")
+        out = r.stdout + r.stderr
+        self.assertIn(os.path.realpath(top), out, "the refusal does not say which directory")
+        self.assertIn("0777", out, "the refusal does not say what is wrong with it")
+        self.assertIn("group and everyone", out, "the refusal does not say who can write there")
+        # And it must not have "fixed" somebody else's directory on the way past.
+        self.assertEqual(stat.S_IMODE(os.stat(top).st_mode), 0o777,
+                         "it changed a directory that was not its own")
 
     def as_linux(self, home):
         """A `uname` that answers Linux, first on PATH. The .desktop entry is behind that check and
@@ -158,7 +245,13 @@ class Install(unittest.TestCase):
         os.chmod(os.path.join(self.prefix, "bin"), 0o777)
         r = self.run_install()
         self.assertNotEqual(r.returncode, 0, "it put a world-writable directory first on PATH")
-        self.assertIn("writable by nobody else", r.stdout + r.stderr)
+        out = r.stdout + r.stderr
+        # **Writable by everyone is refused whoever made it**, and the refusal says which directory
+        # and what about it — the old message named the leaf and then listed three things it might
+        # be, which is not something anybody can act on.
+        self.assertIn("is writable by group and everyone (mode 0777)", out, out)
+        self.assertIn(os.path.join(self.prefix, "bin").split(os.sep)[-2], out,
+                      "the refusal does not say which directory")
         self.assertFalse(os.path.exists(os.path.join(self.prefix, "bin", "palmar")))
 
     def test_outside_a_checkout_it_fetches_the_tree_and_keeps_it(self):

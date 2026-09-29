@@ -153,22 +153,96 @@ else
   # The same rule sshd applies to ~/.ssh, all the way up: every directory above must be owned by you
   # or root and not writable by others unless it is sticky (/tmp) — a rename needs the *parent*, so a
   # writable parent lets another account swap the whole tree (review, 2026-09-15).
-  for d in "$PREFIX/bin" "$SRC"; do
-    "$PY" - "$d" <<'OWN_EOF' || die "$d, or a directory above it, is not yours alone: owned by you (or root), writable by nobody else, or sticky. chmod go-w it, or pick another PALMAR_PREFIX"
-import os, sys
+  # `$PREFIX/bin` is ours -- the mkdir above just made it -- so a loose bit on it is tightened
+  # rather than refused, the way the daemon already treats ~/.palmar (#29). Everything else is
+  # somebody else's to fix, so it is refused **by name**: the old message named the leaf and then
+  # listed three things it might be, which is not something anybody can act on.
+  #
+  # **The reason is printed by the checker, not captured here.** Wrapping this heredoc in `$(...)`
+  # is what a first attempt did, and bash then follows apostrophes *inside* a quoted heredoc while
+  # it hunts for the closing paren -- one `sshd's` in a comment and the whole script stops parsing.
+  for d in "$PREFIX/bin:1" "$SRC:0"; do
+    dir=${d%:*}; own=${d##*:}
+    "$PY" - "$dir" "$own" <<'OWN_EOF' || die "a directory that goes first on your PATH must be yours alone, or another account can replace every command in it. Fix the one named above (chmod go-w), or set PALMAR_PREFIX somewhere else."
+import os, sys, stat
+
+# The directory that goes first on PATH has to be ours and ours alone. A group- or world-writable
+# bin, or one owned by somebody else, lets another account replace the launcher -- and every
+# command, since it is first on PATH. This is the rule sshd applies to ~/.ssh, all the way up:
+# every directory above must be owned by you or root and not writable by others unless it is
+# sticky (/tmp), because a rename needs the *parent*, so a writable parent lets another account
+# swap the whole tree.
 p = os.path.realpath(sys.argv[1])
+ours = sys.argv[2] == "1"
 me = os.getuid()
-st = os.stat(p)
-if st.st_uid != me or st.st_mode & 0o022:
+
+
+def who(st):
+    bits = []
+    if st.st_mode & 0o020:
+        bits.append("group")
+    if st.st_mode & 0o002:
+        bits.append("everyone")
+    return " and ".join(bits)
+
+
+def no(msg):
+    sys.stderr.write("install: " + msg + "\n")
     raise SystemExit(1)
+
+
+st = os.stat(p)
+if st.st_uid != me:
+    no("%s is owned by uid %d, not by you (uid %d)" % (p, st.st_uid, me))
+def private_group(st):
+    # **A group of one is not a second account.** Debian, Ubuntu and most WSL images give each user
+    # a private group of their own name and ship umask 002, so every new directory comes out
+    # group-writable and the group it is writable by has exactly one member: you. A group with
+    # anybody else in it -- `staff`, `users`, a shared project group -- is a second account, and
+    # that is the case this check exists for.
+    #
+    # The test is the name, not the gid: a system where everyone shares one primary group would
+    # pass a "is it my primary group" test while being exactly the thing to refuse.
+    try:
+        import grp
+        import pwd
+        g = grp.getgrgid(st.st_gid)
+        u = pwd.getpwuid(me)
+    except (ImportError, KeyError):
+        return False
+    return g.gr_name == u.pw_name and not [m for m in g.gr_mem if m != u.pw_name]
+
+
+if st.st_mode & 0o002:
+    # Writable by everyone is never anything but wrong, whoever made it.
+    no("%s is writable by %s (mode %04o)" % (p, who(st), stat.S_IMODE(st.st_mode)))
+if st.st_mode & 0o020:
+    # **A umask of 002 stopped the install dead** (reported 2026-09-30, on a WSL): `mkdir -p
+    # ~/.local/bin` made a group-writable directory and the check refused it, on a machine where
+    # nothing was wrong but the umask. Where the group is yours alone that is not a second account,
+    # so the bit is closed rather than the install -- which is the line the daemon already takes
+    # with ~/.palmar (#29): something merely loose is tightened, not rejected.
+    if not ours or not private_group(st):
+        no("%s is writable by %s (mode %04o)" % (p, who(st), stat.S_IMODE(st.st_mode)))
+    try:
+        os.chmod(p, stat.S_IMODE(st.st_mode) & ~0o022)
+    except OSError as e:
+        no("%s is writable by %s and could not be tightened -- %s" % (p, who(st), e))
+    print("tightened %s -- it was group-writable, which is your umask" % p)
+
 while True:
     parent = os.path.dirname(p)
     if parent == p:
         break
     p = parent
     st = os.stat(p)
-    if st.st_uid not in (me, 0) or (st.st_mode & 0o022 and not st.st_mode & 0o1000):
-        raise SystemExit(1)
+    # A parent is not ours to change, and on a shared machine it may be deliberate -- so this says
+    # which one and what about it, and stops there.
+    if st.st_uid not in (me, 0):
+        no("%s is owned by uid %d -- it is above the install and not yours" % (p, st.st_uid))
+    if st.st_mode & 0o022 and not st.st_mode & 0o1000:
+        no("%s is writable by %s (mode %04o) and is not sticky"
+           % (p, who(st), stat.S_IMODE(st.st_mode)))
 OWN_EOF
   done
   # These are written into a shell line inside double quotes; a path that would break out of them
