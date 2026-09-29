@@ -32,6 +32,72 @@ class Install(unittest.TestCase):
             env.update(extra_env)
         return subprocess.run(["/bin/sh", INSTALL], capture_output=True, text=True, timeout=60, env=env)
 
+    def as_linux(self, home):
+        """A `uname` that answers Linux, first on PATH. The .desktop entry is behind that check and
+        this is a Mac; faking the one answer runs the real branch rather than a copy of it."""
+        fake = tempfile.mkdtemp(prefix="palmar-uname-")
+        self.addCleanup(shutil.rmtree, fake, ignore_errors=True)
+        un = os.path.join(fake, "uname")
+        with open(un, "w") as fh:
+            fh.write('#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; *) echo Linux ;; esac\n')
+        os.chmod(un, 0o755)
+        return {"PATH": fake + ":/usr/bin:/bin", "HOME": home,
+                "XDG_DATA_HOME": os.path.join(home, ".local", "share"),
+                # **An absolute path that is not there**, which install.sh treats as "no window"
+                # and says so without failing (test_no_window_is_not_a_failure). A bare "0" is
+                # neither a URL nor a path and the script rightly refuses it — which is how this
+                # test first went red, on its own setup rather than on what it was asking.
+                "PALMAR_APP_URL": "/nonexistent/palmar-app"}
+
+    def test_linux_gets_a_menu_entry_that_starts_palmar(self):
+        """**An icon has to start palmar, not open its address.** On Windows the visible way in had
+        become the app a browser installs — a window pointed at 127.0.0.1, which opens the page and
+        cannot start the daemon, so after a restart it said only "cannot connect" (reported
+        2026-09-29). The same icon is installable from Chrome on Linux, so the same hole is here.
+        """
+        home = tempfile.mkdtemp(prefix="palmar-desk-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        r = self.run_install(extra_env=self.as_linux(home))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        entry = os.path.join(home, ".local", "share", "applications", "palmar-start.desktop")
+        self.assertTrue(os.path.exists(entry), "no menu entry was written:\n" + r.stdout)
+        body = io.open(entry, encoding="utf-8").read()
+        self.assertIn("Exec=" + os.path.join(self.prefix, "bin", "palmar"), body,
+                      "the entry does not run the launcher: %r" % body)
+        # The thing that was wrong on Windows: an icon carrying an address instead of the program.
+        for dead in ("127.0.0.1", "http://", "?k="):
+            self.assertNotIn(dead, body, "the entry carries an address (%s)" % dead)
+        self.assertIn("Type=Application", body)
+        self.assertIn("Icon=palmar", body)
+        self.assertTrue(os.path.exists(os.path.join(
+            home, ".local", "share", "icons", "hicolor", "512x512", "apps", "palmar.png")),
+            "the entry names an icon that was not installed")
+
+    def test_the_menu_entry_is_not_autostart(self):
+        """The daemon holds shells; starting it at login hands you panes nobody asked for. It goes in
+        `applications`, never in `autostart`."""
+        home = tempfile.mkdtemp(prefix="palmar-desk-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        self.run_install(extra_env=self.as_linux(home))
+        self.assertFalse(os.path.exists(os.path.join(home, ".config", "autostart")),
+                         "the installer wrote an autostart entry")
+        src = io.open(INSTALL, encoding="utf-8").read()
+        code = "\n".join(l for l in src.split("\n") if not l.lstrip().startswith("#"))
+        for never in ("autostart", "systemd", "--user enable"):
+            self.assertNotIn(never, code, "the installer is arranging to start palmar by itself")
+
+    def test_a_mac_gets_no_menu_entry(self):
+        """There is no per-user equivalent on macOS that is not a .app bundle, which is #12. Writing
+        something that does not work there is worse than writing nothing."""
+        home = tempfile.mkdtemp(prefix="palmar-desk-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        self.run_install(extra_env={"HOME": home, "PALMAR_APP_URL": "/nonexistent/palmar-app",
+                                    "XDG_DATA_HOME": os.path.join(home, ".local", "share")})
+        if os.uname().sysname != "Darwin":
+            self.skipTest("this machine is not a Mac")
+        self.assertFalse(os.path.exists(os.path.join(home, ".local", "share", "applications")),
+                         "a menu entry was written on a Mac")
+
     def test_the_launcher_ignores_a_palmar_in_the_current_directory(self):
         """`python -m` puts the current directory first on sys.path, so `palmar` typed inside any other
         checkout ran the palmar of *that* checkout — an old clone kept for testing answered

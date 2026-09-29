@@ -192,6 +192,49 @@ SHIM_EOF
   chmod +x "$SHIM"
   say ""
   say "installed a launcher at $SHIM"
+
+  # ── 3a. a menu entry, on Linux ──────────────────────────────────────────────────────────
+  # **An icon has to start palmar, not open its address.** On Windows the visible way in had become
+  # the app a browser installs, which is a window pointed at 127.0.0.1: it opens the page and cannot
+  # start the daemon, so after a restart it said only "cannot connect" (reported 2026-09-29). The
+  # same icon is installable from Chrome here, so the same hole is here; Linux just has not had a
+  # desktop entry at all, so nobody has fallen in it yet.
+  #
+  # **This is not autostart.** The daemon holds shells, and starting it at login would hand you panes
+  # nobody asked for — it goes in `applications`, never in `autostart`. Pressing it starts the daemon
+  # if it is down and brings the window forward if it is up, which is what `palmar` already does.
+  #
+  # Per-user, under $XDG_DATA_HOME (or ~/.local/share), so no root and no system directory. macOS has
+  # no equivalent that is not a .app bundle, which is the rest of #12.
+  if [ "$(uname -s 2>/dev/null)" = Linux ]; then
+    APPS="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+    ICONS="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/512x512/apps"
+    # **Not `palmar.desktop` by accident.** The Windows side had to avoid `palmar.lnk` because that
+    # exact name is how the daemon finds the app a *browser* installed, and it would have found its
+    # own shortcut and opened itself. Chrome names its installed web apps `chrome-<id>-Default.desktop`
+    # rather than `palmar.desktop`, so there is no collision here — but the name still says what it
+    # does, for the same reason: on a machine with both, the two icons have to be tellable apart.
+    ENTRY="$APPS/palmar-start.desktop"
+    if mkdir -p "$APPS" "$ICONS" 2>/dev/null; then
+      cp "$SRC/palmar/web/icon-512.png" "$ICONS/palmar.png" 2>/dev/null || true
+      rm -f "$ENTRY"                 # never write through something somebody planted there
+      cat > "$ENTRY" <<DESK_EOF
+[Desktop Entry]
+Type=Application
+Name=Start palmar
+Comment=Many terminals, one place - starts the daemon if it is not running
+Exec=$SHIM
+Icon=palmar
+Terminal=false
+Categories=Development;Utility;TerminalEmulator;
+StartupNotify=true
+DESK_EOF
+      chmod 644 "$ENTRY"
+      # Desktops cache this directory; without the refresh the entry can take a re-login to appear.
+      command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APPS" >/dev/null 2>&1
+      say "and a menu entry at $ENTRY"
+    fi
+  fi
   # ── 3b. the window, when there is one ───────────────────────────────────────────────────
   # `palmar` opens its own window before a browser (2026-09-15), so a built one goes beside the
   # launcher. Three sources, none required: PALMAR_APP_URL (a URL, or a local file), a build inside
