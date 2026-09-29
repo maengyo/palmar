@@ -312,9 +312,23 @@ if (-not $src) {
 # -- 4. write the launcher ----------------------------------------------------
 $bin = Join-Path $Prefix 'bin'
 $cmd = Join-Path $bin 'palmar.cmd'
+# **Where the icons go.** Per-user, so no administrator is involved, same as everything else here.
+$startDir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+# **Not `palmar.lnk`.** That exact name, in these exact two places, is what daemon.py's
+# `shortcut_under` looks for to find the app a browser installed -- so a shortcut of ours called
+# that would be found as the installed app, and `palmar` would open it, and it would run `palmar`.
+# The name says what it does, which is also what tells the two icons apart on a desktop that has
+# both: this one starts palmar, the browser's one only opens the page.
+$startLnk = Join-Path $startDir 'Start palmar.lnk'
+$deskLnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Start palmar.lnk'
+$icon = Join-Path $src 'palmar\web\icon.ico'
+
 Say 'This will write, and nothing else:'
 Say ("    {0}" -f $cmd)
 Say ("    a launcher running {0} against {1}" -f $found.Exe, $src)
+Say ("    {0}" -f $startLnk)
+Say ("    {0}" -f $deskLnk)
+Say '    two shortcuts to that launcher -- see below for why they are not a web app icon'
 if (-not $Yes) {
   $a = Read-Host 'Go ahead? [y/N]'
   if ($a -notmatch '^(y|yes)$') { Say 'Nothing was written.'; exit 0 }
@@ -338,8 +352,69 @@ $preArgs = if ($found.Pre.Count) { ($found.Pre -join ' ') + ' ' } else { '' }
   ('"{0}" {1}"{2}\launch.py" %*' -f $found.Exe, $preArgs, $src)
 ) | Set-Content -Path $cmd -Encoding ASCII
 
+# -- 4b. shortcuts that start palmar --------------------------------------------
+#: **A shortcut to the launcher, not to the address.** Installing palmar as a web app from Edge or
+#: Chrome gives an icon that is a *browser window pointed at 127.0.0.1* -- it opens the page and it
+#: does not, and cannot, start the daemon. So after a reboot the most visible way in is dead, and
+#: what it shows is the browser's own ERR_CONNECTION_REFUSED, which palmar cannot reach to explain
+#: (reported 2026-09-29: after a restart, the desktop icon says it cannot connect).
+#:
+#: **This is not autostart and palmar still starts nothing.** The daemon holds shells, so bringing it
+#: up at login would hand you panes nobody asked for. The shortcut only makes the obvious icon the
+#: one that works: pressing it starts the daemon if it is down, and brings the window forward if it
+#: is already up -- the same thing typing `palmar` does, which is the point.
+#:
+#: **`pythonw.exe` where there is one**, so pressing it does not flash a console. It is python.exe's
+#: neighbour; when it is not there the .cmd runs minimised instead, which is a flash rather than a
+#: window. `WorkingDirectory` is the profile and not $src: a shortcut that sets the working directory
+#: to the checkout would open palmar's first terminal inside palmar's own source.
+function New-PalmarShortcut([string]$Path, [string]$Target, [string]$Arguments, [string]$Icon) {
+  try {
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+      New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+    $sh = New-Object -ComObject WScript.Shell
+    $lnk = $sh.CreateShortcut($Path)
+    $lnk.TargetPath = $Target
+    $lnk.Arguments = $Arguments
+    $lnk.WorkingDirectory = $HOME
+    $lnk.Description = 'palmar -- many terminals, one place'
+    if ($Icon -and (Test-Path -LiteralPath $Icon)) { $lnk.IconLocation = $Icon }
+    if ($Target -like '*.cmd') { $lnk.WindowStyle = 7 }   # 7 = minimised: the console flashes, not sits
+    $lnk.Save()
+    return $true
+  } catch {
+    Say ("  could not write {0} -- {1}" -f $Path, $_.Exception.Message)
+    return $false
+  }
+}
+
+$pyw = ''
+try {
+  $maybe = Join-Path (Split-Path -Parent $found.Exe) 'pythonw.exe'
+  if (Test-Path -LiteralPath $maybe) { $pyw = $maybe }
+} catch {}
+if ($pyw) {
+  $lnkTarget = $pyw
+  $lnkArgs = ('{0}"{1}\launch.py"' -f $preArgs, $src)
+} else {
+  $lnkTarget = $cmd
+  $lnkArgs = ''
+}
+$made = 0
+foreach ($where in @($startLnk, $deskLnk)) {
+  if (New-PalmarShortcut $where $lnkTarget $lnkArgs $icon) { $made++ }
+}
+
 Say ''
 Say ("installed a launcher at {0}" -f $cmd)
+if ($made) {
+  Say ("and {0} 'Start palmar' shortcut{1} -- Start Menu and Desktop. Press one after a restart:" -f $made, $(if ($made -eq 1) { '' } else { 's' }))
+  Say '  it starts the daemon if it is down, and brings the window forward if it is up.'
+  Say '  (An icon installed from Edge or Chrome only opens the address -- after a'
+  Say '   restart there is nothing there yet, which is the connection error.)'
+}
 if ($env:PATH -and ($env:PATH -split ';' | Where-Object { $_ -eq $bin })) {
   Say 'run:  palmar'
 } else {

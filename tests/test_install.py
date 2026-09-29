@@ -6,6 +6,7 @@ stricter (no bashisms). Skipped where /bin/sh is missing, which on a dev machine
 from __future__ import annotations
 
 import json
+import io
 import os
 import shutil
 import subprocess
@@ -363,6 +364,64 @@ class InstallPs1(unittest.TestCase):
         self.assertIn("launch.py", body, "the launcher must run the tree by script path, not -m (review, 2026-09-15)")
         self.assertNotIn('set "PYTHONPATH', body, "an empty PYTHONPATH element is the cwd")
         self.assertIn("PYTHONSAFEPATH=1", body, "a palmar in the current directory would shadow the checkout")
+
+    def test_the_shortcut_points_at_the_launcher_and_not_at_an_address(self):
+        """**The icon after a restart** (user, 2026-09-29). Installing palmar as a web app from Edge
+        or Chrome gives an icon that is a browser window pointed at 127.0.0.1 — it opens the page and
+        it cannot start the daemon, so after a reboot the most visible way in is dead and what it
+        shows is the browser's own connection error, which palmar cannot reach to explain.
+
+        The .lnk itself needs Windows to write, and this machine is not one; what can be checked
+        here is the thing that was wrong — that the shortcut runs the launcher, and never an address.
+        Whoever has a Windows confirms the icon."""
+        src = io.open(os.path.join(REPO, "install.ps1"), encoding="ascii").read()
+        i = src.index("function New-PalmarShortcut")
+        whole = src[i:src.index("installed a launcher at")]
+        # **What runs, not what it says about itself.** The comment above this code quotes the very
+        # address that breaks, and a first version of this test caught its own explanation.
+        block = "\n".join(l for l in whole.split("\n") if not l.lstrip().startswith("#"))
+        self.assertIn("$lnk.TargetPath", block, "nothing sets the shortcut's target")
+        for dead in ("127.0.0.1", "http://", "?k="):
+            self.assertNotIn(dead, block,
+                             "the shortcut carries an address (%s) — that is the icon that breaks" % dead)
+        self.assertIn("launch.py", block, "the shortcut does not run the tree")
+        # It must not be autostart: the daemon holds shells, and bringing it up at login hands you
+        # panes nobody asked for. Nothing here may touch Run keys or the Startup folder.
+        for never in ("CurrentVersion\\Run", "Startup", "Register-ScheduledTask", "New-Service"):
+            self.assertNotIn(never, block, "the installer is arranging to start palmar by itself")
+
+    def test_the_shortcut_is_not_called_palmar_lnk(self):
+        """**That exact name is a trap.** `shortcut_under` in daemon.py finds the app a browser
+        installed by looking for `palmar.lnk` in the Start Menu and on the Desktop — the two places
+        this installer writes. A shortcut of ours with that name would be found as the installed app,
+        `palmar` would open it, and opening it runs `palmar`."""
+        src = io.open(os.path.join(REPO, "install.ps1"), encoding="ascii").read()
+        code = "\n".join(l for l in src.split("\n") if not l.lstrip().startswith("#"))
+        self.assertNotIn("'palmar.lnk'", code, "the installer writes the name the finder looks for")
+        self.assertIn("Start palmar.lnk", code, "the shortcut has no name")
+        # And the finder must still be looking for the browser's one, or this guard guards nothing.
+        daemon = io.open(os.path.join(REPO, "palmar", "daemon.py"), encoding="utf-8").read()
+        self.assertIn('f.lower() == "palmar.lnk"', daemon,
+                      "daemon.py no longer looks for palmar.lnk — this test is out of date")
+
+    def test_the_windows_icon_is_a_real_ico_with_the_sizes_windows_draws(self):
+        """A .lnk with no icon takes the console's, which is the blank-page icon reported before
+        (2026-09-18). Windows draws a shortcut at 16, 32, 48 and 256; giving it each size beats
+        letting it scale one down."""
+        ico = os.path.join(REPO, "palmar", "web", "icon.ico")
+        self.assertTrue(os.path.exists(ico), "no icon for the Windows shortcut")
+        with open(ico, "rb") as fh:
+            head = fh.read(6)
+        # ICONDIR: reserved 0, type 1 (icon), then the count.
+        self.assertEqual(head[:4], b"\x00\x00\x01\x00", "not an .ico file")
+        count = int.from_bytes(head[4:6], "little")
+        self.assertGreaterEqual(count, 4, "only %d size(s) in the icon" % count)
+        with open(ico, "rb") as fh:
+            fh.seek(6)
+            # A width byte of 0 means 256 in the ICO header, which is how the big one is written.
+            widths = {fh.read(16)[0] or 256 for _ in range(count)}
+        for want in (16, 32, 48, 256):
+            self.assertIn(want, widths, "the icon has no %dpx entry: %r" % (want, sorted(widths)))
 
     def test_it_asks_before_writing(self):
         """Without -Yes it must stop at the question rather than write. Answering nothing is a no."""
