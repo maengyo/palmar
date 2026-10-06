@@ -5772,6 +5772,54 @@ def acl_strangers(icacls_text: str) -> list:
     return sorted(set(found))
 
 
+#: **Which startup files a pane will actually run.** palmar opens `$SHELL`, and it wraps exactly
+#: three of them so that its own PATH comes back to the front after the user's own rc has had its
+#: turn: zsh through `ZDOTDIR`, bash through `--rcfile`, PowerShell through a preamble. Anything
+#: else is opened as it is.
+#:
+#: That last case is invisible from the inside and was reported as a fault in palmar — "기존의
+#: bashrc가 안불러와지네" (user, 2026-10-06). Measured here: with `$SHELL=/bin/bash` a marker in
+#: `~/.bashrc` reaches the pane, and with `$SHELL=/bin/sh` it does not, because `/bin/sh` is not
+#: bash and palmar does not pretend it is. Nothing was broken; nothing said so either, which is the
+#: part that was. The answer belongs in `--doctor` beside the shell it is about.
+def rc_plan(shell: str) -> list:
+    """Lines saying what a pane's shell reads, in the order a person would want them."""
+    base = os.path.basename(shell)
+    low = base.lower()
+    if base == "zsh" and (ZDOT_DIR / ".zshrc").exists():
+        return ["wrapped with ZDOTDIR — your own ~/.zshrc runs first, then palmar puts its PATH back",
+                "reads     %s (yours), then %s" % (HOME / ".zshrc", ZDOT_DIR / ".zshrc")]
+    if base == "bash" and BASHRC.exists():
+        mine, prof = HOME / ".bashrc", HOME / ".bash_profile"
+        rows = ["wrapped with --rcfile — yours runs first, then palmar puts its PATH back",
+                "reads     %s%s" % (mine, "" if mine.exists() else "   <- not there")]
+        if prof.exists():
+            rows.append("          %s instead, in a login shell" % prof)
+        return rows
+    if low in ("pwsh.exe", "powershell.exe") and PWSH_FILE.exists():
+        return ["wrapped with a preamble — your profile runs first (%s)" % PWSH_FILE]
+    #: **The case that looks like a bug from inside a pane**, and it has two quite different
+    #: causes — a shell palmar does not wrap, and a shell it does whose wrapper is not on disk.
+    #: Saying "not wrapped" for both would send somebody to change their shell when a restart was
+    #: the answer.
+    known = {"zsh": ZDOT_DIR / ".zshrc", "bash": BASHRC,
+             "pwsh.exe": PWSH_FILE, "powershell.exe": PWSH_FILE}
+    want = known.get(base) or known.get(low)
+    if want is not None:
+        return ["palmar wraps %s, but %s is not there." % (base, want),
+                "          The daemon writes it every time it starts, so restarting it should be",
+                "          the whole of the fix: `palmar --stop`, then `palmar`."]
+    rows = ["**not wrapped** — palmar wraps zsh, bash and PowerShell, and %s is none of them." % base,
+            "          A pane runs it with that shell's own startup files, and palmar's PATH is",
+            "          not put back in front afterwards."]
+    if low in ("sh", "dash", "ash"):
+        #: The one that gets reported: `~/.bashrc` is bash's file and `sh` will not read it.
+        rows.append("          `~/.bashrc` is **bash's** file and %s does not read it." % base)
+    rows.append("          palmar opens `$SHELL` and no client may pick another (#14) — `chsh`,")
+    rows.append("          or set SHELL before starting the daemon, to change which shell that is.")
+    return rows
+
+
 def doctor(port: int) -> int:
     """`palmar --doctor` — puts **this code**, **the running daemon** and **each pane's status** on one screen.
 
@@ -5885,7 +5933,11 @@ def doctor(port: int) -> int:
         out("  hooks     %s%s" % (PWSH_FILE, "" if PWSH_FILE.exists() else "   <- MISSING"))
         out("            PowerShell panes only — one opened with cmd.exe gets no hooks (#30)")
     out("  PATH      panes get %s first" % BIN_DIR)
-    out("  shell     %s" % " ".join(Pty_default_shell()))
+    shell = Pty_default_shell()
+    out("  shell     %s   <- $SHELL; palmar opens this and nothing else may pick it (#14)"
+        % " ".join(shell))
+    for i, line in enumerate(rc_plan(shell[0])):
+        out("  %s %s" % ("startup  " if i == 0 else "         ", line))
     out("")
 
     # **Is a daemon running** — screened by the lock. The token file outlives a dead daemon, so it is no evidence.

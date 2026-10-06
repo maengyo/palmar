@@ -1078,6 +1078,46 @@ class SeeingAndClosingWithoutABrowser(unittest.TestCase):
         self.assertIn("daemon running", why)
 
 
+class WhatAPaneWillRead(unittest.TestCase):
+    """**"기존의 bashrc가 안불러와지네"** (user, 2026-10-06), and nothing was broken. palmar opens
+    `$SHELL` and wraps exactly three shells so its PATH comes back in front after the user's own rc:
+    zsh with ZDOTDIR, bash with `--rcfile`, PowerShell with a preamble. Measured: with
+    `$SHELL=/bin/bash` a marker in `~/.bashrc` reaches the pane; with `$SHELL=/bin/sh` it does not,
+    because `/bin/sh` is not bash. That is right, and it was invisible — which is the part that was
+    not. `--doctor` says it now, beside the shell it is about."""
+
+    def test_the_three_it_wraps_say_which_file_runs_first(self):
+        for shell, want in (("/bin/zsh", "ZDOTDIR"), ("/bin/bash", "--rcfile")):
+            with mock.patch.object(D.Path, "exists", lambda self: True):
+                rows = D.rc_plan(shell)
+            self.assertIn(want, rows[0], "%s: %r" % (shell, rows))
+            self.assertTrue(any("reads" in r for r in rows), "it does not say which file: %r" % rows)
+
+    def test_a_shell_it_does_not_wrap_says_so_and_why_bashrc_is_not_read(self):
+        """The one that gets reported. `~/.bashrc` is bash's file; `sh` will not read it, and a
+        person looking at an empty prompt has no way to know that from inside the pane."""
+        rows = D.rc_plan("/bin/sh")
+        text = " ".join(rows)
+        self.assertIn("not wrapped", text)
+        self.assertIn("bashrc", text, "it does not answer the question that was actually asked")
+        self.assertIn("$SHELL", text, "it does not say where the choice is made")
+
+    def test_a_wrapper_that_is_missing_is_not_the_same_answer(self):
+        """Two causes look alike from a pane and want opposite advice: a shell palmar does not wrap
+        (change your shell) and one it does whose file is not on disk (restart the daemon). Saying
+        "not wrapped" for both sends somebody to chsh when a restart was the fix."""
+        with mock.patch.object(D.Path, "exists", lambda self: False):
+            rows = D.rc_plan("/bin/bash")
+        text = " ".join(rows)
+        self.assertNotIn("not wrapped", text, "a missing wrapper was reported as an unwrapped shell")
+        self.assertIn("--stop", text, "it does not say what to do about it")
+
+    def test_an_unknown_shell_is_not_told_to_restart(self):
+        rows = D.rc_plan("/usr/bin/fish")
+        self.assertIn("not wrapped", " ".join(rows))
+        self.assertNotIn("--stop", " ".join(rows), "fish was told a restart would help")
+
+
 URL = "http://127.0.0.1:8801/?k=abc123"
 
 
