@@ -768,7 +768,15 @@ class Tile {
       fontFamily: cssVar('--mono'),
       lineHeight: LINE_HEIGHT,
       theme: termTheme(),
-      scrollback: 1000,
+      //: **10,000 lines, not xterm's 1,000.** The old value was the library's default, never a
+      //: decision — and a thousand lines is less than one `make` (user, 2026-10-06). Measured at
+      //: 88 characters a line: 0.9 KB a line, so 9 MB for a pane that has actually filled it and
+      //: nothing at all for one that has not. Other terminals sit either side of this — tmux 2000,
+      //: GNOME 8192, Windows Terminal 9001 — and 50,000 was measured too, at 45 MB a pane, which is
+      //: too much to hand everybody by default.
+      //: **This is the browser's copy and it dies with the page.** What comes back after a reload
+      //: is the daemon's ring (⑨), which is a separate size for a separate reason.
+      scrollback: 10000,
       cursorBlink: false,
       allowProposedApi: true,
       // A link in terminal output (OSC 8) is somebody else's text: only http(s), and opened detached

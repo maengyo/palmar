@@ -117,8 +117,15 @@ LOW_WATER = 10_000
 PUMP_BUDGET = 256 * 1024
 #: Gather PTY bytes this long before sending. macOS PTYs read 1KB at a time; without it frames flood.
 COALESCE_MS = 5
-#: ⑨ — the ring buffer is 256KB per pane.
-RING = 256 * 1024
+#: ⑨ — the ring buffer: what a pane that nobody is watching keeps, so that a browser attaching
+#: later sees what already happened. **1MB per pane since 2026-10-07**, up from the 256KB the spike
+#: picked. That one was honest about being a guess — "사람이 위로 얼마나 보고 싶어 하는지는 관찰이
+#: 아니라 짐작이다 … 쓰다가 부족하면 늘린다" — and it ran short in use (user, 2026-10-06). The
+#: arithmetic it was chosen by still holds: output measured at 30-254 bytes a line, so the worst
+#: case is now ~4,000 lines rather than ~1,000. Measured cost below.
+RING = 1024 * 1024
+#: Overridable for measurement only — the comparison this size was chosen by has to be repeatable.
+RING = int(os.environ.get("PALMAR_RING_KB") or 0) * 1024 or RING
 #: Cap on ring-buffer segments, so an app that crosses in and out of alt often cannot grow them forever.
 RING_MAX_SEGS = 64
 #: Spike F — (rows, cols-1) → 50ms → (rows, cols).
@@ -307,7 +314,7 @@ LOCK_FH = [None]     # single-instance lock fd — held open while the daemon li
 #: Size caps from spike D.
 MAX_COLS, MAX_ROWS = 500, 200
 
-#: Cap on live panes. One pane is one shell + one pty + a 256KB ring + one settings file. Without a cap,
+#: Cap on live panes. One pane is one shell + one pty + a 1MB ring + one settings file. Without a cap,
 #: repeating `POST /api/sessions` alone exhausts fds and process slots, and then **other panes die too**
 #: (WSL's common fd soft limit is 1024 — nothing like this Mac's 1048576, so that side falls over first).
 #: Set far above what a person uses: at 200 the rings alone are 51MB, already past what anyone can use.
