@@ -1278,6 +1278,12 @@ body.fold-l .fab { display: grid; }
    `direction: rtl`: that puts the ellipsis in the right place but reorders the string, and
    `~/work/deep/nested` came out as `work/deep/nested/~`. */
 .rs-p { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* What the pane was running. The folder is where you go; this is what you run when you get there,
+   so it reads as the quieter of the two and takes the status colour nothing else in the card uses. */
+.rs-f {
+  color: color-mix(in srgb, var(--st-work) 70%, var(--ink-3));
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .rs-a { display: flex; gap: 6px; margin-top: 9px; }
 .rs-a button { height: 26px; border-radius: 6px; font: 500 11.5px var(--mono); cursor: pointer;
   padding: 0 10px; border: 1px solid transparent; }

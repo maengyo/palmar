@@ -350,7 +350,8 @@ class TheFolderAPaneIsIn(unittest.TestCase):
         f.title_hits = []
         f.osc_carry = b""
         # _scan_title reaches for it through self, and this stand-in is not a Session.
-        f.fg, f.fg_told = None, False
+        f.fg, f.fg_told, f.last_fg = None, False, None
+        f.set_fg = lambda name: D.Session.set_fg(f, name)
         f._title_cwd = lambda t: D.Session._title_cwd(f, t)
         f._title_run = lambda t: D.Session._title_run(f, t)
         f.bells, f.last_bell, f.cursor_shown, f.last_cursor, f.dec_carry = 0, None, None, None, b''
@@ -430,7 +431,8 @@ class WhenTheShellSaysItOutright(unittest.TestCase):
         f.last_out = 0.0
         f.title, f.title_hits, f.title_spun, f.osc_carry = "", [], False, b""
         f.cwd, f.pid = "/start", os.getpid()
-        f.fg, f.fg_told = None, False
+        f.fg, f.fg_told, f.last_fg = None, False, None
+        f.set_fg = lambda name: D.Session.set_fg(f, name)
         f._title_cwd = lambda t: D.Session._title_cwd(f, t)
         f._title_run = lambda t: D.Session._title_run(f, t)
         f.bells, f.last_bell, f.cursor_shown, f.last_cursor, f.dec_carry = 0, None, None, None, b''
@@ -722,6 +724,8 @@ class AVersionIsNotAName(unittest.TestCase):
             pass
         f = F()
         f.pid, f.fg, f.fg_told = 1, None, False
+        f.last_fg = None
+        f.set_fg = lambda name: D.Session.set_fg(f, name)
         f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
         asked = []
         with mock.patch.object(D, "comm_of", lambda pid: "vim"), \
@@ -736,6 +740,8 @@ class AVersionIsNotAName(unittest.TestCase):
             pass
         f = F()
         f.pid, f.fg, f.fg_told = 1, None, False
+        f.last_fg = None
+        f.set_fg = lambda name: D.Session.set_fg(f, name)
         f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
         with mock.patch.object(D, "comm_of", lambda pid: "2.1.278"), \
              mock.patch.object(D, "exe_of", lambda pid: "/Users/x/.local/share/claude/versions/2.1.278"), \
@@ -750,6 +756,8 @@ class AVersionIsNotAName(unittest.TestCase):
             pass
         f = F()
         f.pid, f.fg, f.fg_told = 1, None, False
+        f.last_fg = None
+        f.set_fg = lambda name: D.Session.set_fg(f, name)
         f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
         with mock.patch.object(D, "comm_of", lambda pid: "9.9.9"), \
              mock.patch.object(D, "exe_of", lambda pid: None), \
@@ -821,6 +829,8 @@ class AnInterpreterIsNotTheProgram(unittest.TestCase):
             pass
         f = F()
         f.pid, f.fg, f.fg_told, f._fg_argv = 1, None, False, (None, None, None)
+        f.last_fg = None
+        f.set_fg = lambda name: D.Session.set_fg(f, name)
         f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
         with mock.patch.object(D, "comm_of", lambda pid: "python3.13"), \
              mock.patch.object(D, "argv_of", lambda pid: ["/x/py/bin/python3.13", "/x/.local/bin/aelix"]), \
@@ -834,6 +844,8 @@ class AnInterpreterIsNotTheProgram(unittest.TestCase):
             pass
         f = F()
         f.pid, f.fg, f.fg_told, f._fg_argv = 1, None, False, (None, None, None)
+        f.last_fg = None
+        f.set_fg = lambda name: D.Session.set_fg(f, name)
         f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
         calls = []
 
@@ -856,6 +868,8 @@ class AnInterpreterIsNotTheProgram(unittest.TestCase):
             pass
         f = F()
         f.pid, f.fg, f.fg_told, f._fg_argv = 1, None, False, (None, None, None)
+        f.last_fg = None
+        f.set_fg = lambda name: D.Session.set_fg(f, name)
         f.pty = type("P", (), {"foreground_pid": staticmethod(lambda: 4242)})()
         seen = ["python3.13", "node"]
         argvs = {"python3.13": ["/x/py/bin/python3.13", "/x/.local/bin/aelix"],
@@ -986,6 +1000,8 @@ class TheShellSaysWhatItRuns(unittest.TestCase):
             pass
         f = F()
         f.fg, f.fg_told, f.pid = None, False, 1
+        f.last_fg = None
+        f.set_fg = lambda name: D.Session.set_fg(f, name)
         f._fg_argv = (None, None, None)
         return f
 
@@ -1116,6 +1132,50 @@ class WhatAPaneWillRead(unittest.TestCase):
         rows = D.rc_plan("/usr/bin/fish")
         self.assertIn("not wrapped", " ".join(rows))
         self.assertNotIn("--stop", " ".join(rows), "fish was told a restart would help")
+
+
+class WhatThePaneWasFor(unittest.TestCase):
+    """**A restart takes the shells with it** (⑦=b), and what a person wants next is the agent's own
+    `--resume` — which needs the folder, and is far easier to reach for when the name of what was
+    running is beside it (user, 2026-10-10). The folder was already kept; this is the other half.
+
+    palmar cannot resume anything itself: the session id belongs to the agent and the daemon never
+    sees one. Saying what it was is the whole of what it can honestly offer."""
+
+    def pane(self):
+        class F:
+            pass
+        f = F()
+        f.fg, f.last_fg = None, None
+        return f
+
+    def test_the_last_one_that_was_not_nothing_is_kept(self):
+        """`fg` is what is running **now**, so a pane at a prompt has none — and a daemon is usually
+        stopped from a prompt. Recording the instantaneous one would faithfully save "nothing was
+        running" for a pane that had been running an agent all afternoon."""
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            D.Session.set_fg(f, "aelix")
+            self.assertEqual(f.fg, "aelix")
+            D.Session.set_fg(f, None)          # the command ended; back at a prompt
+        self.assertIsNone(f.fg, "the live field did not clear")
+        self.assertEqual(f.last_fg, "aelix", "what the pane was for was forgotten at the prompt")
+
+    def test_a_second_command_replaces_it(self):
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed"):
+            for n in ("claude", None, "vim", None):
+                D.Session.set_fg(f, n)
+        self.assertEqual(f.last_fg, "vim")
+
+    def test_only_a_change_is_news(self):
+        """It is called on every output tick. Broadcasting a frame each time would be a frame per
+        tick per pane for a value that did not move."""
+        f = self.pane()
+        with mock.patch.object(D.registry, "changed") as told:
+            for _ in range(5):
+                D.Session.set_fg(f, "aelix")
+        self.assertEqual(told.call_count, 1, "it told the browsers %d times" % told.call_count)
 
 
 URL = "http://127.0.0.1:8801/?k=abc123"

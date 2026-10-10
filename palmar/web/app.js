@@ -4791,6 +4791,12 @@ function renderRestore(offer) {
     const row = el('div', 'rs-r');
     row.append(el('div', 'rs-n', x.name || shortPath(x.cwd)));
     if (x.name) row.append(el('div', 'rs-p', tailPath(shortPath(x.cwd))));
+    // **What the pane was running, when it was running something.** A restart takes the shells with
+    // it (⑦=b), and the thing a person wants next is that agent's own `--resume` — which needs the
+    // folder, and is a great deal easier to reach for when the name of what was in there is beside
+    // it (user, 2026-10-10). palmar cannot resume it: the session id belongs to the agent and the
+    // daemon never sees one. Saying what it was is the whole of what palmar can honestly offer.
+    if (x.fg) row.append(el('div', 'rs-f', 'was running ' + x.fg));
     restoreEl.appendChild(row);
   }
   if (ss.length > 8) restoreEl.appendChild(el('div', 'rs-r', el('div', 'rs-p', '+ ' + (ss.length - 8) + ' more')));

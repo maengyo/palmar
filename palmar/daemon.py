@@ -836,6 +836,14 @@ class Session:
         self._fg_argv = (None, None, None)   # pid · comm · the script behind an interpreter (see script_of)
         self.title = ""              # the window title the agent set last (#38)
         self.fg = None               # the command in the foreground, by name — None at a prompt or when unknowable
+        #: **The last one that was not nothing**, which is a different question and the one worth
+        #: keeping. `fg` is what is running *now*, so a pane sitting at a prompt has none — and the
+        #: moment a person most wants to know what a pane was for is after it is gone. An update
+        #: closes every shell (⑦=b), and knowing a pane was running an agent, beside the folder it
+        #: was in, is what makes that agent's own `--resume` reachable afterwards (user, 2026-10-10:
+        #: "위치라도 알아야 곧바로 에이전트로 resume해서 이전 세션이라도 읽을수있을테니").
+        #: Never cleared: a prompt is not news about what the pane was doing.
+        self.last_fg = None
         self.title_hits = []         # recent title-change times (monotonic). Anything outside TITLE_WINDOW_S is dropped
         self.title_timer = None
         self.osc_carry = b""         # an OSC candidate straddling a chunk boundary
@@ -1389,17 +1397,22 @@ class Session:
         it — so that is where the clearing lives. The title write stays: it is the honest statement,
         and it works wherever it is not coalesced away."""
         if self.fg_told and self.fg is not None:
-            self.fg = None
-            registry.changed(self)
+            self.set_fg(None)
+
+    def set_fg(self, name) -> None:
+        """What is running now, and — when there is one — what was running last."""
+        if name:
+            self.last_fg = name
+        if name == self.fg:
+            return
+        self.fg = name
+        registry.changed(self)
 
     def _title_run(self, t: str) -> bool:
         if not t.startswith(TITLE_RUN):
             return False
         self.fg_told = True
-        name = name_from_command(t[len(TITLE_RUN):].split("|"))
-        if name != self.fg:
-            self.fg = name
-            registry.changed(self)
+        self.set_fg(name_from_command(t[len(TITLE_RUN):].split("|")))
         return True
 
     def sample_fg(self) -> None:
@@ -1425,9 +1438,7 @@ class Session:
                 if self._fg_argv[:2] != (pid, name):
                     self._fg_argv = (pid, name, script_of(argv_of(pid)))
                 name = self._fg_argv[2] or name
-        if name != self.fg:
-            self.fg = name
-            registry.changed(self)
+        self.set_fg(name)
 
     def _out_tick(self) -> None:
         """At a prompt: idle. Something running and printing **on and on**: working. Printing then stopping:
@@ -2430,8 +2441,13 @@ def snapshot() -> dict:
     return {
         "v": 1,
         "canvases": [{"id": c.id, "name": c.name} for c in registry.canvas_list()],
+        #: `fg` here is `last_fg`, not what happens to be in front at this instant. A daemon is
+        #: usually stopped from a prompt, so the instantaneous one would be null exactly when the
+        #: file is written — the snapshot would faithfully record that nothing was running in a
+        #: pane that had been running an agent all afternoon.
         "sessions": [{"name": s.name, "canvas": s.canvas,
-                      "cwd": s.cwd}          # kept live by sample_cwd / the title marker
+                      "cwd": s.cwd,          # kept live by sample_cwd / the title marker
+                      "fg": s.last_fg}
                      for s in registry.list()],
     }
 

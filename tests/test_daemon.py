@@ -2149,6 +2149,38 @@ class StopTrustsTheLock(unittest.TestCase):
         self.assertIn("not palmar's", r.stdout)
 
 
+class WhatAPaneWasFor(unittest.TestCase):
+    """What `restore.json` keeps for a pane that is about to be lost to a restart. The folder was
+    already there; what was running in it is the half that makes an agent's `--resume` reachable
+    (user, 2026-10-10)."""
+
+    def test_it_reaches_the_file_even_from_a_prompt(self):
+        with Daemon(shell="/bin/bash") as d:
+            s = d.post("/api/sessions", {"cwd": d.home, "name": "api"})
+            w = WS(d, "/pty/%s?token=%s&cols=90&rows=24" % (s["id"], d.token))
+            time.sleep(2)
+            w.send(b"sleep 12\n", opcode=0x2)
+            time.sleep(4)
+            rows = d.get("/api/sessions")
+            rows = rows["sessions"] if isinstance(rows, dict) else rows
+            self.assertEqual([x.get("fg") for x in rows], ["sleep"], "nothing was seen running")
+            # **Back at a prompt, which is when a daemon actually gets stopped.** The live field
+            # must clear — it is "what is running" — and the file must not.
+            w.send(b"\x03", opcode=0x2)
+            time.sleep(3)
+            rows = d.get("/api/sessions")
+            rows = rows["sessions"] if isinstance(rows, dict) else rows
+            self.assertEqual([x.get("fg") for x in rows], [None], "the live field kept a finished command")
+            # Written on the ten-second tick as well as on the way out; read it while it is up,
+            # because stopping the helper takes the temporary home with it.
+            time.sleep(12)
+            body = json.loads(open(os.path.join(d.home, ".palmar", "restore.json")).read())
+            kept = body["sessions"][0]
+            self.assertEqual(kept["fg"], "sleep", "the file forgot what the pane was for: %r" % kept)
+            self.assertEqual(os.path.realpath(kept["cwd"]), os.path.realpath(d.home))
+            self.assertEqual(kept["name"], "api")
+
+
 class SeeingAndClosingWithoutABrowser(unittest.TestCase):
     """`--list` and `--close` (#20). The point of them is the moment the page will not open, so they
     are driven the way a person would — the real CLI against a real daemon, not the functions."""

@@ -462,6 +462,34 @@ class RailFold(unittest.TestCase):
 class RestoreCard(unittest.TestCase):
     """A daemon stopped and came back. The canvases are already there; the terminals are offered."""
 
+    def test_it_says_what_each_pane_was_running(self):
+        """**A restart takes the shells with it** (⑦=b), and what a person reaches for next is that
+        agent's own `--resume` — which wants the folder, and is far easier to find when the name of
+        what was in there is beside it (user, 2026-10-10). palmar cannot resume it: the session id
+        belongs to the agent and the daemon never sees one. Saying what it was is the whole of what
+        it can honestly offer.
+
+        The name has to survive a **prompt**, because that is when a daemon actually gets stopped —
+        so this runs something, ends it, and only then restarts."""
+        with Daemon(shell="/bin/bash") as d:
+            from tests.helpers import WS
+            s = d.open_pane(name="api")
+            w = WS(d, "/pty/%s?token=%s&cols=90&rows=24" % (s["id"], d.token))
+            time.sleep(2)
+            w.send(b"sleep 12\n", opcode=0x2)
+            time.sleep(4)
+            w.send(b"\x03", opcode=0x2)          # back at a prompt: `fg` is None again
+            time.sleep(3)
+            d.restart()
+            with Browser() as b:
+                b.open(d.url)
+                card = b.ev("""(()=>{const e=document.getElementById('restore');
+                  return {was:[...e.querySelectorAll('.rs-f')].map(x=>x.textContent),
+                          rows:[...e.querySelectorAll('.rs-n')].map(x=>x.textContent)};})()""")
+                self.assertIn("api", card["rows"], "the pane was not offered at all")
+                self.assertEqual(card["was"], ["was running sleep"],
+                                 "the card does not say what the pane was for: %r" % (card,))
+
     def test_the_offer_appears_restores_and_arranges(self):
         with Daemon() as d:
             for n in ("alpha", "beta", "gamma", "delta", "epsilon", "zeta"):
