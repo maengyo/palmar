@@ -5,6 +5,8 @@ regression somebody already paid for once; the point of writing it down is that 
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import pathlib
 import re
@@ -1176,6 +1178,66 @@ class WhatThePaneWasFor(unittest.TestCase):
             for _ in range(5):
                 D.Session.set_fg(f, "aelix")
         self.assertEqual(told.call_count, 1, "it told the browsers %d times" % told.call_count)
+
+
+class WhatAnUpdateWouldReplace(unittest.TestCase):
+    """`--update` (2026-10-12). A one-line install had no second line: the way to update was to
+    remember the install URL and type it again, and then to remember `--stop`, which nothing said.
+
+    The parts that can be decided without a network are here; `tests/test_daemon.py` does a real
+    swap against a tarball on disk."""
+
+    def test_a_checkout_and_an_unpacked_tree_are_told_apart(self):
+        """They want opposite advice — `git pull` against fetching a tarball — and getting it wrong
+        the dangerous way throws somebody's working tree away."""
+        d = tempfile.mkdtemp(prefix="palmar-shape-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        root = D.Path(d)
+        with mock.patch.object(D, "tree_root", lambda: root):
+            self.assertEqual(D.install_shape()[0], "tree")
+            (root / ".git").mkdir()
+            self.assertEqual(D.install_shape()[0], "checkout")
+
+    def test_a_checkout_is_refused_and_told_what_to_do(self):
+        d = tempfile.mkdtemp(prefix="palmar-shape-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        (D.Path(d) / ".git").mkdir()
+        buf = io.StringIO()
+        with mock.patch.object(D, "tree_root", lambda: D.Path(d)), \
+             contextlib.redirect_stdout(buf):
+            code = D.update(yes=True)
+        said = buf.getvalue()
+        self.assertEqual(code, 0, "refusing a checkout is advice, not a failure")
+        self.assertIn("git -C", said, "it does not say how to update a checkout")
+        self.assertIn("--stop", said, "it does not say the daemon has to come back")
+
+    def test_an_archive_that_writes_outside_its_directory_is_refused(self):
+        """A member path that climbs out writes wherever it likes. `tarfile` has a filter for this
+        from 3.12 and the floor here is 3.9, so it is checked rather than relied upon."""
+        import tarfile
+        d = tempfile.mkdtemp(prefix="palmar-tar-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        inner = os.path.join(d, "x.txt")
+        io.open(inner, "w").write("hi")
+        ball = os.path.join(d, "bad.tar.gz")
+        with tarfile.open(ball, "w:gz") as tf:
+            tf.add(inner, arcname="../escaped.txt")
+        with self.assertRaises(ValueError) as e:
+            D.fetch_tree(ball, D.Path(d))
+        self.assertIn("outside", str(e.exception))
+
+    def test_an_archive_with_no_palmar_in_it_is_refused(self):
+        import tarfile
+        d = tempfile.mkdtemp(prefix="palmar-tar-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        inner = os.path.join(d, "x.txt")
+        io.open(inner, "w").write("hi")
+        ball = os.path.join(d, "empty.tar.gz")
+        with tarfile.open(ball, "w:gz") as tf:
+            tf.add(inner, arcname="whatever/x.txt")
+        with self.assertRaises(ValueError) as e:
+            D.fetch_tree(ball, D.Path(d))
+        self.assertIn("palmar", str(e.exception))
 
 
 URL = "http://127.0.0.1:8801/?k=abc123"

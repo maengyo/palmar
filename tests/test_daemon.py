@@ -7,6 +7,8 @@ again afterwards.
 from __future__ import annotations
 
 import json
+import io
+import re
 import os
 import select
 import shutil
@@ -2147,6 +2149,80 @@ class StopTrustsTheLock(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("no daemon is running", r.stdout)
         self.assertIn("not palmar's", r.stdout)
+
+
+class AnUpdateInPlace(unittest.TestCase):
+    """`palmar --update` against a tarball on disk — the whole thing, including the daemon coming
+    back on the new code. `PALMAR_TARBALL` is the same hook install.sh uses for its own tests."""
+
+    def test_it_swaps_the_tree_and_comes_back_on_it(self):
+        import tarfile
+        from tests.helpers import PYTHON, REPO
+        work = tempfile.mkdtemp(prefix="palmar-upd-")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        skip = shutil.ignore_patterns(".git", "app", "__pycache__", "*.pyc")
+
+        # A "release" of this tree, marked so the swap is visible.
+        stage = os.path.join(work, "palmar-main")
+        shutil.copytree(REPO, stage, ignore=skip)
+        init = os.path.join(stage, "palmar", "__init__.py")
+        body = io.open(init, encoding="utf-8").read()
+        self.assertIn('__version__', body)
+        io.open(init, "w", encoding="utf-8").write(
+            re.sub(r'__version__ = "[^"]+"', '__version__ = "9.9.9-test"', body))
+        ball = os.path.join(work, "palmar.tar.gz")
+        with tarfile.open(ball, "w:gz") as tf:
+            tf.add(stage, arcname="palmar-main")
+
+        # And an "installed" tree: a copy with no .git, which is what the installer leaves.
+        prefix = tempfile.mkdtemp(prefix="palmar-prefix-")
+        self.addCleanup(shutil.rmtree, prefix, ignore_errors=True)
+        tree = os.path.join(prefix, "palmar")
+        shutil.copytree(REPO, tree, ignore=skip)
+        home = tempfile.mkdtemp(prefix="palmar-uhome-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        env = dict(os.environ, HOME=home, PALMAR_TARBALL=ball, PYTHONSAFEPATH="1",
+                   PALMAR_UPDATE_CHECK="0")
+
+        r = subprocess.run([PYTHON, os.path.join(tree, "launch.py"),
+                            "--update", "--yes", "--no-browser"],
+                           capture_output=True, text=True, timeout=300, env=env)
+        self.addCleanup(subprocess.run, [PYTHON, os.path.join(tree, "launch.py"), "--stop"],
+                        **{"env": env, "capture_output": True, "timeout": 60})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+        got = io.open(os.path.join(tree, "palmar", "__init__.py"), encoding="utf-8").read()
+        self.assertIn("9.9.9-test", got, "the tree was not replaced:\n" + r.stdout)
+        # **Whole, and nothing left beside it.** The old tree is moved aside rather than deleted
+        # until the new one is in place, and a half-swapped palmar is neither version.
+        for part in ("launch.py", "palmar/daemon.py", "palmar/web/app.js"):
+            self.assertTrue(os.path.exists(os.path.join(tree, part)), part + " is missing")
+        self.assertEqual([x for x in os.listdir(prefix) if x != "palmar"], [],
+                         "it left something behind in the prefix")
+
+        # And it is running — on the new tree, not the one this process started from.
+        time.sleep(2)
+        url = io.open(os.path.join(home, ".palmar", "run", "url"), encoding="utf-8").read().strip()
+        tok = io.open(os.path.join(home, ".palmar", "run", "token"), encoding="utf-8").read().strip()
+        base = url.split("/?")[0]
+        rq = urllib.request.Request(base + "/api/sessions?token=" + tok, headers={"Origin": base})
+        with urllib.request.urlopen(rq, timeout=10) as f:
+            self.assertIn(f.read()[:1], (b"[", b"{"), "the daemon did not come back")
+
+    def test_it_says_what_the_restart_costs_before_asking(self):
+        """The shells go (⑦=b). Saying so after the fact is not a decision, so the panes and what
+        each was running are printed above the question."""
+        from tests.helpers import PYTHON, REPO
+        with Daemon() as d:
+            d.open_pane(name="api")
+            time.sleep(1.5)
+            r = subprocess.run([PYTHON, os.path.join(REPO, "launch.py"), "--update"],
+                               input="n\n", capture_output=True, text=True, timeout=60,
+                               env=dict(os.environ, HOME=d.home, PYTHONSAFEPATH="1"))
+            # This repository is a checkout, so it stops at the advice — which is the other half of
+            # the same promise: it never silently does the dangerous thing to a working tree.
+            self.assertIn("git -C", r.stdout)
+            self.assertNotIn("fetching", r.stdout, "it fetched over a checkout")
 
 
 class WhatAPaneWasFor(unittest.TestCase):

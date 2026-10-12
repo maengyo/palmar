@@ -65,6 +65,20 @@ powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.c
 To read it before it runs, or to pass `-Check` / `-Prefix` / `-Yes`, split that in two: the `irm … -OutFile`
 half, then `powershell -ExecutionPolicy Bypass -File .\install.ps1`.
 
+## Updating
+
+```
+palmar --update
+```
+
+It fetches a newer tree, stops the daemon and starts it again — in that order, which is the part
+that is easy to get wrong by hand. It says what it is about to do first, and the shells in your
+open terminals close with the daemon, so it lists them and what each was running before it asks.
+They come back as an offer, in the same folders; an agent comes back through its own `--resume`.
+
+`--yes` answers the question in advance. **If you installed by cloning, it says so and stops** —
+there `git pull` is the update, and `--update` would throw your working tree away.
+
 It downloads the tree, drops a `palmar` launcher (`~/.local/bin`, or `%LOCALAPPDATA%\palmar\bin`),
 puts that on your PATH once, and starts nothing. No root, no build. Prefer to read first?
 `git clone https://github.com/maengyo/palmar && sh palmar/install.sh` installs the checkout you can

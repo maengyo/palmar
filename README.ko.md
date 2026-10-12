@@ -60,6 +60,20 @@ powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.c
 먼저 읽어 보고 돌리거나 `-Check` / `-Prefix` / `-Yes` 를 주려면 둘로 나눈다: `irm … -OutFile` 까지, 그다음
 `powershell -ExecutionPolicy Bypass -File .\install.ps1`.
 
+## 업데이트
+
+```
+palmar --update
+```
+
+새 트리를 받고, 데몬을 멈추고, 다시 띄운다 — **그 순서**가 손으로 하면 틀리기 쉬운 부분이다.
+무엇을 할지 먼저 말하고, 데몬이 멈추면 열려 있던 터미널의 셸이 같이 닫히므로 **몇 개가 열려 있고
+각각 무엇을 돌리고 있었는지**를 보여 준 다음에 묻는다. 판은 같은 폴더로 다시 열자고 제안되고,
+에이전트는 자기 `--resume` 으로 돌아온다.
+
+`--yes` 는 그 질문에 미리 답하는 것이다. **clone 해서 쓰고 있으면 그렇다고 말하고 멈춘다** —
+거기서는 `git pull` 이 업데이트이고, `--update` 는 작업 트리를 버리게 된다.
+
 트리를 받아 두고, `palmar` 실행기를 놓고(`~/.local/bin`, 윈도우는 `%LOCALAPPDATA%\palmar\bin`),
 PATH 에 한 번 올리고, 아무것도 시작하지 않는다. root 도 빌드도 없다. 먼저 읽어 보고 싶으면
 `git clone https://github.com/maengyo/palmar && sh palmar/install.sh` 가 눈앞의 체크아웃을 설치하고,
