@@ -2230,31 +2230,62 @@ class WhatAPaneWasFor(unittest.TestCase):
     already there; what was running in it is the half that makes an agent's `--resume` reachable
     (user, 2026-10-10)."""
 
+    def fg(self, d):
+        rows = d.get("/api/sessions")
+        rows = rows["sessions"] if isinstance(rows, dict) else rows
+        return [x.get("fg") for x in rows]
+
+    def until(self, d, want, within=14.0):
+        """Poll, because what samples a silent program is a ten-second tick and not this test."""
+        end = time.time() + within
+        while time.time() < end:
+            if self.fg(d) == want:
+                return True
+            time.sleep(0.5)
+        return False
+
     def test_it_reaches_the_file_even_from_a_prompt(self):
+        """The name has to outlive the program, because a daemon is stopped from a prompt.
+
+        **Polled, not slept.** A first version waited four seconds and read the answer, which was
+        right only when an output tick had happened to catch the program — and `sleep` prints
+        nothing. Within ten seconds the tick samples it; this waits for that rather than hoping."""
         with Daemon(shell="/bin/bash") as d:
             s = d.post("/api/sessions", {"cwd": d.home, "name": "api"})
             w = WS(d, "/pty/%s?token=%s&cols=90&rows=24" % (s["id"], d.token))
             time.sleep(2)
-            w.send(b"sleep 12\n", opcode=0x2)
-            time.sleep(4)
-            rows = d.get("/api/sessions")
-            rows = rows["sessions"] if isinstance(rows, dict) else rows
-            self.assertEqual([x.get("fg") for x in rows], ["sleep"], "nothing was seen running")
+            w.send(b"sleep 60\n", opcode=0x2)
+            self.assertTrue(self.until(d, ["sleep"]), "a silent program was never seen: %r" % self.fg(d))
             # **Back at a prompt, which is when a daemon actually gets stopped.** The live field
             # must clear — it is "what is running" — and the file must not.
             w.send(b"\x03", opcode=0x2)
-            time.sleep(3)
-            rows = d.get("/api/sessions")
-            rows = rows["sessions"] if isinstance(rows, dict) else rows
-            self.assertEqual([x.get("fg") for x in rows], [None], "the live field kept a finished command")
-            # Written on the ten-second tick as well as on the way out; read it while it is up,
-            # because stopping the helper takes the temporary home with it.
-            time.sleep(12)
-            body = json.loads(open(os.path.join(d.home, ".palmar", "restore.json")).read())
+            self.assertTrue(self.until(d, [None], within=6), "the live field kept a finished command")
+            home = d.home
+            d.stop(wipe=False)                 # SIGTERM: the clean stop, which saves on the way out
+            self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+            body = json.loads(open(os.path.join(home, ".palmar", "restore.json")).read())
             kept = body["sessions"][0]
             self.assertEqual(kept["fg"], "sleep", "the file forgot what the pane was for: %r" % kept)
-            self.assertEqual(os.path.realpath(kept["cwd"]), os.path.realpath(d.home))
+            self.assertEqual(os.path.realpath(kept["cwd"]), os.path.realpath(home))
             self.assertEqual(kept["name"], "api")
+
+    def test_a_silent_program_still_running_at_a_stop_is_recorded(self):
+        """**The case CI found.** The snapshot sampled the folder and not the program, and the tick
+        saved before it sampled — so a program that had printed nothing and was still in front when
+        the daemon stopped went into the file as nothing. An agent waiting at its own prompt is silent
+        in exactly that way. Stopped two seconds in, before any tick can have come round."""
+        with Daemon(shell="/bin/bash") as d:
+            s = d.post("/api/sessions", {"cwd": d.home, "name": "api"})
+            w = WS(d, "/pty/%s?token=%s&cols=90&rows=24" % (s["id"], d.token))
+            time.sleep(2)
+            w.send(b"sleep 60\n", opcode=0x2)
+            time.sleep(2)
+            home = d.home
+            d.stop(wipe=False)
+            self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+            body = json.loads(open(os.path.join(home, ".palmar", "restore.json")).read())
+            self.assertEqual(body["sessions"][0]["fg"], "sleep",
+                             "a silent program in front at the stop was not recorded: %r" % body)
 
 
 class SeeingAndClosingWithoutABrowser(unittest.TestCase):
