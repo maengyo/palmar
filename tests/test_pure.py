@@ -198,6 +198,26 @@ class RestoreFile(unittest.TestCase):
         self.assertEqual(d["canvases"][0]["name"], "infra")
         self.assertEqual(d["sessions"][0]["cwd"], "/tmp")
 
+    def test_the_snapshot_looks_at_what_is_in_front_before_it_writes(self):
+        """**A silent program reached the file only by luck** (CI, 2026-10-12). The snapshot sampled
+        the folder and not the program, so `fg` was whatever an output tick had last caught — and a
+        program that prints nothing makes no output tick. The daemon test of this is a race that a
+        fast machine wins; this one is not."""
+        class Pane:
+            name, canvas, cwd, last_fg = "api", "c", "/tmp", None
+
+            def sample_cwd(self):
+                pass
+
+            def sample_fg(self):
+                self.last_fg = "sleep"      # what a look at the process would find
+        p = Pane()
+        with mock.patch.object(D.registry, "list", lambda: [p]), \
+             mock.patch.object(D.registry, "canvas_list", lambda: []):
+            snap = D.snapshot()
+        self.assertEqual(snap["sessions"][0]["fg"], "sleep",
+                         "the snapshot wrote what it had instead of looking")
+
 
 class Names(unittest.TestCase):
     """protocol.md "이름 규칙": 1–64 characters, trimmed, no control characters."""

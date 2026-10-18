@@ -466,20 +466,21 @@ class RestoreCard(unittest.TestCase):
         """**A restart takes the shells with it** (⑦=b), and what a person reaches for next is that
         agent's own `--resume` — which wants the folder, and is far easier to find when the name of
         what was in there is beside it (user, 2026-10-10). palmar cannot resume it: the session id
-        belongs to the agent and the daemon never sees one. Saying what it was is the whole of what
-        it can honestly offer.
+        belongs to the agent and the daemon never sees one.
 
-        The name has to survive a **prompt**, because that is when a daemon actually gets stopped —
-        so this runs something, ends it, and only then restarts."""
+        **Restarted while the program is still in front, and silent.** The first version of this
+        ended the program first and then raced the ten-second tick to have seen it — and on the
+        macOS runner it lost (CI, 2026-10-12), which is how the real fault came out: a program that
+        prints nothing was never sampled before the save. The snapshot samples what is in front now,
+        so a clean stop records it whatever the tick has or has not done. That a name outlives the
+        program ending is `test_daemon.WhatAPaneWasFor`'s to check."""
         with Daemon(shell="/bin/bash") as d:
             from tests.helpers import WS
             s = d.open_pane(name="api")
             w = WS(d, "/pty/%s?token=%s&cols=90&rows=24" % (s["id"], d.token))
             time.sleep(2)
-            w.send(b"sleep 12\n", opcode=0x2)
-            time.sleep(4)
-            w.send(b"\x03", opcode=0x2)          # back at a prompt: `fg` is None again
-            time.sleep(3)
+            w.send(b"sleep 60\n", opcode=0x2)       # prints nothing, which is the point
+            time.sleep(2)
             d.restart()
             with Browser() as b:
                 b.open(d.url)

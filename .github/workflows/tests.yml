@@ -61,11 +61,12 @@ jobs:
         # **It is a ceiling, so a suite that grows by a platform-only test trips it.** The menu bar
         # is macOS's alone, and its two tests took `rest` on Linux from six skips to eight
         # (2026-09-21). Raising it is the answer; the cap is there so a test cannot go quiet, not so
-        # that it can never be added.
+        # that it can never be added. Nine since `--list`/`--close`: a folder reached through a link
+        # is how a Mac's temporary HOME looks, and a Linux runner has none (2026-10-15).
         suite:
           - { name: browser, mods: "tests.test_browser",                            floor: 175, skips: 0 }
           - { name: daemon,  mods: "tests.test_daemon",                             floor: 115, skips: 0 }
-          - { name: rest,    mods: "tests.test_pure tests.test_app tests.test_install", floor: 155, skips: 8 }
+          - { name: rest,    mods: "tests.test_pure tests.test_app tests.test_install", floor: 155, skips: 9 }
         exclude:
           # One Python on macOS is enough — what it adds over Linux is the OS, not the interpreter,
           # and 3.9 there is the same 3.9 the ubuntu job already runs.

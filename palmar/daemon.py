@@ -2433,9 +2433,19 @@ def snapshot() -> dict:
     this reads what the panes say. Sampling **here** rather than only on the ten-second tick is what
     keeps a clean stop honest — it saves on the way out, seconds after a `cd`, and the tick would not
     have come round yet (measured 2026-09-17: the first version of this lost exactly that case)."""
+    #: **And what is in front, in the same pass** (2026-10-15). This sampled the folder and not the
+    #: program, so the name reached the file only if an output tick had happened to catch it — and a
+    #: program that prints nothing never makes one. CI found it: a silent `sleep` was never recorded,
+    #: because the ten-second tick *saved first and sampled afterwards*, and the clean stop's save did
+    #: not sample at all. An agent waiting at its own prompt is silent in exactly that way, and it is
+    #: the case `last_fg` exists for.
     for x in registry.list():
         try:
             x.sample_cwd()
+        except Exception:
+            pass
+        try:
+            x.sample_fg()
         except Exception:
             pass
     return {
@@ -5740,12 +5750,10 @@ async def main(port: int, open_page: bool = True, web: bool = False, new: bool =
     def tick():
         # save_restore asks every pane where it is, so a `cd` that printed nothing reaches the rail
         # on this same ten seconds — and on a clean stop, which also saves.
+        # A silent command is seen within ten seconds too: the snapshot this takes samples what is
+        # in front before it reads it. That used to be a loop here, run *after* the save — so what it
+        # found reached the file ten seconds late, and not at all if the daemon stopped first.
         save_restore()
-        for x in registry.list():
-            try:
-                x.sample_fg()            # a silent command is still seen within ten seconds
-            except Exception:
-                pass
         RESTORE_TIMER[0] = loop.call_later(RESTORE_EVERY_S, tick)
     RESTORE_TIMER[0] = loop.call_later(RESTORE_EVERY_S, tick)
     arm_update_check(loop)
