@@ -259,6 +259,25 @@ class Shortcuts(unittest.TestCase):
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class ColoursAProgramPicks(unittest.TestCase):
+    """**`ls` on WSL drew folders as blue on green, and both are the same lightness** in either
+    palette — 1.12:1, no text at all (user, 2026-10-25). Every folder under /mnt/c is
+    other-writable, so it was every folder. xterm lifts any cell below the floor; this checks the
+    floor is set on every pane. Whether the lifted colour reads well is a person's to judge."""
+
+    def test_every_pane_has_a_contrast_floor(self):
+        with Daemon() as d, Browser() as b:
+            d.open_pane(name="ls")
+            d.open_pane(name="ls2")
+            b.open(d.url)
+            time.sleep(3)
+            got = b.ev("[...window.palmar.tiles.values()].map(t=>t.term.options.minimumContrastRatio)")
+            self.assertEqual(len(got), 2)
+            for r in got:
+                self.assertGreaterEqual(r, 4.5, "a pane draws colour pairs nobody can read: %r" % got)
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
 class CopyAndPasteKeys(unittest.TestCase):
     """**Ctrl+C and Ctrl+V on Windows** (user, 2026-10-23: Ctrl+Shift+C/V was "너무 불편"). Windows
     Terminal's rule: Ctrl+C copies while something is selected and lets go of it, so the next press is

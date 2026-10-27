@@ -776,6 +776,13 @@ class Tile {
       fontFamily: cssVar('--mono'),
       lineHeight: LINE_HEIGHT,
       theme: termTheme(),
+      //: **No colour pair a program picks may vanish into its own background.** `ls` paints a
+      //: directory anyone can write to blue on green (LS_COLORS `ow=34;42`) — and on WSL every folder
+      //: under /mnt/c is one. Both palettes put those two at the same lightness: 1.12:1 in either
+      //: theme, which is no text at all (user, 2026-10-25). Darkening one colour fixes that pair and
+      //: breaks another; this makes xterm lift the foreground of any cell below 4.5:1 (WCAG AA,
+      //: and VS Code's terminal default), whatever the program chose.
+      minimumContrastRatio: 4.5,
       //: **10,000 lines, not xterm's 1,000.** The old value was the library's default, never a
       //: decision — and a thousand lines is less than one `make` (user, 2026-10-06). Measured at
       //: 88 characters a line: 0.9 KB a line, so 9 MB for a pane that has actually filled it and
