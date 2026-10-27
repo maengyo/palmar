@@ -97,8 +97,12 @@ const FONT_MIN = 6, FONT_MAX = 32, FONT_STEP = 1;
 // nail the guidance to one side and it points at a key the other person does not have (⌘ used to do that).
 const IS_MAC = /Mac|iPhone|iPad/i.test(
   (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '');
+//: **Windows is the browser's OS, not the daemon's.** A page served from WSL and read in a Windows
+//: browser is held with Windows hands, so this asks the page, never the server.
+const IS_WIN = /^Win/i.test(
+  (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '');
 const KMOD = IS_MAC ? '⌘' : 'Ctrl';
-const CLIP_HINT = IS_MAC ? '⌘C / ⌘V' : 'Ctrl+Shift+C / Ctrl+Shift+V';
+const CLIP_HINT = IS_MAC ? '⌘C / ⌘V' : IS_WIN ? 'Ctrl+C / Ctrl+V' : 'Ctrl+Shift+C / Ctrl+Shift+V';
 const LS_CLIPHINT = 'palmar.cliphint';
 let clipHintShown = false;
 try { clipHintShown = localStorage.getItem(LS_CLIPHINT) === '1'; } catch (e) {}
@@ -107,8 +111,12 @@ try { clipHintShown = localStorage.getItem(LS_CLIPHINT) === '1'; } catch (e) {}
 // xterm.js **does not have this.** Selecting is where its job ends; putting it on the clipboard is the app's
 // (measured 2026-09-08: the selected text is reachable via getSelection(), but no combination put it on the clipboard).
 // **Ctrl+C is not taken away.** In a terminal that is interrupt — intercept it because something is selected
-// and the hand reaching to stop a run copies instead. So ask for Shift as well, the Linux/Windows convention,
+// and the hand reaching to stop a run copies instead. So ask for Shift as well, the Linux convention,
 // and use ⌘ on a Mac. Both are accepted — whichever habit the hand has, it should work.
+// **Windows is the exception, the way Windows Terminal is** (user, 2026-10-23: Ctrl+Shift+C/V "너무 불편").
+// There Ctrl+C copies only while something is selected, and the selection goes with it, so the second
+// press is the interrupt; with nothing selected it is the interrupt straight away. Ctrl+V pastes, which
+// gives up the shell's literal-next (^V) — Windows Terminal makes the same trade. Ctrl+Shift+C/V still work.
 async function clipWrite(text) {
   try {
     await navigator.clipboard.writeText(text);
@@ -797,7 +805,9 @@ class Tile {
       if (clipHintShown || !this.term.hasSelection()) return;
       clipHintShown = true;
       try { localStorage.setItem(LS_CLIPHINT, '1'); } catch (e) {}
-      toast([CLIP_HINT + ' to copy and paste — Ctrl+C stays as interrupt, the way a terminal expects']);
+      toast([IS_WIN
+        ? 'Ctrl+C / Ctrl+V to copy and paste — with nothing selected, Ctrl+C is interrupt'
+        : CLIP_HINT + ' to copy and paste — Ctrl+C stays as interrupt, the way a terminal expects']);
     });
     // Look at the key **before** xterm handles it. true hands it through, false takes it for us.
     this.term.attachCustomKeyEventHandler((ev) => {
@@ -829,7 +839,8 @@ class Tile {
       // and then xterm handles the key and cuts propagation so it never reaches the global shortcuts
       // (measured: Ctrl+Shift+Enter worked and only Ctrl+Enter did not).
       if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey) && !ev.altKey) return false;
-      const mod = ev.metaKey || (ev.ctrlKey && ev.shiftKey);
+      const plain = IS_WIN && ev.ctrlKey && !ev.shiftKey && !ev.metaKey;
+      const mod = ev.metaKey || (ev.ctrlKey && ev.shiftKey) || plain;
       if (!mod || ev.altKey) return true;
       const k = (ev.key || '').toLowerCase();
       if (k === 'c') {
@@ -837,6 +848,9 @@ class Tile {
         if (!sel) return true;              // nothing selected — it belongs to the terminal
         ev.preventDefault();
         clipWrite(sel);
+        // Plain Ctrl+C lets go of the selection, or a selection left lying there would keep the
+        // interrupt from ever getting through.
+        if (plain) this.term.clearSelection();
         return false;
       }
       if (k === 'v') {
@@ -5501,11 +5515,8 @@ function boot() {
     for (const el of document.querySelectorAll('[data-kmod][title]'))
       el.title = el.title.replace('Ctrl', '⌘');
   }
-  if (IS_MAC) {
-    const k = document.getElementById('kmod');
-    if (k) k.firstElementChild.textContent = '⌘';
-    // On a Mac, copy·paste·text size are ⌘ alone — no Shift. The guidance names that machine's keys too.
-    for (const el of document.querySelectorAll('.keys kbd.mod')) el.textContent = '⌘';
+  if (IS_MAC || IS_WIN) {
+    // Copy and paste drop Shift on a Mac (⌘C) and on Windows (Ctrl+C, the way Windows Terminal has it).
     // **Only the rows marked for it.** Matching on "three keys with Shift in the middle" also caught
     // Ctrl+Shift+Enter, and new canvas needs Shift on a Mac too — both Enter rows came out reading
     // ⌘⏎ and one of them was wrong.
@@ -5513,6 +5524,16 @@ function boot() {
       const ks = [...el.querySelectorAll('kbd')];
       if (ks.length === 3 && ks[1].textContent === 'Shift') ks[1].remove();
     }
+  }
+  if (IS_WIN) {
+    const said = document.getElementById('ctrl-c-says');
+    if (said) said.textContent = 'interrupt — unless something is selected, which it copies';
+  }
+  if (IS_MAC) {
+    const k = document.getElementById('kmod');
+    if (k) k.firstElementChild.textContent = '⌘';
+    // On a Mac, copy·paste·text size are ⌘ alone — no Shift. The guidance names that machine's keys too.
+    for (const el of document.querySelectorAll('.keys kbd.mod')) el.textContent = '⌘';
   }
   // ── options list, and the shortcuts panel behind one of its items ──
   const optBtn = document.getElementById('options'), optMenu = document.getElementById('options-menu');

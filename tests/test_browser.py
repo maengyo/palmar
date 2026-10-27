@@ -249,6 +249,69 @@ class Shortcuts(unittest.TestCase):
         self.assertEqual(r["rows"][:2], ["Ctrl+⏎", "Ctrl+Shift+⏎"])
         self.assertEqual(r["copy"], "Ctrl+Shift+C")
 
+    def test_windows_is_told_about_plain_ctrl_c(self):
+        """Windows copies with Ctrl+C the way Windows Terminal does, so the panel drops Shift there
+        and the Ctrl+C row stops saying it is left alone."""
+        r = self.keys_for("Win32")
+        self.assertEqual(r["copy"], "Ctrl+C")
+        self.assertEqual(r["rows"][:2], ["Ctrl+⏎", "Ctrl+Shift+⏎"],
+                         "new canvas lost its Shift along with copy")
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class CopyAndPasteKeys(unittest.TestCase):
+    """**Ctrl+C and Ctrl+V on Windows** (user, 2026-10-23: Ctrl+Shift+C/V was "너무 불편"). Windows
+    Terminal's rule: Ctrl+C copies while something is selected and lets go of it, so the next press is
+    the interrupt; with nothing selected it is the interrupt. Anywhere else plain Ctrl+C is always the
+    interrupt — a Linux terminal hand expects Shift. Real key events, because xterm reads `keyCode`,
+    which a constructed KeyboardEvent does not carry."""
+
+    def run_keys(self, platform):
+        stub = ("Object.defineProperty(navigator,'platform',{get:()=>%s});"
+                "try{Object.defineProperty(navigator,'userAgentData',{get:()=>({platform:%s})});}"
+                "catch(e){}"
+                "window.__clip=[];"
+                "Object.defineProperty(navigator,'clipboard',{get:()=>({"
+                "writeText:async t=>{window.__clip.push(t);},"
+                "readText:async()=>'pasted-text'})});" % (json.dumps(platform), json.dumps(platform)))
+        with Daemon() as d, Browser() as b:
+            d.open_pane(name="keys")
+            b.open(d.url, script=stub)
+            time.sleep(3)
+            b.ev("""(async()=>{const t=[...window.palmar.tiles.values()][0];
+              window.__out=[]; t.term.onData(x=>window.__out.push(x));
+              t.term.write('select me\\r\\n'); await new Promise(r=>setTimeout(r,200));
+              t.term.selectAll(); t.term.focus(); return 1;})()""")
+
+            def ctrl(key, code, vk):
+                for kind in ("keyDown", "keyUp"):
+                    b.ws.call("Input.dispatchKeyEvent", {"type": kind, "key": key, "code": code,
+                                                         "modifiers": 2, "windowsVirtualKeyCode": vk})
+                time.sleep(0.3)
+            ctrl("c", "KeyC", 67)
+            first = b.ev("({clip:window.__clip.slice(), out:window.__out.slice(),"
+                         "sel:[...window.palmar.tiles.values()][0].term.hasSelection()})")
+            ctrl("c", "KeyC", 67)
+            second = b.ev("window.__out.slice()")
+            ctrl("v", "KeyV", 86)
+            third = b.ev("window.__out.join('')")
+        return first, second, third
+
+    def test_windows_copies_then_interrupts_then_pastes(self):
+        first, second, third = self.run_keys("Win32")
+        self.assertEqual(len(first["clip"]), 1, "Ctrl+C with a selection did not copy: %r" % first)
+        self.assertIn("select me", first["clip"][0])
+        self.assertEqual(first["out"], [], "the copy also went to the shell as an interrupt")
+        self.assertFalse(first["sel"], "the selection stayed, so the next Ctrl+C could never interrupt")
+        self.assertEqual(second, ["\x03"], "Ctrl+C with nothing selected was not the interrupt")
+        self.assertIn("pasted-text", third, "Ctrl+V did not paste")
+
+    def test_linux_keeps_plain_ctrl_c_as_the_interrupt(self):
+        first, second, third = self.run_keys("Linux x86_64")
+        self.assertEqual(first["clip"], [], "plain Ctrl+C copied on Linux")
+        self.assertEqual(first["out"], ["\x03"])
+        self.assertNotIn("pasted-text", third, "plain Ctrl+V pasted on Linux")
+
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
 class Theme(unittest.TestCase):
