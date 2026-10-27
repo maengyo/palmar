@@ -618,14 +618,26 @@ const ANSI_DARK = {
 function isDarkNow() {
   return root.dataset.theme === 'dark' || (!root.dataset.theme && darkMq.matches);
 }
+//: **A selection has to be seen while it is being dragged.** It used `--accent-2`, the 12–14% tint
+//: that marks a hovered row — 1.2:1 against the tile, so a drag to copy showed next to nothing
+//: (user, 2026-10-27). 35% of the accent puts it at 1.6–2.5:1 against the tile in every palette
+//: and theme, and text on it stays at 5.3:1 or better (measured, all eight). The rows keep their
+//: light tint; this is the terminal's own.
+const SELECT_ALPHA = 0.35;
+function tint(hex, alpha) {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return cssVar('--accent-2');
+  return 'rgba(' + [m[1], m[2], m[3]].map((x) => parseInt(x, 16)).join(',') + ',' + alpha + ')';
+}
 function termTheme() {
+  const sel = tint(cssVar('--accent'), SELECT_ALPHA);
   return Object.assign({
     background: cssVar('--tile'),
     foreground: cssVar('--term-ink'),
     cursor: cssVar('--accent'),
     cursorAccent: cssVar('--on-accent'),
-    selectionBackground: cssVar('--accent-2'),
-    selectionInactiveBackground: cssVar('--accent-2'),
+    selectionBackground: sel,
+    selectionInactiveBackground: sel,
   }, isDarkNow() ? ANSI_DARK : ANSI_LIGHT);
 }
 // The base text size, from the options list. Panes that never set their own follow it.

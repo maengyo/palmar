@@ -278,6 +278,48 @@ class ColoursAProgramPicks(unittest.TestCase):
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class ASelectionYouCanSee(unittest.TestCase):
+    """**Dragging to copy showed next to nothing** (user, 2026-10-27). The selection was the 12–14%
+    tint a hovered row uses, 1.2:1 against the tile. Checked in every palette, by blending what xterm
+    was given over what it draws on — a number a person's eye roughly agrees with, not a judgement
+    of the colour, which is still theirs."""
+
+    @staticmethod
+    def contrast(sel, bg):
+        import re as _re
+        def rgb(c):
+            c = c.strip()
+            if c.startswith("#"):
+                return [int(c[i:i + 2], 16) / 255 for i in (1, 3, 5)], 1.0
+            n = [float(x) for x in _re.findall(r"[\d.]+", c)]
+            return [x / 255 for x in n[:3]], (n[3] if len(n) > 3 else 1.0)
+        def lum(c):
+            c = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+            return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+        (s, a), (b, _) = rgb(sel), rgb(bg)
+        mixed = [a * x + (1 - a) * y for x, y in zip(s, b)]
+        lo, hi = sorted([lum(mixed), lum(b)])
+        return (hi + 0.05) / (lo + 0.05)
+
+    def test_it_stands_out_from_the_tile_in_every_palette(self):
+        with Daemon() as d, Browser() as b:
+            d.open_pane(name="sel")
+            b.open(d.url)
+            time.sleep(3)
+            picks = b.ev("[...document.querySelectorAll('#theme-menu [data-pick]')]"
+                         ".map(x=>x.dataset.pick).filter(x=>x!=='system')")
+            self.assertGreaterEqual(len(picks), 2, picks)
+            for pick in picks:
+                b.ev("document.getElementById('theme').click()")
+                b.ev("document.querySelector('#theme-menu [data-pick=%s]').click()" % json.dumps(pick))
+                time.sleep(0.3)
+                th = b.ev("(()=>{const o=[...window.palmar.tiles.values()][0].term.options.theme;"
+                          "return [o.selectionBackground,o.background];})()")
+                self.assertGreaterEqual(self.contrast(*th), 1.5,
+                                        "%s: the selection hardly differs from the tile: %r" % (pick, th))
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
 class CopyAndPasteKeys(unittest.TestCase):
     """**Ctrl+C and Ctrl+V on Windows** (user, 2026-10-23: Ctrl+Shift+C/V was "너무 불편"). Windows
     Terminal's rule: Ctrl+C copies while something is selected and lets go of it, so the next press is
