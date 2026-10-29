@@ -251,6 +251,48 @@ class Shortcuts(unittest.TestCase):
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class AMessageOnTheRail(unittest.TestCase):
+    """`palmar --message` as the page shows it (2026-10-29): a line on the pane's row that stays until
+    a hand goes to the pane, a toast when it arrives, and nothing said again on a reload."""
+
+    def test_it_is_shown_said_once_and_cleared_by_a_hand(self):
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="pr-watch")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            st, _ = d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "review requested: o/r#12"})
+            self.assertEqual(st, 200)
+            time.sleep(1)
+            got = b.ev("""(()=>{const r=document.querySelector('#list .ses[data-id=%s] .note');
+              return {note: r && r.textContent, toast: document.getElementById('toast').textContent};})()"""
+                       % json.dumps(s["id"]))
+            self.assertEqual(got["note"], "review requested: o/r#12", "the row does not carry it")
+            self.assertIn("review requested", got["toast"], "it arrived without being said")
+            # **Not said again on a reload** — the row still carries it, but it is old news.
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            again = b.ev("""(()=>({note: !!document.querySelector('#list .ses .note'),
+              toast: document.getElementById('toast').classList.contains('show') ?
+                     document.getElementById('toast').textContent : ''}))()""")
+            self.assertTrue(again["note"], "a reload lost the message")
+            self.assertNotIn("review requested", again["toast"], "a reload said it a second time")
+            # **A hand on the pane clears it** — in the daemon, so every page agrees.
+            b.ev("""(()=>{const t=window.palmar.tiles.get(%s);
+              t.el.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true})); return 1;})()"""
+                 % json.dumps(s["id"]))
+            end = time.time() + 5
+            left = True
+            while time.time() < end and left:
+                rows = d.get("/api/sessions")
+                rows = rows["sessions"] if isinstance(rows, dict) else rows
+                left = bool(rows[0].get("message"))
+                time.sleep(0.2)
+            self.assertFalse(left, "clicking the terminal did not clear its message")
+            time.sleep(0.5)
+            self.assertFalse(b.ev("!!document.querySelector('#list .ses .note')"), "the row kept it")
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
 class Theme(unittest.TestCase):
     """Three states, and each has to say which one it is — the mark alone could not, and the only
     explanation was a title attribute nobody hovers (#16)."""

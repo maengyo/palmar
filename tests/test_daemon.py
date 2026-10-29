@@ -2267,6 +2267,89 @@ class SeeingAndClosingWithoutABrowser(unittest.TestCase):
         self.assertIn("daemon running", r.stderr)
 
 
+
+class AMessageFromInsideAPane(unittest.TestCase):
+    """`palmar --message` (user, 2026-10-29: a loop watching GitHub for review requests wanted to say
+    so somewhere palmar shows). Driven as the loop would drive it — the real CLI, with the
+    `PALMAR_PANE` every pane's shell carries — and checked where the page reads it, the session."""
+
+    def cli(self, home, *args, pane=None):
+        from tests.helpers import PYTHON, REPO
+        env = dict(os.environ, HOME=home, PYTHONPATH=REPO)
+        env.pop("PALMAR_PANE", None)
+        if pane:
+            env["PALMAR_PANE"] = pane
+        return subprocess.run([PYTHON, "-m", "palmar", *args], cwd=REPO, capture_output=True,
+                              text=True, timeout=60, env=env)
+
+    def message_of(self, d, sid):
+        got = d.get("/api/sessions")
+        rows = got["sessions"] if isinstance(got, dict) else got
+        return [x for x in rows if x["id"] == sid][0].get("message")
+
+    def test_it_lands_on_the_pane_it_was_typed_in(self):
+        with Daemon() as d:
+            s = d.post("/api/sessions", {"cwd": d.home, "name": "pr-watch"})
+            other = d.post("/api/sessions", {"cwd": d.home, "name": "other"})
+            r = self.cli(d.home, "--message", "review requested:\n  o/r#12", pane=s["id"])
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            m = self.message_of(d, s["id"])
+            self.assertEqual(m["text"], "review requested: o/r#12", "lines are not joined into one")
+            self.assertIsNone(self.message_of(d, other["id"]), "it landed on another pane too")
+
+    def test_typed_in_a_real_pane_it_finds_its_own_way(self):
+        """No id anywhere: the shell's own `PALMAR_PANE` is the only thing that says which pane."""
+        from tests.helpers import PYTHON, REPO
+        with Daemon(shell="/bin/bash") as d:
+            s = d.post("/api/sessions", {"cwd": d.home, "name": "pr-watch"})
+            w = WS(d, "/pty/%s?token=%s&cols=90&rows=24" % (s["id"], d.token))
+            time.sleep(2)
+            import shlex
+            w.send(("cd %s && %s -m palmar --message 'said from inside'\n"
+                    % (shlex.quote(REPO), shlex.quote(PYTHON))).encode(),
+                   opcode=0x2)
+            end = time.time() + 20
+            while time.time() < end and not self.message_of(d, s["id"]):
+                time.sleep(0.3)
+            self.assertEqual((self.message_of(d, s["id"]) or {}).get("text"), "said from inside")
+
+    def test_the_same_words_twice_are_two_messages(self):
+        """The page decides whether to say it by `at`, so "build done" twice must not look like once."""
+        with Daemon() as d:
+            s = d.post("/api/sessions", {"cwd": d.home})
+            self.cli(d.home, "--message", "build done", pane=s["id"])
+            first = self.message_of(d, s["id"])
+            self.cli(d.home, "--message", "build done", pane=s["id"])
+            second = self.message_of(d, s["id"])
+            self.assertGreater(second["at"], first["at"])
+
+    def test_null_clears_it_and_empty_text_does_too(self):
+        with Daemon() as d:
+            s = d.post("/api/sessions", {"cwd": d.home})
+            self.cli(d.home, "--message", "x", pane=s["id"])
+            st, _ = d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": None})
+            self.assertEqual(st, 200)
+            self.assertIsNone(self.message_of(d, s["id"]))
+            self.cli(d.home, "--message", "y", pane=s["id"])
+            self.cli(d.home, "--message", "", pane=s["id"])
+            self.assertIsNone(self.message_of(d, s["id"]))
+
+    def test_outside_a_pane_it_says_how_to_name_one(self):
+        with Daemon() as d:
+            r = self.cli(d.home, "--message", "hi")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("--to", r.stderr)
+            s = d.post("/api/sessions", {"cwd": d.home})
+            r = self.cli(d.home, "--message", "hi", "--to", s["id"])
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(self.message_of(d, s["id"])["text"], "hi")
+
+    def test_a_message_that_is_not_text_is_refused(self):
+        with Daemon() as d:
+            s = d.post("/api/sessions", {"cwd": d.home})
+            st, _ = d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": 5})
+            self.assertEqual(st, 400)
+
 class ThePageIsFenced(unittest.TestCase):
     def test_index_html_carries_a_script_src_policy_with_a_nonce(self):
         with Daemon() as d:

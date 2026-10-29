@@ -3136,6 +3136,8 @@ function focusTile(id, opts) {
   }
   // done clears only when the user looks at that window — only focus a hand caused counts as "seen"
   if (opts.user && t.s.status === 'done') sendSeen(id);
+  // And a message goes the same way: read, by a hand on the pane — never by the page merely showing it.
+  if (opts.user) clearMessage(id);
   if (opts.keyboard !== false) t.term.focus();
 }
 
@@ -4158,6 +4160,14 @@ function buildItem(s, pinned) {
   cl.setAttribute('aria-label', 'close terminal — ' + (labelOf(s)));
   cl.addEventListener('click', (ev) => { ev.stopPropagation(); openRowConfirm(it, s); });
   it.append(who, ago, it._msg, cl);
+  // `palmar --message`: what something in this pane asked to say, on a line of its own under the rest,
+  // until a hand goes to the pane. Accent, not a light colour — it is not a status (⑥).
+  if (s.message && s.message.text) {
+    const note = el('span', 'note', s.message.text);
+    note.title = s.message.text + ' — click the terminal to clear it';
+    it.appendChild(note);
+    it.classList.add('noted');
+  }
   // The list is rebuilt wholesale on every session frame — restore an open confirm strip here (otherwise one hook makes it vanish)
   if (rowConfirm === s.id) openRowConfirm(it, s);
   it.addEventListener('click', () => goToSession(s.id));
@@ -4569,6 +4579,30 @@ function flushNotify() {
   n.onclick = () => { window.focus(); goToSession(ids[0]); n.close(); };
 }
 
+// ── `palmar --message` ──
+// Said three ways, each for a different place the eye might be: the row (until cleared), a toast (if
+// this page is in front), and the OS notification (if it is not, and notifications are on).
+const clearing = new Set();
+function clearMessage(id) {
+  const s = sessions.get(id);
+  if (!s || !s.message || clearing.has(id)) return;
+  clearing.add(id);
+  api('PATCH', '/api/sessions/' + encodeURIComponent(id), { message: null })
+    .catch(() => {}).finally(() => clearing.delete(id));
+}
+function onMessage(s) {
+  const text = s.message.text;
+  if (document.hasFocus()) {
+    toast([{ b: labelOf(s) }, text, { a: 'show', on: () => goToSession(s.id) }]);
+    return;
+  }
+  if (!notifyOn || !canRing()) return;
+  if (!hasNotificationAPI()) { notifyViaDaemon(labelOf(s), text).catch(() => {}); return; }
+  let n;
+  try { n = new Notification(labelOf(s), { body: text, tag: 'palmar-msg-' + s.id }); } catch (e) { return; }
+  n.onclick = () => { window.focus(); goToSession(s.id); n.close(); };
+}
+
 // **Ring once when it is turned on.** A notification has to pass browser permission, the OS's do-not-disturb and
 // focus assistance before it arrives, and blocked at any of those it is equally silent on screen. One send checks
 // the whole chain at once — better to know now than to discover "I turned it on and nothing comes" later.
@@ -4855,6 +4889,9 @@ function upsert(s) {
   // first finds the old session still sitting there and filters it out as "nothing is calling". Deferred behind
   // the 500ms timer the insert happened in between so it never showed; it surfaced the moment it rang immediately.
   if (wants) onWantsYou(s.id);
+  // A message is new when its `at` is — the same words sent twice are two things that happened.
+  // Not on the first sight of a pane (a hello after a reload): that one was already said.
+  if (old && s.message && (!old.message || old.message.at !== s.message.at)) onMessage(s);
   renderBadge();
   let t = tiles.get(s.id);
   if (!t) {
