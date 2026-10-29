@@ -97,8 +97,12 @@ const FONT_MIN = 6, FONT_MAX = 32, FONT_STEP = 1;
 // nail the guidance to one side and it points at a key the other person does not have (⌘ used to do that).
 const IS_MAC = /Mac|iPhone|iPad/i.test(
   (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '');
+//: **Windows is the browser's OS, not the daemon's.** A page served from WSL and read in a Windows
+//: browser is held with Windows hands, so this asks the page, never the server.
+const IS_WIN = /^Win/i.test(
+  (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '');
 const KMOD = IS_MAC ? '⌘' : 'Ctrl';
-const CLIP_HINT = IS_MAC ? '⌘C / ⌘V' : 'Ctrl+Shift+C / Ctrl+Shift+V';
+const CLIP_HINT = IS_MAC ? '⌘C / ⌘V' : IS_WIN ? 'Ctrl+C / Ctrl+V' : 'Ctrl+Shift+C / Ctrl+Shift+V';
 const LS_CLIPHINT = 'palmar.cliphint';
 let clipHintShown = false;
 try { clipHintShown = localStorage.getItem(LS_CLIPHINT) === '1'; } catch (e) {}
@@ -107,8 +111,12 @@ try { clipHintShown = localStorage.getItem(LS_CLIPHINT) === '1'; } catch (e) {}
 // xterm.js **does not have this.** Selecting is where its job ends; putting it on the clipboard is the app's
 // (measured 2026-09-08: the selected text is reachable via getSelection(), but no combination put it on the clipboard).
 // **Ctrl+C is not taken away.** In a terminal that is interrupt — intercept it because something is selected
-// and the hand reaching to stop a run copies instead. So ask for Shift as well, the Linux/Windows convention,
+// and the hand reaching to stop a run copies instead. So ask for Shift as well, the Linux convention,
 // and use ⌘ on a Mac. Both are accepted — whichever habit the hand has, it should work.
+// **Windows is the exception, the way Windows Terminal is** (user, 2026-10-23: Ctrl+Shift+C/V "너무 불편").
+// There Ctrl+C copies only while something is selected, and the selection goes with it, so the second
+// press is the interrupt; with nothing selected it is the interrupt straight away. Ctrl+V pastes, which
+// gives up the shell's literal-next (^V) — Windows Terminal makes the same trade. Ctrl+Shift+C/V still work.
 async function clipWrite(text) {
   try {
     await navigator.clipboard.writeText(text);
@@ -610,14 +618,26 @@ const ANSI_DARK = {
 function isDarkNow() {
   return root.dataset.theme === 'dark' || (!root.dataset.theme && darkMq.matches);
 }
+//: **A selection has to be seen while it is being dragged.** It used `--accent-2`, the 12–14% tint
+//: that marks a hovered row — 1.2:1 against the tile, so a drag to copy showed next to nothing
+//: (user, 2026-10-27). 35% of the accent puts it at 1.6–2.5:1 against the tile in every palette
+//: and theme, and text on it stays at 5.3:1 or better (measured, all eight). The rows keep their
+//: light tint; this is the terminal's own.
+const SELECT_ALPHA = 0.35;
+function tint(hex, alpha) {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return cssVar('--accent-2');
+  return 'rgba(' + [m[1], m[2], m[3]].map((x) => parseInt(x, 16)).join(',') + ',' + alpha + ')';
+}
 function termTheme() {
+  const sel = tint(cssVar('--accent'), SELECT_ALPHA);
   return Object.assign({
     background: cssVar('--tile'),
     foreground: cssVar('--term-ink'),
     cursor: cssVar('--accent'),
     cursorAccent: cssVar('--on-accent'),
-    selectionBackground: cssVar('--accent-2'),
-    selectionInactiveBackground: cssVar('--accent-2'),
+    selectionBackground: sel,
+    selectionInactiveBackground: sel,
   }, isDarkNow() ? ANSI_DARK : ANSI_LIGHT);
 }
 // The base text size, from the options list. Panes that never set their own follow it.
@@ -768,6 +788,13 @@ class Tile {
       fontFamily: cssVar('--mono'),
       lineHeight: LINE_HEIGHT,
       theme: termTheme(),
+      //: **No colour pair a program picks may vanish into its own background.** `ls` paints a
+      //: directory anyone can write to blue on green (LS_COLORS `ow=34;42`) — and on WSL every folder
+      //: under /mnt/c is one. Both palettes put those two at the same lightness: 1.12:1 in either
+      //: theme, which is no text at all (user, 2026-10-25). Darkening one colour fixes that pair and
+      //: breaks another; this makes xterm lift the foreground of any cell below 4.5:1 (WCAG AA,
+      //: and VS Code's terminal default), whatever the program chose.
+      minimumContrastRatio: 4.5,
       //: **10,000 lines, not xterm's 1,000.** The old value was the library's default, never a
       //: decision — and a thousand lines is less than one `make` (user, 2026-10-06). Measured at
       //: 88 characters a line: 0.9 KB a line, so 9 MB for a pane that has actually filled it and
@@ -797,7 +824,9 @@ class Tile {
       if (clipHintShown || !this.term.hasSelection()) return;
       clipHintShown = true;
       try { localStorage.setItem(LS_CLIPHINT, '1'); } catch (e) {}
-      toast([CLIP_HINT + ' to copy and paste — Ctrl+C stays as interrupt, the way a terminal expects']);
+      toast([IS_WIN
+        ? 'Ctrl+C / Ctrl+V to copy and paste — with nothing selected, Ctrl+C is interrupt'
+        : CLIP_HINT + ' to copy and paste — Ctrl+C stays as interrupt, the way a terminal expects']);
     });
     // Look at the key **before** xterm handles it. true hands it through, false takes it for us.
     this.term.attachCustomKeyEventHandler((ev) => {
@@ -829,7 +858,8 @@ class Tile {
       // and then xterm handles the key and cuts propagation so it never reaches the global shortcuts
       // (measured: Ctrl+Shift+Enter worked and only Ctrl+Enter did not).
       if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey) && !ev.altKey) return false;
-      const mod = ev.metaKey || (ev.ctrlKey && ev.shiftKey);
+      const plain = IS_WIN && ev.ctrlKey && !ev.shiftKey && !ev.metaKey;
+      const mod = ev.metaKey || (ev.ctrlKey && ev.shiftKey) || plain;
       if (!mod || ev.altKey) return true;
       const k = (ev.key || '').toLowerCase();
       if (k === 'c') {
@@ -837,6 +867,9 @@ class Tile {
         if (!sel) return true;              // nothing selected — it belongs to the terminal
         ev.preventDefault();
         clipWrite(sel);
+        // Plain Ctrl+C lets go of the selection, or a selection left lying there would keep the
+        // interrupt from ever getting through.
+        if (plain) this.term.clearSelection();
         return false;
       }
       if (k === 'v') {
@@ -5501,11 +5534,8 @@ function boot() {
     for (const el of document.querySelectorAll('[data-kmod][title]'))
       el.title = el.title.replace('Ctrl', '⌘');
   }
-  if (IS_MAC) {
-    const k = document.getElementById('kmod');
-    if (k) k.firstElementChild.textContent = '⌘';
-    // On a Mac, copy·paste·text size are ⌘ alone — no Shift. The guidance names that machine's keys too.
-    for (const el of document.querySelectorAll('.keys kbd.mod')) el.textContent = '⌘';
+  if (IS_MAC || IS_WIN) {
+    // Copy and paste drop Shift on a Mac (⌘C) and on Windows (Ctrl+C, the way Windows Terminal has it).
     // **Only the rows marked for it.** Matching on "three keys with Shift in the middle" also caught
     // Ctrl+Shift+Enter, and new canvas needs Shift on a Mac too — both Enter rows came out reading
     // ⌘⏎ and one of them was wrong.
@@ -5513,6 +5543,16 @@ function boot() {
       const ks = [...el.querySelectorAll('kbd')];
       if (ks.length === 3 && ks[1].textContent === 'Shift') ks[1].remove();
     }
+  }
+  if (IS_WIN) {
+    const said = document.getElementById('ctrl-c-says');
+    if (said) said.textContent = 'interrupt — unless something is selected, which it copies';
+  }
+  if (IS_MAC) {
+    const k = document.getElementById('kmod');
+    if (k) k.firstElementChild.textContent = '⌘';
+    // On a Mac, copy·paste·text size are ⌘ alone — no Shift. The guidance names that machine's keys too.
+    for (const el of document.querySelectorAll('.keys kbd.mod')) el.textContent = '⌘';
   }
   // ── options list, and the shortcuts panel behind one of its items ──
   const optBtn = document.getElementById('options'), optMenu = document.getElementById('options-menu');
