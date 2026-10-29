@@ -57,6 +57,11 @@
            push it away (the strip scrolls sideways, and inside it the button gets shoved to the end like ＋). -->
       <div class="cvbar">
         <div class="tabs" id="tabs" role="tablist" aria-label="canvases"></div>
+      <!-- The four things you do to a canvas, in one quiet group **beside the tabs** (2026-10-30).
+           They used to sit at the far right of the bar next to the settings, boxed like them, and
+           greyed out most of the time — eight boxes in a row, four of them dead. Here they read as
+           the canvas's own; a disabled one fades rather than wearing a box it cannot use. -->
+      <div class="cvtools" role="group" aria-label="arrange this canvas">
       <!-- Undo: the arrow that goes back on itself. It was the word "undo" until 2026-09-20 — the
            only word in a row of drawings, which made it read as a different kind of control than
            the three beside it. The word lives on in `aria-label` and in the title, which is where
@@ -99,40 +104,18 @@
           </svg>
         </button>
       </div>
+      </div>
     </div>
     <div class="r">
       <span class="bell" id="bell" role="button" tabindex="0" data-on="0"
             title="notify me when a terminal wants me (off)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
       </span>
-      <!-- Three states, and the third one used to be a guess (#16). The mark alone cannot say which
-           is which, so the button says it in a word. UI text is English (decisions.md "디자인"). -->
-      <span class="theme" id="theme" role="button" tabindex="0" aria-haspopup="menu" aria-expanded="false"
-            title="theme"><i></i><b>theme</b><small class="mode">auto</small></span>
-      <!-- The list behind it: System, then a palette under Light, then one under Dark. Picking under
-           Light or Dark sets that theme and that palette; System follows the OS with whichever palette
-           each side has. (2026-09-15: "theme 으로 바꾸고 누르면 리스트 나오고 system light dark 대분류") -->
-      <div class="theme-menu" id="theme-menu" role="menu" hidden>
-        <div class="tm-h">System</div>
-        <button type="button" class="tm-i" role="menuitemradio" data-pick="system">follow the system</button>
-        <div class="tm-h">Light</div>
-        <button type="button" class="tm-i" role="menuitemradio" data-pick="light:paper">paper</button>
-        <button type="button" class="tm-i" role="menuitemradio" data-pick="light:sky">sky</button>
-        <button type="button" class="tm-i" role="menuitemradio" data-pick="light:porcelain">porcelain</button>
-        <button type="button" class="tm-i" role="menuitemradio" data-pick="light:lilac">lilac</button>
-        <div class="tm-h">Dark</div>
-        <button type="button" class="tm-i" role="menuitemradio" data-pick="dark:earth">earth</button>
-        <button type="button" class="tm-i" role="menuitemradio" data-pick="dark:graphite">graphite</button>
-        <button type="button" class="tm-i" role="menuitemradio" data-pick="dark:deep">deep</button>
-        <button type="button" class="tm-i" role="menuitemradio" data-pick="dark:midnight">midnight</button>
-      </div>
+      <!-- Only two things live up here now (2026-10-30): the bell, and the list that holds every
+           setting. Theme and "open in a browser" used to be buttons beside them — settings in two
+           places, in three button shapes. They are rows in the options list below. -->
       <!-- The gear that was a placeholder is now a button with real work. Shortcuts had piled up with none
            of them written anywhere, so nobody found the ones pressing does not reveal (copy is not Ctrl+C). -->
-      <!-- The window and the page are two views of one daemon, so moving between them should be a
-           button and not a hunt through ~/.palmar. Plain text, no glyph: chrome must not depend on
-           a character the machine may not have (AGENTS.md; the add-canvas button was a box on WSL). -->
-      <button class="toweb" id="toweb" type="button" title="open this in a browser"
-              aria-haspopup="dialog" aria-expanded="false">web</button>
       <!-- Options. The ? that opened the shortcuts is a list now, and the shortcuts are one item in it
            beside the three settings that used to sit under them with a paragraph each (2026-09-15). -->
       <button class="options ib" id="options" type="button" title="options" aria-label="options"
@@ -142,12 +125,27 @@
         </svg>
       </button>
       <div class="theme-menu options-menu" id="options-menu" role="menu" hidden>
-        <button type="button" class="tm-i" role="menuitem" data-do="keys">Keyboard shortcuts</button>
-        <button type="button" class="tm-i" role="menuitem" data-do="search">Search sessions and folders</button>
-        <div class="tm-h">Windows</div>
-        <label class="tm-row" title="drop a window on another and the one that was there moves out of the way, by exactly the overlap"><input type="checkbox" id="pushaside" checked> Push windows aside</label>
-        <label class="tm-row" title="when a terminal closes, pull the rest back to the corner on their own"><input type="checkbox" id="autotidy"> Tidy automatically</label>
-        <label class="tm-row" title="the small map of the canvas, bottom right"><input type="checkbox" id="minimap" checked> Minimap</label>
+        <!-- Three groups: how it looks, how windows behave, and palmar itself. The explanation of
+             each row is in its title. UI text is English (decisions.md "디자인"). -->
+        <div class="tm-h">Appearance</div>
+        <!-- One list: follow the system, or a light palette, or a dark one. Picking a palette also
+             picks that side — a light palette is a way of saying light (2026-09-15). -->
+        <label class="tm-row" title="follow the system, or pick a light or a dark palette">Theme
+          <select id="theme" aria-label="theme">
+            <option value="system">follow the system</option>
+            <optgroup label="Light">
+              <option value="light:paper">paper</option>
+              <option value="light:sky">sky</option>
+              <option value="light:porcelain">porcelain</option>
+              <option value="light:lilac">lilac</option>
+            </optgroup>
+            <optgroup label="Dark">
+              <option value="dark:earth">earth</option>
+              <option value="dark:graphite">graphite</option>
+              <option value="dark:deep">deep</option>
+              <option value="dark:midnight">midnight</option>
+            </optgroup>
+          </select></label>
         <label class="tm-row" title="the face the rails, tabs and menus are set in — terminals keep their own">Interface font
           <select id="uifont">
             <option value="system">system</option>
@@ -163,16 +161,26 @@
             <option value="16">16</option>
             <option value="18">18</option>
           </select></label>
-        <div class="tm-h">palmar</div>
-        <!-- Off until it is asked for. It is the only thing palmar sends off the machine, so the
-             title says what it does rather than leaving it to be found out (2026-09-16, user). -->
-        <label class="tm-row" title="ask GitHub once a day whether a newer palmar is out — the only thing palmar sends off this machine"><input type="checkbox" id="updatecheck"> Tell me about new versions</label>
+        <div class="tm-h">Windows</div>
+        <label class="tm-row" title="drop a window on another and the one that was there moves out of the way, by exactly the overlap"><input type="checkbox" id="pushaside" checked> Push windows aside</label>
+        <label class="tm-row" title="when a terminal closes, pull the rest back to the corner on their own"><input type="checkbox" id="autotidy"> Tidy automatically</label>
+        <label class="tm-row" title="the small map of the canvas, bottom right"><input type="checkbox" id="minimap" checked> Minimap</label>
         <label class="tm-row" title="how the wait is shown while holding a window over another">Hold to group
           <select id="holdstyle">
             <option value="grow">landing box fills</option>
             <option value="ring">ring round the window</option>
             <option value="both">both</option>
           </select></label>
+        <div class="tm-h">palmar</div>
+        <!-- Off until it is asked for. It is the only thing palmar sends off the machine, so the
+             title says what it does rather than leaving it to be found out (2026-09-16, user). -->
+        <label class="tm-row" title="ask GitHub once a day whether a newer palmar is out — the only thing palmar sends off this machine"><input type="checkbox" id="updatecheck"> Tell me about new versions</label>
+        <!-- The window and the page are two views of one daemon, so moving between them is a row here
+             and not a hunt through ~/.palmar. -->
+        <button type="button" class="tm-i" role="menuitem" id="toweb" data-do="web"
+                aria-haspopup="dialog" aria-expanded="false">Open in a browser</button>
+        <button type="button" class="tm-i" role="menuitem" data-do="search">Search sessions and folders</button>
+        <button type="button" class="tm-i" role="menuitem" data-do="keys">Keyboard shortcuts</button>
       </div>
     </div>
   </div>
@@ -316,7 +324,10 @@
       <div class="rh"><button class="rail-fold r" id="fold-r" type="button" data-kmod title="collapse (Ctrl Shift \)" aria-label="collapse the right rail">›</button><span class="t">Directories</span><span class="sp"></span><span class="ib plus" id="mkdir" title="new folder">+</span><span class="ib" id="refresh" title="refresh">↻</span></div>
       <div class="scroll">
         <div class="tree" id="tree"></div>
-        <div class="hint2" id="tree-hint">click a file to view it · read when expanded</div>
+        <!-- No standing hint under the tree (2026-10-30) — "click a file to view it" sat there for
+             the life of the page. The line is used only while a search is on, to say what the flat
+             list is (renderTree). -->
+        <div class="hint2" id="tree-hint" hidden></div>
       </div>
       <!-- The launcher that stood here ("Open terminal here") is gone: terminals open at home, from ＋,
            Ctrl/⌘⏎ or the round button, and the rail is for looking at what is in a folder (2026-09-15). -->

@@ -306,12 +306,12 @@ class ASelectionYouCanSee(unittest.TestCase):
             d.open_pane(name="sel")
             b.open(d.url)
             time.sleep(3)
-            picks = b.ev("[...document.querySelectorAll('#theme-menu [data-pick]')]"
-                         ".map(x=>x.dataset.pick).filter(x=>x!=='system')")
+            picks = b.ev("[...document.querySelectorAll('#theme option')]"
+                         ".map(x=>x.value).filter(x=>x!=='system')")
             self.assertGreaterEqual(len(picks), 2, picks)
             for pick in picks:
-                b.ev("document.getElementById('theme').click()")
-                b.ev("document.querySelector('#theme-menu [data-pick=%s]').click()" % json.dumps(pick))
+                b.ev("(()=>{const s=document.getElementById('theme'); s.value=%s;"
+                     " s.dispatchEvent(new Event('change')); return 1;})()" % json.dumps(pick))
                 time.sleep(0.3)
                 th = b.ev("(()=>{const o=[...window.palmar.tiles.values()][0].term.options.theme;"
                           "return [o.selectionBackground,o.background];})()")
@@ -391,20 +391,20 @@ class Theme(unittest.TestCase):
         cls.d.stop()
 
     def test_each_state_names_itself(self):
-        """The button reads "theme" and opens a list now (2026-09-15); the state still stands beside
-        it in a word, because the mark alone cannot say which of three it is."""
+        """A select in the options list now (2026-10-30; a button with a list of its own until then).
+        The state is the chosen option's own words, so the three cannot read the same."""
         seen = []
         for pick in ("system", "light:paper", "dark:earth"):
-            self.b.ev("document.getElementById('theme').click()")
-            self.b.ev("document.querySelector('#theme-menu [data-pick=%s]').click()" % json.dumps(pick))
+            self.b.ev("(()=>{const s=document.getElementById('theme'); s.value=%s;"
+                      " s.dispatchEvent(new Event('change')); return 1;})()" % json.dumps(pick))
             time.sleep(0.2)
-            seen.append(self.b.ev("""(()=>{const b=document.getElementById('theme');
-              return [b.dataset.mode, (b.querySelector('small')||{}).textContent];})()"""))
+            seen.append(self.b.ev("""(()=>{const s=document.getElementById('theme');
+              return [document.documentElement.dataset.theme || 'system', s.selectedOptions[0].textContent];})()"""))
         modes = [m for m, _ in seen]
         labels = [l for _, l in seen]
         self.assertEqual(len(set(labels)), 3, "two states read the same: %s" % labels)
         self.assertEqual(set(modes), {"system", "light", "dark"})
-        self.assertIn("auto", labels)
+        self.assertIn("follow the system", labels)
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
@@ -3768,18 +3768,16 @@ class Palettes(unittest.TestCase):
         return self.b.ev("""(()=>{const root=document.documentElement;
           return {theme: root.dataset.theme || null, pal: window.palmar.palette(),
                   accent: getComputedStyle(root).getPropertyValue('--accent').trim(),
-                  open: !document.getElementById('theme-menu').hidden,
-                  on: [...document.querySelectorAll('#theme-menu .tm-i.on')].map(b=>b.dataset.pick)};})()""")
+                  on: [document.getElementById('theme').value]};})()""")
 
     def pick(self, v):
-        self.b.ev("document.getElementById('theme').click()")
-        self.assertTrue(self.state()["open"], "the list did not open")
-        self.b.ev("document.querySelector('#theme-menu [data-pick=%s]').click()" % json.dumps(v))
+        self.b.ev("(()=>{const s=document.getElementById('theme'); s.value=%s;"
+                  " s.dispatchEvent(new Event('change')); return 1;})()" % json.dumps(v))
 
     def test_the_list_sets_theme_and_palette_together(self):
         self.pick("light:sky")
         st = self.state()
-        self.assertEqual([st["theme"], st["pal"], st["accent"], st["open"]], ["light", "sky", "#2f6fed", False], st)
+        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["light", "sky", "#2f6fed"], st)
         self.assertEqual(st["on"], ["light:sky"], "the list does not mark what is in effect: %r" % st)
         self.pick("dark:graphite")
         st = self.state()
@@ -3801,14 +3799,15 @@ class Palettes(unittest.TestCase):
         st = self.state()
         self.assertEqual([st["theme"], st["pal"], st["accent"]], ["light", "lilac", "#6d4de6"], st)
 
-    def test_escape_and_a_click_outside_close_it(self):
-        self.b.ev("document.getElementById('theme').click()")
-        self.assertTrue(self.state()["open"])
-        self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
-        self.assertFalse(self.state()["open"], "Escape did not close the list")
-        self.b.ev("document.getElementById('theme').click()")
-        self.b.ev("document.body.click()")
-        self.assertFalse(self.state()["open"], "a click outside did not close the list")
+    def test_it_is_a_row_of_the_options_list(self):
+        """Theme sat on the top bar as a button of its own while font and text size were rows in the
+        options list — the same kind of setting in two places (2026-10-30)."""
+        r = self.b.ev("""(()=>{const m=document.getElementById('options-menu');
+          return {inList: !!m.querySelector('#theme'), onBar: !!document.querySelector('.top .r > #theme'),
+                  bar: [...document.querySelectorAll('.top .r > *')].filter(e=>!e.hidden && e.tagName!=='DIV').map(e=>e.id)};})()""")
+        self.assertTrue(r["inList"], "theme is not in the options list")
+        self.assertFalse(r["onBar"], "theme is still a top-bar button")
+        self.assertEqual(r["bar"], ["bell", "options"], "the top bar's right end holds more than the bell and options: %r" % r)
 
 
 class TopRow(unittest.TestCase):
@@ -3921,7 +3920,7 @@ class TopRow(unittest.TestCase):
 
     def test_every_button_up_there_is_the_same_height(self):
         r = self.b.ev("""(()=>{const out={};
-          for (const id of ['bell','theme','toweb','undo','tidy','options','mkdir','refresh'])
+          for (const id of ['bell','undo','tidy','options','mkdir','refresh'])
             out[id]=Math.round(document.getElementById(id).getBoundingClientRect().height);
           return out;})()""")
         self.assertEqual(set(r.values()), {26}, "the buttons do not share one height: %r" % r)
@@ -3989,15 +3988,16 @@ class TopRow(unittest.TestCase):
         r = self.b.ev("""(()=>{const h=(id)=>document.getElementById(id).hidden;
           document.getElementById('options').click();
           const a = !h('options-menu');
-          document.getElementById('theme').click();
-          const b = [h('options-menu'), !h('theme-menu')];
+          document.getElementById('keys-x').click(); document.getElementById('options').click();
+          document.querySelector('#options-menu [data-do="keys"]').click();
+          const b = [h('options-menu'), !h('keys')];
           document.getElementById('toweb').click();
-          const c = [h('theme-menu'), !h('webbox')];
+          const c = [h('keys'), !h('webbox')];
           document.body.click();
           return {a, b, c, end: h('webbox')};})()""")
         self.assertTrue(r["a"])
-        self.assertEqual(r["b"], [True, True], "the theme button left the options list open: %r" % r)
-        self.assertEqual(r["c"], [True, True], "the web button left the theme list open: %r" % r)
+        self.assertEqual(r["b"], [True, True], "the shortcuts item left the options list open: %r" % r)
+        self.assertEqual(r["c"], [True, True], "the web item left the shortcuts open: %r" % r)
         self.assertTrue(r["end"])
 
     def test_a_narrow_rail_keeps_its_buttons(self):

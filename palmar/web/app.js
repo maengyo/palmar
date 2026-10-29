@@ -488,7 +488,11 @@ function agoText(id) {
 }
 
 // ── theme (system / light / dark, localStorage 'palmar-theme') ──
-const themeBtn = $('#theme');
+//: **One select in the options list** (2026-10-30). It was a button of its own on the top bar with
+//: a list under it, while the interface font and the text size were rows in the options list — the
+//: same kind of setting in two places. The value is "system", or "<side>:<palette>": picking a
+//: palette is how a side is picked (2026-09-15, "system light dark 대분류").
+const themeSel = $('#theme');
 const darkMq = matchMedia('(prefers-color-scheme: dark)');
 function storedTheme() {
   try { const v = localStorage.getItem(LS_THEME); return v === 'light' || v === 'dark' ? v : null; }
@@ -516,55 +520,17 @@ darkMq.addEventListener('change', applyPalette);   // the system flipped: the ot
 function applyTheme(mode) {   // mode: 'light' | 'dark' | null (system)
   if (mode) root.dataset.theme = mode; else delete root.dataset.theme;
   applyPalette();
-  themeBtn.dataset.mode = mode || 'system';
-  // The button says "theme" and opens the list (2026-09-15), and beside it, fainter, **the state in a
-  // word** — #16 still holds: three marks cannot say which is which on their own, and a title
-  // attribute needs a hover nobody performs.
-  const st = themeBtn.querySelector('small');
-  if (st) st.textContent = mode || 'auto';
-  themeBtn.title = 'theme: ' + (mode || 'follows the system') + ' — click for the list';
   markThemeMenu();
   try { if (mode) localStorage.setItem(LS_THEME, mode); else localStorage.removeItem(LS_THEME); } catch (e) {}
   if (typeof renderBadge === 'function') renderBadge(true);   // the favicon color reads --st-*
   rethemeTerminals();
 }
-// ── popups: one at a time ──
-// Every popup closes on a press outside it, and a press on another popup's button is not "outside" —
-// that button stops the event so its own popup is not closed by it — so two could be up at once
-// (user, 2026-09-15). Each popup registers how it closes, and opening one closes the rest.
-const popups = new Map();     // element → its close()
-function registerPopup(el, close) { if (el) popups.set(el, close); }
-function closePopups(keep) { for (const [el, close] of popups) if (el !== keep && !el.hidden) close(); }
-
-// ── the theme list: System · Light (a palette) · Dark (a palette) ──
-const themeMenu = $('#theme-menu');
+// The select shows the state: "follow the system", or this side's palette. #16 still holds — the
+// state is in words, not in a mark that needs a hover to explain.
 function markThemeMenu() {
-  if (!themeMenu) return;
+  if (!themeSel) return;
   const mode = root.dataset.theme || null;
-  for (const b of themeMenu.querySelectorAll('.tm-i')) {
-    const v = b.dataset.pick;
-    const on = v === 'system' ? mode === null
-             : v === 'light:' + palLight ? mode === 'light'
-             : v === 'dark:' + palDark ? mode === 'dark' : false;
-    const chosen = v === 'light:' + palLight || v === 'dark:' + palDark;   // this side's palette, even when the other side is showing
-    b.classList.toggle('on', on);
-    b.classList.toggle('chosen', chosen && !on);
-    b.setAttribute('aria-checked', on ? 'true' : 'false');
-  }
-}
-function showThemeMenu(open) {
-  if (!themeMenu) return;
-  if (open) closePopups(themeMenu);
-  themeMenu.hidden = !open;
-  themeBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-  if (open) {
-    const r = themeBtn.getBoundingClientRect();
-    themeMenu.style.top = (r.bottom + 6) + 'px';
-    themeMenu.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
-    markThemeMenu();
-    const cur = themeMenu.querySelector('.tm-i.on') || themeMenu.querySelector('.tm-i');
-    if (cur) cur.focus();
-  }
+  themeSel.value = mode === null ? 'system' : mode + ':' + (mode === 'light' ? palLight : palDark);
 }
 function pickTheme(v) {
   if (v === 'system') applyTheme(null);
@@ -573,28 +539,15 @@ function pickTheme(v) {
     choosePalette(side, name);
     applyTheme(side);
   }
-  showThemeMenu(false);
-  themeBtn.focus();
 }
-registerPopup(themeMenu, () => showThemeMenu(false));
-themeBtn.addEventListener('click', (e) => { e.stopPropagation(); showThemeMenu(themeMenu && themeMenu.hidden); });
-themeBtn.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showThemeMenu(themeMenu && themeMenu.hidden); } });
-if (themeMenu) {
-  themeMenu.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const b = e.target.closest('.tm-i');
-    if (b) pickTheme(b.dataset.pick);
-  });
-  themeMenu.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { showThemeMenu(false); themeBtn.focus(); return; }
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-    e.preventDefault();
-    const items = [...themeMenu.querySelectorAll('.tm-i')];
-    const i = items.indexOf(document.activeElement);
-    items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
-  });
-  document.addEventListener('click', () => { if (!themeMenu.hidden) showThemeMenu(false); });
-}
+if (themeSel) themeSel.addEventListener('change', () => pickTheme(themeSel.value));
+// ── popups: one at a time ──
+// Every popup closes on a press outside it, and a press on another popup's button is not "outside" —
+// that button stops the event so its own popup is not closed by it — so two could be up at once
+// (user, 2026-09-15). Each popup registers how it closes, and opening one closes the rest.
+const popups = new Map();     // element → its close()
+function registerPopup(el, close) { if (el) popups.set(el, close); }
+function closePopups(keep) { for (const [el, close] of popups) if (el !== keep && !el.hidden) close(); }
 if (darkMq.addEventListener) darkMq.addEventListener('change', () => { if (!root.dataset.theme) rethemeTerminals(); });
 
 // xterm takes colors as values. Read the values out of the CSS variables and hand them over — so a color never lives in two places.
@@ -704,7 +657,8 @@ function buildFrame(t, s) {
     t.nameEl = el('span', 'name');
     t.pillEl = el('span', 'st');
     t.szEl = el('span', 'sz');
-    t.rnEl = el('span', 'rn'); t.rnEl.title = 'rename (or double-click the name)';
+    // No pencil (2026-10-30): a double-click on the name renames, and the key panel says so. The
+    // slot it held was the one thing in the bar that was there for a rare action.
     // A viewer's two: hand the file to the machine's own program, and edit it here. Hidden on a
     // terminal by CSS — the frame is shared, so both are built either way.
     t.owEl = el('span', 'vw-open'); t.owEl.title = 'open with the system default program';
@@ -720,7 +674,7 @@ function buildFrame(t, s) {
     // (#31 ④). It looks like the spans.
     t.clEl = el('button', 'cl'); t.clEl.type = 'button';
     t.clEl.title = 'close terminal'; t.clEl.setAttribute('aria-label', 'close terminal');
-    tb.append(t.dotEl, t.nameEl, t.pillEl, t.szEl, t.rnEl, t.owEl, t.edEl, t.xpEl, t.clEl);
+    tb.append(t.dotEl, t.nameEl, t.pillEl, t.szEl, t.owEl, t.edEl, t.xpEl, t.clEl);
     // #25 text size per pane. Ctrl/⌘+wheel is also browser zoom, so it must be blocked — leave it and reaching
     // to enlarge one window enlarges the whole page. A plain wheel is left alone so xterm's scrollback lives.
     // **Take it on the capture phase.** On bubble, xterm's scrollback handler eats it at the child first, and it
@@ -1003,7 +957,6 @@ class Tile {
       if (this.ws && this.ws.readyState === 1) this.ws.send(b);
     });
 
-    this.rnEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.rename(); });
     this.clEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.askClose(); });
     // Double-click on the name is caught in dragify's down(), not here: the title bar takes pointer
     // capture on pointerdown, and a captured pointer's click and dblclick are retargeted to the
@@ -4141,7 +4094,11 @@ function msgText(s) {
     const q = quietFor(s);
     if (q !== null && q >= STUCK_S) parts.push('quiet ' + agoShort(lastOutAt.get(s.id)));
   }
-  if (t && t.lastLine) parts.push(t.lastLine);
+  // **At rest, the folder — not the prompt** (2026-10-30). The last line of a resting shell is its
+  // prompt, and ten rows of `user@host dir %` said nothing ten times. While something is running
+  // or has just finished, the last line is what it is doing, and that stays.
+  if (s.status === 'idle') { if (s.name) parts.push(shortPath(s.cwd)); else if (t && t.lastLine) parts.push(t.lastLine); }
+  else if (t && t.lastLine) parts.push(t.lastLine);
   if (parts.length) return parts.join(' · ');
   // Do not leave something with no hooks quietly grey (AGENTS.md principle 3) — say it in words
   if (s.status === 'unknown') return s.agent ? 'no hook event yet' : 'no hook seen — status unknown';
@@ -4177,7 +4134,7 @@ function buildItem(s, pinned) {
     const b = el('span', 'cvb', label);
     b.title = 'in ' + label + ' — click to go there';
     ago.appendChild(b);
-  } else if (t && t.off) ago.appendChild(el('span', 'off', '↗ off'));
+  } else if (t && t.off) ago.appendChild(offMark());
   it._ago = document.createTextNode(agoText(s.id));
   it._agoEl = ago;              // held so only "↗ off" can be flipped during a scroll (paintOff)
   ago.appendChild(it._ago);
@@ -4196,6 +4153,9 @@ function buildItem(s, pinned) {
   it.addEventListener('click', () => goToSession(s.id));
   return it;
 }
+// The mark for "its window is off-screen on this canvas". A glyph alone (2026-10-30): with ten rows
+// the boxed word "↗ off" was ten boxes, and the row's second line already carries the words.
+function offMark() { const m = el('span', 'off', '↗'); m.title = 'off-screen — click to go there'; return m; }
 // Flip only "↗ off", in place. It is called from the scroll path, so it never rebuilds the list (see refreshOff).
 // It uses the same rule as buildItem: something on another canvas gets a canvas label and no "↗ off" (⑪).
 function paintOff(id) {
@@ -4203,7 +4163,7 @@ function paintOff(id) {
   if (!it || !t || !s) return;
   const want = t.off && !(current !== null && s.canvas !== current);
   const has = $('.off', it._agoEl);
-  if (want && !has) it._agoEl.insertBefore(el('span', 'off', '↗ off'), it._ago);
+  if (want && !has) it._agoEl.insertBefore(offMark(), it._ago);
   else if (!want && has) has.remove();
 }
 // While searching, folds are ignored — otherwise a match hides inside a folded group and cannot be found
@@ -5069,13 +5029,15 @@ function rendererOf(t) {
   if (!el) return 'dom';
   return el.querySelectorAll('.xterm-screen canvas').length >= 2 ? 'webgl' : 'dom';
 }
-function updateStatusBar(note) {
+//: The bar no longer counts renderers (2026-10-30: "webgl 0 · dom 10" was a developer's number on
+//: everybody's screen). `palmar.renderers()` from the console still says, which is what it was for.
+function renderers() {
   let gl = 0, dom = 0;
   for (const t of tiles.values()) (rendererOf(t) === 'webgl' ? gl++ : dom++);
-  const parts = [];
-  if (note) parts.push(note);
-  if (tiles.size) parts.push('webgl ' + gl + ' · dom ' + dom);
-  $('#sb-right').textContent = parts.join(' · ');
+  return { webgl: gl, dom };
+}
+function updateStatusBar(note) {
+  $('#sb-right').textContent = note || '';
 }
 $('#sb-host').textContent = location.host;
 
@@ -5174,11 +5136,10 @@ let findResults = null;      // { q, entries } — only while searching. null me
 function renderTree() {
   treeEl.textContent = '';
   const hint0 = document.getElementById('tree-hint');
-  if (hint0 && !findResults) hint0.textContent = 'click a file to view it · read when expanded';
+  if (hint0) hint0.hidden = !findResults;        // the line is for the flat search list only
   if (findResults) {
     // **Show the matches flat.** Expanding down into the tree loses track of where you are looking.
-    const hint = document.getElementById('tree-hint');
-    if (hint) hint.textContent = 'matching folders · click one to look inside';
+    if (hint0) hint0.textContent = 'matching folders · click one to look inside';
     if (!findResults.entries.length) {
       treeEl.appendChild(el('div', 'hint2', findResults.error
         ? 'search failed: ' + findResults.error
@@ -5384,7 +5345,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // to the daemon — a test with two browsers needs to tell the two apart.
                   saveLayout, client: () => CLIENT, layoutOnDaemon: () => layoutOnDaemon,
                   holdStyle: () => holdStyle,
-                  palette: () => root.dataset.pal || null, choosePalette, applyTheme, labelOf,
+                  palette: () => root.dataset.pal || null, choosePalette, applyTheme, pickTheme, labelOf, renderers,
                   baseFont: () => FONT_PX, setBaseFont, termTheme, minimapOn: () => minimapOn,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
