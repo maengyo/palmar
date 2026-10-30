@@ -89,7 +89,7 @@ If 8801 is busy — a palmar on Windows beside one in WSL, say — it takes the 
 The window is a **712 KB** program that shows the same thing without a browser
 ([`app/`](app/README.md)) — the OS's own webview, not Electron. (That is the Linux download; the
 macOS one is 1.5 MB because the single file carries both Intel and Apple Silicon.) `palmar` opens it when it is there;
-the web button inside it opens a browser, and so does `palmar --web`. Both at once is fine: one daemon
+*Open in a browser* in its options list opens a browser, and so does `palmar --web`. Both at once is fine: one daemon
 per home, and a terminal opened in either shows up in the other, live.
 
 ## Worth knowing
