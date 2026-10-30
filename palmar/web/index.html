@@ -128,23 +128,14 @@
         <!-- Three groups: how it looks, how windows behave, and palmar itself. The explanation of
              each row is in its title. UI text is English (decisions.md "디자인"). -->
         <div class="tm-h">Appearance</div>
-        <!-- One list: follow the system, or a light palette, or a dark one. Picking a palette also
-             picks that side — a light palette is a way of saying light (2026-09-15). -->
-        <label class="tm-row" title="follow the system, or pick a light or a dark palette">Theme
+        <!-- Follow the system, or light, or dark. The values keep the "<side>:<palette>" shape from
+             when there were eight palettes (2026-09-15 → 2026-10-30), so a palette can come back as
+             one more option and nothing else moves. -->
+        <label class="tm-row" title="follow the system, or stay light or dark">Theme
           <select id="theme" aria-label="theme">
             <option value="system">follow the system</option>
-            <optgroup label="Light">
-              <option value="light:paper">paper</option>
-              <option value="light:sky">sky</option>
-              <option value="light:porcelain">porcelain</option>
-              <option value="light:lilac">lilac</option>
-            </optgroup>
-            <optgroup label="Dark">
-              <option value="dark:earth">earth</option>
-              <option value="dark:graphite">graphite</option>
-              <option value="dark:deep">deep</option>
-              <option value="dark:midnight">midnight</option>
-            </optgroup>
+            <option value="light:paper">light</option>
+            <option value="dark:earth">dark</option>
           </select></label>
         <label class="tm-row" title="the face the rails, tabs and menus are set in — terminals keep their own">Interface font
           <select id="uifont">

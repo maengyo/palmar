@@ -3775,29 +3775,36 @@ class Palettes(unittest.TestCase):
                   " s.dispatchEvent(new Event('change')); return 1;})()" % json.dumps(v))
 
     def test_the_list_sets_theme_and_palette_together(self):
-        self.pick("light:sky")
+        """Two palettes now, one a side (2026-10-30; eight from 2026-09-15). The value still carries
+        the side and the palette, and the dark side has an accent of its own at last — it used to be
+        the text colour a shade warmer, so nothing chosen stood out."""
+        self.pick("light:paper")
         st = self.state()
-        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["light", "sky", "#2f6fed"], st)
-        self.assertEqual(st["on"], ["light:sky"], "the list does not mark what is in effect: %r" % st)
-        self.pick("dark:graphite")
+        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["light", None, "#4a58b8"], st)
+        self.assertEqual(st["on"], ["light:paper"], "the list does not mark what is in effect: %r" % st)
+        self.pick("dark:earth")
         st = self.state()
-        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["dark", "graphite", "#7cb3ff"], st)
+        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["dark", None, "#9aa5f0"], st)
+        ink = self.b.ev("getComputedStyle(document.documentElement).getPropertyValue('--ink').trim()")
+        self.assertNotEqual(st["accent"], ink, "the dark accent is still the text colour")
         self.pick("system")
         st = self.state()
         self.assertIsNone(st["theme"], "system did not clear the explicit theme: %r" % st)
         self.assertEqual(st["on"], ["system"])
         kept = self.b.ev("[localStorage.getItem('palmar.pal-light'), localStorage.getItem('palmar.pal-dark'), localStorage.getItem('palmar-theme')]")
-        self.assertEqual(kept, ["sky", "graphite", None], "the choices were not kept the way the theme is")
+        self.assertEqual(kept, [None, None, None], "the defaults were written to the store")
 
-    def test_a_choice_survives_a_reload(self):
-        self.pick("light:lilac")
-        self.b.ev("location.reload()")
+    def test_a_choice_survives_a_reload_and_a_gone_palette_falls_back(self):
+        """A stored "sky" from the eight-palette days is no longer offered: the page falls back to this
+        side's palette rather than to nothing, and the theme itself is kept."""
+        self.pick("dark:earth")
+        self.b.ev("localStorage.setItem('palmar.pal-light', 'sky'); localStorage.setItem('palmar.pal-dark', 'graphite'); location.reload()")
         for _ in range(40):
             time.sleep(0.25)
             if self.b.ev("!!(window.palmar && window.palmar.palette)"):
                 break
         st = self.state()
-        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["light", "lilac", "#6d4de6"], st)
+        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["dark", None, "#9aa5f0"], st)
 
     def test_it_is_a_row_of_the_options_list(self):
         """Theme sat on the top bar as a button of its own while font and text size were rows in the

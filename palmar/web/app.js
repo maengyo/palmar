@@ -61,10 +61,11 @@ const GRID = 22, GAP = 12;                              // scan for free slots o
 const DEFAULT_W = 520, DEFAULT_H = 360;                 // ⑩ provisional default size
 const MIN_W = 220, MIN_H = 110;
 const LS_THEME = 'palmar-theme';
-// Palettes — one choice per side, the browser's taste like the theme. The defaults (paper, earth)
-// are the tokens on :root and in the dark blocks and write nothing to the store.
+// Palettes — one per side. Eight until 2026-10-30 (try/chrome-tidy); a stored choice that is no
+// longer offered falls back to this side's one, which is the tokens on :root and in the dark blocks.
+// The per-side store stays so a palette can come back without a new key.
 const LS_PAL_L = 'palmar.pal-light', LS_PAL_D = 'palmar.pal-dark';
-const PALETTES = { light: ['paper', 'sky', 'porcelain', 'lilac'], dark: ['earth', 'graphite', 'deep', 'midnight'] };
+const PALETTES = { light: ['paper'], dark: ['earth'] };
 let palLight = 'paper', palDark = 'earth';
 try {
   const l = localStorage.getItem(LS_PAL_L), d = localStorage.getItem(LS_PAL_D);
