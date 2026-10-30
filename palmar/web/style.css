@@ -640,17 +640,36 @@ body.ui-mono { --ui: var(--mono); }
   flex: none; display: flex; align-items: stretch; min-width: 0;
   background: var(--rail); border-bottom: 1px solid var(--line);
 }
-/* The tabs take what they need and the tools follow them — they used to be pushed to the far
-   end of the bar by `flex: 1` here, which put the canvas's own buttons beside the settings. */
-.cvbar .tabs { flex: 0 1 auto; min-width: 0; border-bottom: 0; background: transparent; }
-/* **The four canvas tools, quiet** (2026-10-30). No box until the hand arrives — the same rule as
-   the rail-header buttons — and a disabled one fades instead of wearing a box it cannot use.
-   Boxed and greyed, they were four dead keys on every quiet canvas. */
-.cvtools { display: flex; align-items: center; gap: 2px; margin-left: 4px; flex: none; }
-.cvtools .tidy { border-color: transparent; background: transparent; box-shadow: none; color: var(--ink-3); margin: 0; }
-.cvtools .tidy:hover:not(:disabled) { border-color: color-mix(in srgb, var(--line-2) 80%, transparent); background: var(--hover); color: var(--ink); }
-.cvtools .tidy:disabled { opacity: .3; cursor: default; }
-.cvtools .tidy[aria-pressed="true"] { color: var(--accent); }
+.cvbar .tabs { flex: 1; min-width: 0; border-bottom: 0; background: transparent; }
+/* **The four canvas tools: one capsule, in one place** (2026-10-30, user). They stood beside the
+   tabs for a morning and moved every time a tab was renamed or added — a hand remembers where a
+   tool is, and a tool that drifts has to be found again each time. So the capsule is pinned to the
+   right end of the tab row, where the tabs cannot push it: they flow in from the left and stop.
+   One rounded body with a hairline between the four, the segment under the hand fills, a segment
+   that cannot act fades — the sketch of a sliced pill, drawn straight. */
+.cvtools {
+  display: flex; align-items: stretch; align-self: center; flex: none; margin: 0 10px 0 8px;
+  box-sizing: border-box; height: 26px; border-radius: 999px; overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--line-2) 65%, transparent); background: var(--btn);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 1px 1px rgba(0,0,0,.05);
+}
+.cvtools .tidy {
+  margin: 0; height: auto; min-width: 32px; padding: 0 9px; border: 0; border-radius: 0;
+  background: transparent; box-shadow: none; color: var(--ink-2); align-self: stretch;
+  transition: background .12s, color .12s;
+}
+.cvtools .tidy:first-child { padding-left: 11px; }
+.cvtools .tidy:last-child { padding-right: 11px; margin-right: 0; }
+.cvtools .tidy + .tidy { border-left: 1px solid color-mix(in srgb, var(--line-2) 65%, transparent); }
+.cvtools .tidy:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.cvtools .tidy:active:not(:disabled) { background: var(--accent-2); }
+.cvtools .tidy:disabled { color: var(--ink-3); opacity: .38; cursor: default; }
+.cvtools .tidy[aria-pressed="true"] { color: var(--accent); background: var(--accent-2); }
+.cvtools .tidy:focus-visible { outline: none; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent); }
+:root[data-theme="dark"] .cvtools { box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .cvtools { box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35); }
+}
 /* 26px like every other button here. `min-width` rather than a width because the row used to hold a
    word (undo, until 2026-09-20) and a toast's undo still does — one shape for both (2026-09-15:
    "너무 작아서 깨져 보여"). */

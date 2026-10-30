@@ -3850,9 +3850,11 @@ class TopRow(unittest.TestCase):
 
     def test_the_buttons_up_there_are_not_tiny(self):
         r = self.b.ev("""(()=>{const h=(id)=>Math.round(document.getElementById(id).getBoundingClientRect().height);
-          return {undo: h('undo'), tidy: h('tidy'), options: h('options'),
+          const cap=Math.round(document.querySelector('.cvtools').getBoundingClientRect().height);
+          return {capsule: cap, options: h('options'),
                   tab: parseFloat(getComputedStyle(document.querySelector('.tab')).fontSize)};})()""")
-        for k in ("undo", "tidy", "options"):
+        # undo and tidy are segments of one 26px capsule now (2026-10-30); the capsule is what is measured
+        for k in ("capsule", "options"):
             self.assertGreaterEqual(r[k], 26, "%s is %spx tall" % (k, r[k]))
         self.assertGreaterEqual(r["tab"], 13, "the canvas tab text is %spx" % r["tab"])
 
@@ -3926,11 +3928,26 @@ class TopRow(unittest.TestCase):
         self.d.delete("/api/sessions/" + s["id"])
 
     def test_every_button_up_there_is_the_same_height(self):
+        """The canvas tools are one capsule now (2026-10-30), so the capsule is what stands at 26px;
+        its four segments fill it."""
         r = self.b.ev("""(()=>{const out={};
-          for (const id of ['bell','undo','tidy','options','mkdir','refresh'])
+          for (const id of ['bell','options','mkdir','refresh'])
             out[id]=Math.round(document.getElementById(id).getBoundingClientRect().height);
+          out.cvtools=Math.round(document.querySelector('.cvtools').getBoundingClientRect().height);
           return out;})()""")
         self.assertEqual(set(r.values()), {26}, "the buttons do not share one height: %r" % r)
+
+    def test_the_canvas_tools_stay_put_when_the_tabs_change(self):
+        """A tool has to stay where the hand left it (user, 2026-10-30). For a morning the four sat
+        beside the tabs and moved whenever a canvas was added or renamed."""
+        before = self.b.ev("Math.round(document.querySelector('.cvtools').getBoundingClientRect().left)")
+        self.d.post("/api/canvases", {"name": "a much longer canvas name than the first"})
+        self.d.post("/api/canvases", {})
+        time.sleep(1)
+        after = self.b.ev("Math.round(document.querySelector('.cvtools').getBoundingClientRect().left)")
+        self.assertEqual(before, after, "the canvas tools moved when tabs were added")
+        self.assertLessEqual(after, self.b.ev("document.getElementById('bell').getBoundingClientRect().left"),
+                             "the capsule sits on the bell")
 
     def test_the_right_hand_buttons_never_sit_on_undo_and_tidy(self):
         """Dragging the rails narrow used to spill the right-hand buttons over undo and tidy: the
