@@ -4108,6 +4108,83 @@ class TopRow(unittest.TestCase):
         self.assertTrue(self.b.ev("document.getElementById('searchbox').hidden"), "Escape did not put the search away")
 
 
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class CommandsBehindCtrlK(unittest.TestCase):
+    """The field behind Ctrl/⌘K lists every command with its key, and the terminals that match
+    (2026-10-30, try/chrome-tidy). The bar lost most of its buttons the same week, and a key nobody
+    can see is a feature that does not exist — so the keys are written where the hand goes to look."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+        time.sleep(1)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def rows(self):
+        return self.b.ev("""[...document.querySelectorAll('#cmds .cmd')].map(b=>({
+          l: b.querySelector('.l').textContent, keys: [...b.querySelectorAll('kbd')].map(k=>k.textContent),
+          session: !!b.querySelector('.dot'), sel: b.classList.contains('sel')}))""")
+
+    def type_(self, text):
+        self.b.ev("(()=>{const s=document.getElementById('search'); s.value=%s;"
+                  " s.dispatchEvent(new Event('input')); return 1;})()" % json.dumps(text))
+
+    def test_every_command_is_listed_with_its_key(self):
+        self.b.ev("window.palmar.showSearch(true)")
+        rows = self.rows()
+        labels = [r["l"] for r in rows]
+        self.assertIn("New terminal", labels)
+        self.assertIn("Keyboard shortcuts", labels)
+        self.assertNotIn("Undo", labels, "undo is offered with nothing to undo")
+        new = [r for r in rows if r["l"] == "New terminal"][0]
+        self.assertEqual(new["keys"][-1], "⏎", "the key is not printed beside the command: %r" % new)
+        self.assertIn(new["keys"][0], ("⌘", "Ctrl"))
+        self.assertTrue(rows[0]["sel"], "nothing is lit, so Enter would do nothing")
+        self.b.ev("window.palmar.showSearch(false)")
+
+    def test_typing_narrows_it_and_enter_runs_the_lit_one(self):
+        self.b.ev("window.palmar.showSearch(true)")
+        self.type_("new term")
+        rows = self.rows()
+        self.assertEqual([r["l"] for r in rows][:1], ["New terminal"], rows)
+        self.b.ev("""document.getElementById('search').dispatchEvent(
+          new KeyboardEvent('keydown', {key:'Enter', bubbles:true}))""")
+        for _ in range(40):
+            time.sleep(0.25)
+            got = self.d.get("/api/sessions")
+            got = got["sessions"] if isinstance(got, dict) else got
+            if got:
+                break
+        self.assertEqual(len(got), 1, "Enter on 'New terminal' did not open one")
+        self.assertTrue(self.b.ev("document.getElementById('searchbox').hidden"), "running a command left the field open")
+        time.sleep(2)
+        self.d.delete("/api/sessions/" + got[0]["id"])
+        time.sleep(1)
+
+    def test_a_terminal_comes_first_when_its_name_is_typed(self):
+        a = self.d.open_pane(name="api")
+        w = self.d.open_pane(name="web")
+        time.sleep(3)
+        self.b.ev("window.palmar.showSearch(true)")
+        self.type_("web")
+        rows = self.rows()
+        self.assertTrue(rows and rows[0]["session"] and rows[0]["l"] == "web", rows)
+        self.b.ev("""document.getElementById('search').dispatchEvent(
+          new KeyboardEvent('keydown', {key:'Enter', bubbles:true}))""")
+        time.sleep(0.5)
+        front = self.b.ev("(()=>{const t=document.querySelector('.tile.focus .name'); return t && t.textContent;})()")
+        self.assertEqual(front, "web", "Enter did not go to the terminal that was typed")
+        self.d.delete("/api/sessions/" + a["id"])
+        self.d.delete("/api/sessions/" + w["id"])
+        time.sleep(1)
+
+
 class Viewing(unittest.TestCase):
     """The right rail is for looking at what is in a folder (2026-09-15, (가)): files are rows, a file
     opens in a window of its own on the canvas — the same frame as a terminal, on the same board — and

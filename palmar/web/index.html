@@ -170,7 +170,7 @@
              and not a hunt through ~/.palmar. -->
         <button type="button" class="tm-i" role="menuitem" id="toweb" data-do="web"
                 aria-haspopup="dialog" aria-expanded="false">Open in a browser</button>
-        <button type="button" class="tm-i" role="menuitem" data-do="search">Search sessions and folders</button>
+        <button type="button" class="tm-i" role="menuitem" data-do="search">Search and commands</button>
         <button type="button" class="tm-i" role="menuitem" data-do="keys">Keyboard shortcuts</button>
       </div>
     </div>
@@ -179,14 +179,23 @@
   <!-- Search. Off the bar and behind Ctrl/⌘K (2026-09-15: "검색창의 영역도 낭비가 심한 것 같아") —
        the same input, so the list and the tree filter exactly as before. Esc on an empty field closes it. -->
   <div class="searchbox" id="searchbox" hidden>
-    <label class="search">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-      <input id="search" type="search" placeholder="Search sessions and folders" autocomplete="off" spellcheck="false">
-      <span class="k" id="kmod"><kbd>Ctrl</kbd><kbd>K</kbd></span>
-    </label>
-    <button class="sx" id="search-x" type="button" title="close search" aria-label="close search">
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19"/></svg>
-    </button>
+    <div class="search-row">
+      <label class="search">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="search" type="search" placeholder="Search, or type a command" autocomplete="off" spellcheck="false"
+               role="combobox" aria-controls="cmds" aria-expanded="false" aria-autocomplete="list">
+        <span class="k" id="kmod"><kbd>Ctrl</kbd><kbd>K</kbd></span>
+      </label>
+      <button class="sx" id="search-x" type="button" title="close search" aria-label="close search">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19"/></svg>
+      </button>
+    </div>
+    <!-- **The commands, under the field** (2026-10-30). Every action the page has, with its key printed
+         beside it, and the terminals that match what is typed. Linear and Raycast made this the way a
+         hand reaches for a thing it cannot see; here it is also where the keys are written down, now
+         that the bar holds so few buttons ("안 보이면 없는 기능이다", decisions.md). The canvas tools keep
+         their place beside the tabs — this adds a way in, it takes none away. Filled by app.js. -->
+    <div class="cmds" id="cmds" role="listbox" aria-label="commands" hidden></div>
   </div>
 
   <!-- The address of this daemon, for moving to a browser. Asked for when opened and not kept:
@@ -218,7 +227,7 @@
     <dl>
       <dt><kbd class="mod">Ctrl</kbd><kbd>⏎</kbd></dt><dd>new terminal, in your home folder</dd>
       <dt><kbd class="mod">Ctrl</kbd><kbd>Shift</kbd><kbd>⏎</kbd></dt><dd>new canvas</dd>
-      <dt><kbd class="mod">Ctrl</kbd><kbd>K</kbd></dt><dd>search sessions and folders</dd>
+      <dt><kbd class="mod">Ctrl</kbd><kbd>K</kbd></dt><dd>search sessions and folders, and run any command — every key is listed there</dd>
       <dt><kbd class="mod">Ctrl</kbd><kbd>\</kbd></dt><dd>fold the left rail — <kbd class="mod">Ctrl</kbd><kbd>Shift</kbd><kbd>\</kbd> the right</dd>
       <!-- data-mac-drops-shift: on a Mac these two are ⌘C and ⌘V, and on Windows Ctrl+C and Ctrl+V
            (the Windows Terminal way), with no Shift. Only these two.

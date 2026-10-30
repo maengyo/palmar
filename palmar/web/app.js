@@ -164,8 +164,13 @@ try {
 function showSearch(on) {
   if (!searchBox) return;
   searchBox.hidden = !on;
-  if (on) { searchEl.focus(); searchEl.select(); }
-  else if (searchEl.value) { searchEl.value = ''; searchEl.dispatchEvent(new Event('input')); }
+  if (on) { searchEl.focus(); searchEl.select(); cmdSel = 0; renderCmds(); }
+  else {
+    if (searchEl.value) { searchEl.value = ''; searchEl.dispatchEvent(new Event('input')); }
+    const box = document.getElementById('cmds');
+    if (box) box.hidden = true;
+    searchEl.setAttribute('aria-expanded', 'false');
+  }
 }
 
 // ── state ───────────────────────────────────────────────
@@ -4395,10 +4400,129 @@ function onSearch() {
   if (q !== hadQuery) { hadQuery = q; renderList(); }   // ignoring folds turns on or off — rebuild the list
   else applyFilter();
   findDirs();
+  cmdSel = 0;
+  renderCmds();
 }
 searchEl.addEventListener('input', onSearch);
+
+// ── the commands under the field (2026-10-30) ──────────────────────
+//: Every action the page has, with its key beside it, and the terminals that match what is typed.
+//: The field is the one that was already there — it goes on filtering the list and the tree — and
+//: the list under it is what makes Ctrl/⌘K a way to *do* something and not only to find it. The
+//: keys are printed here on purpose: the bar lost most of its buttons this week, and a key nobody
+//: can see is a feature that does not exist (decisions.md). Nothing moved out of the bar into here
+//: alone — the four canvas tools keep their place beside the tabs; this adds a way in.
+const CMD_HOOKS = {};        // what lives in boot()'s closure and is reached from here (the key panel)
+let cmdSel = 0;
+function kbdOf(keys) { const k = el('span', 'k'); for (const x of keys) k.appendChild(el('kbd', null, x)); return k; }
+// The list is built on every keystroke, so a label can say what it would do *now* — "Fold" or
+// "Show", "Back to 1:1" or "See the whole canvas" — and an action that cannot act is not offered.
+function commandList() {
+  const dark = isDarkNow();
+  const front = focused && tiles.get(focused);
+  const list = [
+    { l: 'New terminal', sub: 'in your home folder', keys: [KMOD, '⏎'], run: () => newTerminal() },
+    { l: 'New canvas', keys: [KMOD, 'Shift', '⏎'], run: () => newCanvas() },
+    { l: 'Tidy this canvas', sub: 'pull the windows back to the corner',
+      run: () => { undoMark('tidying up'); tidyCanvas(current, true); },
+      when: () => { const b = $('#tidy'); return !!b && !b.disabled; } },
+    { l: 'Bring them closer', sub: 'keep the arrangement, close the gaps',
+      run: () => { undoMark('bringing them closer'); gatherCanvas(current); },
+      when: () => { const b = $('#gather'); return !!b && !b.disabled; } },
+    { l: zoom < 1 ? 'Back to 1:1' : 'See the whole canvas', sub: KMOD + ' + wheel over the empty canvas',
+      run: () => { if (zoom < 1) backTo11(); else seeEverything(); } },
+    { l: 'Undo', sub: undoStack.length ? undoStack[undoStack.length - 1].label : '', keys: [KMOD, 'Z'],
+      run: () => undoLast(), when: () => undoStack.length > 0 },
+    { l: (railFolded.l ? 'Show' : 'Fold') + ' the terminal list', keys: [KMOD, '\\'], run: () => setFold('l', !railFolded.l) },
+    { l: (railFolded.r ? 'Show' : 'Fold') + ' the directory rail', keys: [KMOD, 'Shift', '\\'], run: () => setFold('r', !railFolded.r) },
+    { l: 'Rename this terminal', sub: front ? labelOf(front.s) : '', run: () => front.rename(),
+      when: () => !!front && !front.closed },
+    { l: 'Theme: ' + (dark ? 'light' : 'dark'), run: () => pickTheme(dark ? 'light:paper' : 'dark:earth') },
+    { l: 'Theme: follow the system', run: () => pickTheme('system'), when: () => !!root.dataset.theme },
+    { l: (notifyOn ? 'Turn off' : 'Turn on') + ' notifications', sub: 'when a terminal wants you', run: () => toggleNotify() },
+    { l: (minimapOn ? 'Hide' : 'Show') + ' the minimap',
+      run: () => { const s = $('#minimap'); if (s) { s.checked = !minimapOn; s.dispatchEvent(new Event('change')); } } },
+    { l: 'Open in a browser', sub: 'the same terminals, in a tab', run: () => { const b = $('#toweb'); if (b) b.click(); } },
+    { l: 'Keyboard shortcuts', run: () => { if (CMD_HOOKS.keys) CMD_HOOKS.keys(); } },
+  ];
+  return list.filter((c) => !c.when || c.when());
+}
+// Where the words match: the start of the label outranks the start of a word, which outranks the
+// middle of one. Empty query: everything, in the order above.
+function cmdMatch(q, c) {
+  if (!q) return 1;
+  const hay = (c.l + ' ' + (c.sub || '')).toLowerCase();
+  const i = hay.indexOf(q);
+  return i < 0 ? 0 : i === 0 ? 3 : hay[i - 1] === ' ' ? 2 : 1;
+}
+function cmdRow(c) {
+  const b = el('button', 'cmd');
+  b.type = 'button';
+  b.setAttribute('role', 'option');
+  if (c.s) b.appendChild(el('span', 'dot ' + (STATUS_CLASS[c.s.status] || 'idle')));
+  b.appendChild(el('span', 'l', c.l));
+  if (c.sub) b.appendChild(el('span', 'sub' + (c.s ? ' path' : ''), c.sub));
+  if (c.keys) b.appendChild(kbdOf(c.keys));
+  b.addEventListener('click', (e) => { e.preventDefault(); runCmd(c); });
+  b._cmd = c;
+  return b;
+}
+function renderCmds() {
+  const box = document.getElementById('cmds');
+  if (!box || !searchBox || searchBox.hidden) return;
+  const q = searchEl.value.trim().toLowerCase();
+  const rows = [];
+  // **A terminal's name first.** "api" typed means the api terminal before it means anything else;
+  // with nothing typed the rail already lists them all, so only the commands show.
+  if (q) {
+    for (const s of sessions.values()) {
+      const hay = (labelOf(s) + ' ' + shortPath(s.cwd) + ' ' + (s.fg || '')).toLowerCase();
+      if (hay.includes(q)) rows.push({ s, l: labelOf(s), sub: shortPath(s.cwd), run: () => goToSession(s.id) });
+    }
+  }
+  const cmds = commandList().map((c) => [cmdMatch(q, c), c]).filter((x) => x[0] > 0)
+    .sort((x, y) => y[0] - x[0]).map((x) => x[1]);
+  box.textContent = '';
+  if (rows.length) box.appendChild(el('div', 'cmd-h', 'Terminals'));
+  for (const r of rows) box.appendChild(cmdRow(r));
+  if (cmds.length) box.appendChild(el('div', 'cmd-h', 'Commands'));
+  for (const c of cmds) box.appendChild(cmdRow(c));
+  const n = rows.length + cmds.length;
+  box.hidden = !n;
+  searchEl.setAttribute('aria-expanded', n ? 'true' : 'false');
+  if (cmdSel >= n) cmdSel = Math.max(0, n - 1);
+  paintCmdSel();
+}
+function paintCmdSel() {
+  const box = document.getElementById('cmds');
+  if (!box) return;
+  const bs = box.querySelectorAll('.cmd');
+  bs.forEach((b, i) => b.classList.toggle('sel', i === cmdSel));
+  const s = bs[cmdSel];
+  if (s && s.scrollIntoView) s.scrollIntoView({ block: 'nearest' });
+}
+function runCmd(c) {
+  showSearch(false);
+  c.run();
+}
 // Esc in the field: a search input clears itself on Esc; with nothing left to clear, the box goes away.
-searchEl.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !searchEl.value) { e.preventDefault(); showSearch(false); } });
+// Arrows walk the list under it, Enter runs the row that is lit — the first one, unless walked.
+searchEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !searchEl.value) { e.preventDefault(); showSearch(false); return; }
+  const box = document.getElementById('cmds');
+  if (!box || box.hidden) return;
+  const n = box.querySelectorAll('.cmd').length;
+  if (!n) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    cmdSel = (cmdSel + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+    paintCmdSel();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const b = box.querySelectorAll('.cmd')[cmdSel];
+    if (b && b._cmd) runCmd(b._cmd);
+  }
+});
 const searchX = $('#search-x');
 if (searchX) searchX.addEventListener('click', () => showSearch(false));   // the plain way out (user, 2026-09-15)
 addEventListener('keydown', (e) => {
@@ -5347,6 +5471,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   saveLayout, client: () => CLIENT, layoutOnDaemon: () => layoutOnDaemon,
                   holdStyle: () => holdStyle,
                   palette: () => root.dataset.pal || null, choosePalette, applyTheme, pickTheme, labelOf, renderers,
+                  showSearch, commandList,
                   baseFont: () => FONT_PX, setBaseFont, termTheme, minimapOn: () => minimapOn,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
@@ -5521,6 +5646,7 @@ function boot() {
   const keysEl = document.getElementById('keys');
   const showKeys = (on) => { if (on) closePopups(keysEl); keysEl.hidden = !on; };
   registerPopup(keysEl, () => showKeys(false));
+  CMD_HOOKS.keys = () => showKeys(true);         // reached from the command list under Ctrl/⌘K
   const showOptions = (on) => {
     if (!optMenu) return;
     if (on) closePopups(optMenu);

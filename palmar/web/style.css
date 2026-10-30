@@ -248,7 +248,32 @@ body.wants .brand .wd { fill: var(--st-wait); opacity: 1; }
 .top .c { display: flex; align-items: stretch; align-self: stretch; min-width: 0; overflow: hidden; }   /* stretch, not centre: the bar's 1px border made centring a half-pixel off */
 .top .cvbar { flex: 1; min-width: 0; background: transparent; border-bottom: 0; -webkit-app-region: no-drag; }
 .top .tabs { height: auto; align-self: stretch; background: transparent; border-bottom: 0; padding: 0 6px; }   /* as tall as the row's content box, not a fixed 36 */
-.searchbox { position: fixed; top: 42px; left: 50%; transform: translateX(-50%); z-index: 70; display: flex; align-items: center; gap: 8px; }
+.searchbox {
+  position: fixed; top: 42px; left: 50%; transform: translateX(-50%); z-index: 70;
+  display: flex; flex-direction: column; align-items: stretch; gap: 6px;
+  width: 414px; max-width: calc(100vw - 40px);   /* the field's 380 + the × and its gap */
+}
+.search-row { display: flex; align-items: center; gap: 8px; }
+/* The list under the field (2026-10-30). As wide as the field, not the row — the × stands beside the
+   field, not beside the list. Rows are the options list's rows; the key sits at the right edge. */
+.cmds {
+  margin-right: 34px; padding: 4px; max-height: min(440px, 60vh); overflow-y: auto;
+  background: var(--float); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow-2);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.cmds .cmd-h { padding: 6px 10px 2px; font-size: var(--t-11); color: var(--ink-3); }
+.cmd {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: 0; border-radius: 6px;
+  background: none; color: var(--ink-2); font: inherit; font-size: var(--t-13); text-align: left; cursor: pointer;
+  -webkit-appearance: none; appearance: none;
+}
+.cmd .l { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmd .sub { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); font-size: var(--t-12); }
+.cmd .sub.path { font-family: var(--mono); }
+.cmd .k { display: flex; gap: 3px; flex: none; margin-left: auto; }
+.cmd .dot { flex: none; }
+.cmd:hover, .cmd.sel { background: var(--hover); color: var(--ink); }
+.cmd.sel { box-shadow: inset 2px 0 0 var(--accent); }
 /* Floating over windows now, so it cannot be the translucent field it was on the bar: the title bar
    under it showed through (measured 2026-09-15). */
 .searchbox .search { background: var(--float); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
@@ -263,7 +288,7 @@ body.wants .brand .wd { fill: var(--st-wait); opacity: 1; }
 .sx svg { display: block; }
 .sx:hover { border-color: var(--accent); color: var(--ink); }
 .search {
-  display: flex; align-items: center; gap: 8px; width: 380px; height: 30px; box-shadow: var(--shadow-2);
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 30px; box-shadow: var(--shadow-2);
   padding: 0 10px; border: 1px solid var(--line); border-radius: 7px;
   background: var(--search); color: var(--ink-3); font-size: var(--t-12);
   -webkit-app-region: no-drag;
