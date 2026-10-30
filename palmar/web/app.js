@@ -453,8 +453,13 @@ function paintClosing(id) {
 }
 
 let toastTimer = null;
-function toast(parts) {
+function toast(parts, opts) {
   // parts: [{b:'bold'}, 'plain', {d:'dim'}, {a:'undo', on:fn}, {spin:1}], or a string.
+  // opts.msg: a terminal said this (`palmar --message`) — set larger and kept longer than a note about
+  // what the page just did, because it is news from elsewhere and the eye was not waiting for it
+  // (user, 2026-10-30: "너무 작게 뜨고, 너무 단기간").
+  opts = opts || {};
+  toastEl.classList.toggle('msg', !!opts.msg);
   // **The toast is one line of prose.** Parts are laid end to end with a space between, and the
   // punctuation is the caller's — a dash before a second clause, a colon before an error. It used to
   // be a flex row with a gap, and two plain strings in a row merged into one item with no gap at all
@@ -481,7 +486,7 @@ function toast(parts) {
   toastEl.classList.add('show');
   clearTimeout(toastTimer);
   // A toast you are meant to press needs longer than one you only read.
-  toastTimer = setTimeout(() => toastEl.classList.remove('show'), act ? 9000 : 4500);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), opts.msg ? 10000 : act ? 9000 : 4500);
 }
 function agoText(id) { return agoFrom(changedAt.get(id) || 0); }
 function agoFrom(atMs) {
@@ -4722,7 +4727,7 @@ function goToMessage(e) {
 function sayMessage(e) {
   const who = messageLabel(e);
   if (document.hasFocus()) {
-    toast([{ b: who }, e.text, { a: 'show', on: () => goToMessage(e) }]);
+    toast([{ b: who }, e.text, { a: 'show', on: () => goToMessage(e) }], { msg: true });
     return;
   }
   if (!notifyOn || !canRing()) return;

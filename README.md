@@ -95,7 +95,8 @@ per home, and a terminal opened in either shows up in the other, live.
 **Something running in a terminal can say something.** `palmar --message "build done"` puts that
 line on the terminal's row in the left list, shows it at the bottom of the page, and sends a
 notification if you are elsewhere and have turned them on. It stays on the row until you click the
-terminal. It needs no id — it knows which terminal it was typed in — so a script that watches
+terminal, and the bell keeps the last hundred — with how long ago, an × on each, and the
+notification switch at the top. It needs no id — it knows which terminal it was typed in — so a script that watches
 something can call it in a loop; from outside a terminal, name one with `--to <id>` (`palmar --list`).
 
 ## Worth knowing
