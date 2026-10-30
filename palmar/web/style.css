@@ -717,18 +717,21 @@ body.ui-mono { --ui: var(--mono); }
    their own — a hairline between them, the one under the hand fills, one that cannot act fades. */
 .capsule {
   display: flex; align-items: stretch; align-self: center; flex: none;
-  box-sizing: border-box; height: 26px; border-radius: 999px; overflow: hidden;
+  /* 30px, not 26 (user, 2026-10-30: "버튼이 너무 작아진 거 같아") — a capsule is one body, and
+     26 read as four small keys. The segments are 38px wide at the least, the drawings 15px. */
+  box-sizing: border-box; height: 30px; border-radius: 999px; overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--line-2) 65%, transparent); background: var(--btn);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 1px 1px rgba(0,0,0,.05);
 }
 .cvtools { margin: 0 10px 0 8px; }
 .capsule > .tidy, .capsule > .bell, .capsule > .options {
-  margin: 0; height: auto; width: auto; min-width: 32px; padding: 0 9px; border: 0; border-radius: 0;
+  margin: 0; height: auto; width: auto; min-width: 38px; padding: 0 11px; border: 0; border-radius: 0;
   background: transparent; box-shadow: none; color: var(--ink-2); align-self: stretch;
   display: grid; place-items: center; transition: background .12s, color .12s;
 }
-.capsule > :first-child { padding-left: 11px; }
-.capsule > :last-child { padding-right: 11px; margin-right: 0; }
+.capsule svg { width: 15px; height: 15px; }
+.capsule > :first-child { padding-left: 14px; }
+.capsule > :last-child { padding-right: 14px; margin-right: 0; }
 .capsule > * + * { border-left: 1px solid color-mix(in srgb, var(--line-2) 65%, transparent); }
 .capsule > :hover:not(:disabled) { background: var(--hover); color: var(--ink); }
 .capsule > :active:not(:disabled) { background: var(--accent-2); transform: none; }
@@ -796,7 +799,7 @@ body.ui-mono { --ui: var(--mono); }
 .tab.drag { opacity: .92; position: relative; z-index: 3; box-shadow: var(--shadow-2); transition: none; }
 .tabs.reordering .tab { transition: transform .16s ease; }   /* the neighbours slide; the carried one is on the finger */
 .tabs.reordering .tab.drag { transition: none; }
-.tabs .ib { margin: 0 0 2px 4px; }
+.tabs .ib { margin: 0 0 2px 4px; width: 30px; height: 30px; }   /* the capsule beside it is 30 */
 
 /* ── canvas ─────────────────────────────────── */
 .cv {

@@ -3956,7 +3956,7 @@ class TopRow(unittest.TestCase):
                   tab: parseFloat(getComputedStyle(document.querySelector('.tab')).fontSize)};})()""")
         # undo·tidy and bell·options are segments of two 26px capsules now (2026-10-30); the capsules are measured
         for k in ("capsule", "rtools"):
-            self.assertGreaterEqual(r[k], 26, "%s is %spx tall" % (k, r[k]))
+            self.assertGreaterEqual(r[k], 30, "%s is %spx tall" % (k, r[k]))
         self.assertGreaterEqual(r["tab"], 13, "the canvas tab text is %spx" % r["tab"])
 
     def test_the_row_is_drawings_and_every_one_of_them_has_a_name(self):
@@ -4033,12 +4033,14 @@ class TopRow(unittest.TestCase):
         its four segments fill it."""
         r = self.b.ev("""(()=>{const out={};
           for (const id of ['mkdir','refresh'])
-            out[id]=Math.round(document.getElementById(id).getBoundingClientRect().height);
-          [...document.querySelectorAll('.top .capsule')].forEach((e,i)=>out['capsule'+i]=Math.round(e.getBoundingClientRect().height));
-          out.capsules=document.querySelectorAll('.top .capsule').length;
+            out.rail=(out.rail||[]).concat(Math.round(document.getElementById(id).getBoundingClientRect().height));
+          out.top=[...document.querySelectorAll('.top .capsule, .tabs .ib')].map(e=>Math.round(e.getBoundingClientRect().height));
           return out;})()""")
-        self.assertEqual(r.pop("capsules"), 2, "two capsules up top: the canvas tools, and bell + options")
-        self.assertEqual(set(r.values()), {26}, "the buttons do not share one height: %r" % r)
+        # The top bar's controls are 30px since 2026-10-30 ("버튼이 너무 작아진 거 같아"); the rail
+        # headers' quiet buttons stay 26. One height within each row.
+        self.assertEqual(len(r["top"]), 3, "two capsules and the + up top: %r" % r)
+        self.assertEqual(set(r["top"]), {30}, "the top bar's controls do not share one height: %r" % r)
+        self.assertEqual(set(r["rail"]), {26}, "the rail buttons do not share one height: %r" % r)
 
     def test_the_canvas_tools_stay_put_when_the_tabs_change(self):
         """A tool has to stay where the hand left it (user, 2026-10-30). For a morning the four sat
@@ -4176,8 +4178,8 @@ class TopRow(unittest.TestCase):
         r = self.b.ev("""(()=>{const b=document.getElementById('options').getBoundingClientRect(),
           c=document.getElementById('r-tools').getBoundingClientRect();
           return [Math.round(b.height), Math.round(c.height), Math.round(c.right-b.right)];})()""")
-        self.assertEqual(r[1], 26, "the right capsule is %spx tall" % r[1])
-        self.assertEqual(r[0], 24, "the segment does not fill the capsule: %r" % (r,))
+        self.assertEqual(r[1], 30, "the right capsule is %spx tall" % r[1])
+        self.assertEqual(r[0], 28, "the segment does not fill the capsule: %r" % (r,))
         self.assertLessEqual(r[2], 1, "options is not the capsule's last segment: %r" % (r,))
 
     def test_a_round_button_stands_in_for_the_folded_rail(self):
