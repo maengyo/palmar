@@ -3853,7 +3853,7 @@ class Palettes(unittest.TestCase):
         options list — the same kind of setting in two places (2026-10-30)."""
         r = self.b.ev("""(()=>{const m=document.getElementById('options-menu');
           return {inList: !!m.querySelector('#theme'), onBar: !!document.querySelector('.top .r > #theme'),
-                  bar: [...document.querySelectorAll('.top .r > *')].filter(e=>!e.hidden && e.tagName!=='DIV').map(e=>e.id)};})()""")
+                  bar: [...document.querySelectorAll('.top .r .capsule > *')].map(e=>e.id).filter(id=>id!=='options-menu')};})()""")
         self.assertTrue(r["inList"], "theme is not in the options list")
         self.assertFalse(r["onBar"], "theme is still a top-bar button")
         self.assertEqual(r["bar"], ["bell", "options"], "the top bar's right end holds more than the bell and options: %r" % r)
@@ -3893,10 +3893,11 @@ class TopRow(unittest.TestCase):
     def test_the_buttons_up_there_are_not_tiny(self):
         r = self.b.ev("""(()=>{const h=(id)=>Math.round(document.getElementById(id).getBoundingClientRect().height);
           const cap=Math.round(document.querySelector('.cvtools').getBoundingClientRect().height);
-          return {capsule: cap, options: h('options'),
+          const rt=Math.round(document.getElementById('r-tools').getBoundingClientRect().height);
+          return {capsule: cap, rtools: rt,
                   tab: parseFloat(getComputedStyle(document.querySelector('.tab')).fontSize)};})()""")
-        # undo and tidy are segments of one 26px capsule now (2026-10-30); the capsule is what is measured
-        for k in ("capsule", "options"):
+        # undo·tidy and bell·options are segments of two 26px capsules now (2026-10-30); the capsules are measured
+        for k in ("capsule", "rtools"):
             self.assertGreaterEqual(r[k], 26, "%s is %spx tall" % (k, r[k]))
         self.assertGreaterEqual(r["tab"], 13, "the canvas tab text is %spx" % r["tab"])
 
@@ -3973,10 +3974,12 @@ class TopRow(unittest.TestCase):
         """The canvas tools are one capsule now (2026-10-30), so the capsule is what stands at 26px;
         its four segments fill it."""
         r = self.b.ev("""(()=>{const out={};
-          for (const id of ['bell','options','mkdir','refresh'])
+          for (const id of ['mkdir','refresh'])
             out[id]=Math.round(document.getElementById(id).getBoundingClientRect().height);
-          out.cvtools=Math.round(document.querySelector('.cvtools').getBoundingClientRect().height);
+          [...document.querySelectorAll('.top .capsule')].forEach((e,i)=>out['capsule'+i]=Math.round(e.getBoundingClientRect().height));
+          out.capsules=document.querySelectorAll('.top .capsule').length;
           return out;})()""")
+        self.assertEqual(r.pop("capsules"), 2, "two capsules up top: the canvas tools, and bell + options")
         self.assertEqual(set(r.values()), {26}, "the buttons do not share one height: %r" % r)
 
     def test_the_canvas_tools_stay_put_when_the_tabs_change(self):
@@ -4109,9 +4112,15 @@ class TopRow(unittest.TestCase):
         self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
         self.assertTrue(self.b.ev("document.getElementById('webbox').hidden"), "Escape did not close it")
 
-    def test_the_options_button_is_a_square(self):
-        r = self.b.ev("(()=>{const b=document.getElementById('options').getBoundingClientRect(); return [Math.round(b.width), Math.round(b.height)];})()")
-        self.assertEqual(r, [26, 26], "the options button is %r, not a 26px square" % (r,))
+    def test_the_options_button_is_a_segment_of_the_right_capsule(self):
+        """It was a 26px square of its own; now it is the last segment of the bell's capsule
+        (2026-10-30) and fills the capsule's height."""
+        r = self.b.ev("""(()=>{const b=document.getElementById('options').getBoundingClientRect(),
+          c=document.getElementById('r-tools').getBoundingClientRect();
+          return [Math.round(b.height), Math.round(c.height), Math.round(c.right-b.right)];})()""")
+        self.assertEqual(r[1], 26, "the right capsule is %spx tall" % r[1])
+        self.assertEqual(r[0], 24, "the segment does not fill the capsule: %r" % (r,))
+        self.assertLessEqual(r[2], 1, "options is not the capsule's last segment: %r" % (r,))
 
     def test_a_round_button_stands_in_for_the_folded_rail(self):
         """＋ lives in the terminal list's header now; fold that rail and a round button floats over the

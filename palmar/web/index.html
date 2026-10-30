@@ -62,7 +62,7 @@
            most of the time; then for a morning they sat beside the tabs and moved whenever a tab
            did (user: a tool has to stay where the hand left it). The capsule is pinned here: the
            tabs flow in from the left and cannot push it. A segment that cannot act fades. -->
-      <div class="cvtools" role="group" aria-label="arrange this canvas">
+      <div class="cvtools capsule" role="group" aria-label="arrange this canvas">
       <!-- Undo: the arrow that goes back on itself. It was the word "undo" until 2026-09-20 — the
            only word in a row of drawings, which made it read as a different kind of control than
            the three beside it. The word lives on in `aria-label` and in the title, which is where
@@ -108,6 +108,9 @@
       </div>
     </div>
     <div class="r">
+      <!-- The bell and the options list share one capsule, the same body as the canvas tools' —
+           one shape for every control up here (2026-10-30, user). -->
+      <div class="capsule" id="r-tools">
       <span class="bell" id="bell" role="button" tabindex="0" data-on="0"
             title="notify me when a terminal wants me (off)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
@@ -173,6 +176,7 @@
                 aria-haspopup="dialog" aria-expanded="false">Open in a browser</button>
         <button type="button" class="tm-i" role="menuitem" data-do="search">Search and commands</button>
         <button type="button" class="tm-i" role="menuitem" data-do="keys">Keyboard shortcuts</button>
+      </div>
       </div>
     </div>
   </div>
