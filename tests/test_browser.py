@@ -4109,6 +4109,29 @@ class TopRow(unittest.TestCase):
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class TheCanvasToolsWakeUp(unittest.TestCase):
+    """Tidy and gather stayed disabled after a terminal opened, until something else happened to
+    repaint them — a drag, a close. Found when the tools went quiet beside the tabs (2026-10-30):
+    boxed and grey they looked merely idle; faded they looked dead, and they were. Pre-existing on
+    main: the repaint ran on moves and closes, never on a window arriving."""
+
+    def test_tidy_is_offered_once_a_window_is_on_the_canvas(self):
+        with Daemon() as d, Browser() as b:
+            b.open(d.url)
+            time.sleep(1.5)
+            self.assertTrue(b.ev("document.getElementById('tidy').disabled"), "tidy offered on an empty canvas")
+            d.open_pane(name="api")
+            d.open_pane(name="web")
+            end = time.time() + 8
+            while time.time() < end and b.ev("document.getElementById('tidy').disabled"):
+                time.sleep(0.25)
+            self.assertFalse(b.ev("document.getElementById('tidy').disabled"),
+                             "two windows are on the canvas and tidy still says there is nothing on it")
+            self.assertIn("Tidy this canvas", b.ev("window.palmar.commandList().map(c=>c.l)"),
+                          "the command list does not offer tidy either")
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
 class CommandsBehindCtrlK(unittest.TestCase):
     """The field behind Ctrl/⌘K lists every command with its key, and the terminals that match
     (2026-10-30, try/chrome-tidy). The bar lost most of its buttons the same week, and a key nobody

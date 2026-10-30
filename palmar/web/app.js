@@ -4981,6 +4981,11 @@ function upsert(s) {
     t.off = false;
     refreshOff();    // a window another browser opened can land off-screen — the viewport is measured once in there
     if (layout[s.id] && layout[s.id].g) paintGroups();   // now it can be seen — see the Tile constructor
+    // **A window arriving is a reason to repaint the canvas tools** (2026-10-30). They were repainted
+    // on moves and closes and never here, so tidy and gather sat disabled after a terminal opened
+    // until something else happened — boxed and grey that read as idle; quiet beside the tabs it
+    // read as dead, which it was.
+    paintTidy();
   } else {
     const wasVisible = !t.el.classList.contains('other');
     t.update(s);
@@ -4989,6 +4994,7 @@ function upsert(s) {
       t.el.classList.toggle('other', !on);
       if (on) t.refit(); else { t.off = false; syncMax(); }   // the expanded window went to somebody else's canvas
       paintGroups();                                          // a group lives on one canvas — its frame moves with it
+      paintTidy();                                            // and the tools speak about this canvas
     }
   }
   renderTabs();      // the dot is computed — recount when status or canvas changes
