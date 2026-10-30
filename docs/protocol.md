@@ -106,7 +106,7 @@ python3 -m palmar            # 127.0.0.1:8801. --port 만 받는다. host 옵션
 | `POST` | `/api/stop?token=` | | 데몬에게 **멈추라고** 한다. `{"stopping": true}` 를 먼저 돌려주고 나간다 — `Ctrl-C` 와 같은 문. `palmar --stop` 이 이 길을 먼저 쓴다: **콘솔이 없는 데몬에는 신호가 안 닿는다**(윈도우에서 떨어져 나온 프로세스). 토큰이 관문이고, 토큰 파일은 0600 이다 |
 | `GET` | `/api/sessions?token=` | | `[Session]` (만든 순서). **캔버스로 거르지 않는다** — 왼쪽 목록이 전부를 보기 때문이다(⑪) |
 | `POST` | `/api/sessions?token=` | `{"cwd": "/abs/path", "canvas": "<id>", "name": "…"}` · `cwd` 없으면 홈 · `canvas` 가 없거나 `null` 이면 `order` 가 가장 앞인 캔버스 · `name` 없으면 이름 없음 | `Session` (201) · cwd 가 뿌리 밖이면 `400` · 모르는 `canvas` 면 `400` · 이름이 규칙에 안 맞으면 `400`. 세션은 80×24 로 태어나 첫 attach·resize 에서 크기가 잡힌다 |
-| `PATCH` | `/api/sessions/<id>?token=` | `{"name": …}` · `{"canvas": "<id>"}` · 둘 다. **몸에 있는 키만 바꾼다** (`name` 은 문자열 또는 `null`, `canvas` 는 문자열만) | `Session` (200 — 아무 키도 없는 `{}` 도 200, 그대로 돌려준다) · 세션이 없으면 `404` · 모르는 `canvas` 면 `400`(경로의 세션은 있으니 `404` 가 아니다) · **`{"canvas": null}` 도 `400`** — 소속은 비울 수 없다(`Session.canvas` 는 `null` 이 아니다) · 몸이 객체가 아니면 `400` |
+| `PATCH` | `/api/sessions/<id>?token=` | `{"name": …}` · `{"canvas": "<id>"}` · `{"message": …}` · 그 조합. **몸에 있는 키만 바꾼다** (`name` 은 문자열 또는 `null`, `canvas` 는 문자열만, `message` 는 문자열 또는 `null` — 빈 문자열도 지운다. 문자열이 아니면 `400`) | `Session` (200 — 아무 키도 없는 `{}` 도 200, 그대로 돌려준다) · 세션이 없으면 `404` · 모르는 `canvas` 면 `400`(경로의 세션은 있으니 `404` 가 아니다) · **`{"canvas": null}` 도 `400`** — 소속은 비울 수 없다(`Session.canvas` 는 `null` 이 아니다) · 몸이 객체가 아니면 `400` |
 | `DELETE` | `/api/sessions/<id>?token=` | | `204` · 없으면 `404`. SIGHUP → 2초 뒤 살아 있으면 SIGKILL |
 | `GET` | `/api/canvases?token=` | | `[Canvas]` (`order` 순) |
 | `POST` | `/api/canvases?token=` | `{"name": "…"}` · 없으면 이름 없음 | `Canvas` (201). **끝에 붙는다** — 있던 캔버스의 `order` 는 안 바뀐다 · 이름이 규칙에 안 맞으면 `400` |
@@ -164,6 +164,10 @@ python3 -m palmar            # 127.0.0.1:8801. --port 만 받는다. host 옵션
   "created": 1788780000.0,   // epoch 초
   "last_event": null,        // 마지막 훅 이벤트명, 없으면 null
   "canvas": "Qm2p…",         // 붙어 있는 캔버스의 id. **null 이 아니다** — 세션은 늘 어딘가에 있다 (⑪)
+  "message": null,           // `palmar --message` 가 남긴 것: {"text": "...", "at": 1788900000.0} 또는 null
+                             //   (2026-10-29). text 는 한 줄로 합치고 300자에서 자른다. **at 이 새것이면
+                             //   새 메시지다** — 같은 글을 두 번 보내도 두 번 말한다. 상태가 아니다:
+                             //   불을 건드리지 않는다. 사람이 그 판에 손을 대면 페이지가 null 로 지운다
   "name": null }             // 사람이 준 이름. null 이면 브라우저가 경로로 이름표를 만든다 (⑫)
 
 // Canvas

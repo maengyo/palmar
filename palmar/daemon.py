@@ -641,6 +641,30 @@ def clamp_int(raw, default: int, lo: int, hi: int) -> int:
 NAME_MAX = 64
 
 
+#: How long a message may be. It is read on one line of the rail and in a notification, and a
+#: program that pipes a log into it should not be able to fill the page.
+MESSAGE_MAX = 300
+
+
+def clean_message(v, old=None):
+    """A message as the daemon keeps it: {"text", "at"}, or None to clear it.
+
+    **Each one is new, even with the same words.** `at` is what the page compares to decide whether to
+    say it, so "build done" sent twice is said twice — that is two builds. Lines are joined: the rail
+    shows one, and a newline in a notification is a different layout on every OS."""
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        raise ValueError("message must be a string or null")
+    text = " ".join(v.split())[:MESSAGE_MAX]
+    if not text:
+        return None
+    at = time.time()
+    if old and old.get("at", 0) >= at:          # the clock is not trusted to tick between two calls
+        at = old["at"] + 0.001
+    return {"text": text, "at": at}
+
+
 def clean_name(raw):
     """Name rules (canvases and sessions alike, protocol.md "캔버스"). What comes back is what is stored.
 
@@ -891,6 +915,9 @@ class Session:
         #: The last wait ended without a person typing here. Set in registry.changed, cleared the
         #: moment they type or a new wait begins.
         self.answered_elsewhere = False
+        #: `palmar --message` — {"text", "at"} or None. Held here and not in the page so a page that
+        #: opens later still sees it; cleared by a hand on the pane (the page PATCHes it to null).
+        self.message = None
         self.last_out = 0.0          # when bytes last came out (monotonic)
         self.out_start = 0.0         # when the output run now in progress started
         self.out_break = False       # a person typed — the next byte opens a new run
@@ -983,6 +1010,9 @@ class Session:
             "last_cursor": self.last_cursor,
             "created": self.created, "last_event": self.last_event,
             "canvas": self.canvas, "name": self.name,
+            # What something running in this pane asked to be said (`palmar --message`), until a
+            # person puts a hand on the pane. Not a status: it never touches the light.
+            "message": self.message,
             # True when this pane's last wait ended with nobody typing here (#14). The browser reads
             # it so the live row says "answered — not here" instead of claiming you finished it.
             "answered_elsewhere": self.answered_elsewhere,
@@ -3949,8 +3979,15 @@ async def handle_request(reader, writer) -> None:
                 writer.write(http_error(400, "unknown canvas"))
                 return
             new_canvas = cid
-        if (new_name, new_canvas) != (s.name, s.canvas):
-            s.name, s.canvas = new_name, new_canvas
+        new_message = s.message
+        if "message" in obj:
+            try:
+                new_message = clean_message(obj.get("message"), s.message)
+            except ValueError as e:
+                writer.write(http_error(400, str(e)))
+                return
+        if (new_name, new_canvas, new_message) != (s.name, s.canvas, s.message):
+            s.name, s.canvas, s.message = new_name, new_canvas, new_message
             registry.changed(s)          # the sender gets the broadcast back too — the browser applies it idempotently by id
         writer.write(http_json(200, s.to_json()))
         return
@@ -5267,8 +5304,9 @@ def raise_windows_window() -> bool:
 #: of `run/token`, the way `--stop` and `--doctor` already reach a running daemon. Anything this
 #: could do, a person with that token could do with `curl` — which is the point: it is the same
 #: authority, not a second one.
-def ask_daemon(path: str, method: str = "GET", timeout: float = 5.0):
-    """(status, body) from the running daemon, or (0, reason) when there is nobody to ask."""
+def ask_daemon(path: str, method: str = "GET", timeout: float = 5.0, data=None):
+    """(status, body) from the running daemon, or (0, reason) when there is nobody to ask. `data`,
+    when given, goes as a JSON body."""
     try:
         token = TOKEN_FILE.read_text("utf-8").strip()
     except OSError:
@@ -5278,8 +5316,13 @@ def ask_daemon(path: str, method: str = "GET", timeout: float = 5.0):
     except OSError:
         return 0, "no address (%s) — is a daemon running for this HOME?" % URL_FILE
     base = url.split("/?")[0]
+    headers = {"Origin": base}
+    raw_body = None
+    if data is not None:
+        raw_body = json.dumps(data).encode("utf-8")
+        headers["Content-Type"] = "application/json"
     req = urllib.request.Request(base + path + ("&" if "?" in path else "?") + "token=" + token,
-                                 headers={"Origin": base}, method=method)
+                                 data=raw_body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read()
@@ -5331,6 +5374,31 @@ def close_session(sid: str) -> int:
         print("the daemon answered %d" % status, file=sys.stderr)
         return 1
     print("closed %s." % sid)
+    return 0
+
+
+def send_message(text: str, to: str = None) -> int:
+    """`palmar --message TEXT` — say something on the rail row of the pane it was typed in.
+
+    **The pane is the one this runs inside** (`$PALMAR_PANE`, which every pane's shell carries), so a
+    script that is watching something needs no id: it just says what it found. `--to` is for saying
+    it from outside, by an id from `--list`. An empty TEXT clears the message."""
+    sid = to or os.environ.get("PALMAR_PANE")
+    if not sid:
+        print("not inside a palmar terminal — run it in one, or name one with --to <id> "
+              "(`palmar --list` shows them).", file=sys.stderr)
+        return 1
+    status, body = ask_daemon("/api/sessions/" + quote(str(sid), safe=""), method="PATCH",
+                              data={"message": text})
+    if status == 0:
+        print(body, file=sys.stderr)
+        return 1
+    if status == 404:
+        print("no terminal with that id — `palmar --list` shows them.", file=sys.stderr)
+        return 1
+    if status != 200:
+        print("the daemon answered %d" % status, file=sys.stderr)
+        return 1
     return 0
 
 
@@ -6400,6 +6468,10 @@ def cli() -> None:
                     help="close one terminal by id (`--list` shows the ids), and exit")
     ap.add_argument("--stop", action="store_true",
                     help="stop this HOME's daemon (the shells in it die with it)")
+    ap.add_argument("--message", metavar="TEXT",
+                    help="show TEXT on this terminal's row in the page, until you click the terminal")
+    ap.add_argument("--to", metavar="ID",
+                    help="with --message: the terminal to say it on, when not run inside one")
     # **Detached is the default**, because the daemon outliving the terminal is the point of it
     # (principle 2). --foreground is for developing on it and for the tests, which have to be able to
     # terminate what they started. Windows gets there a different way — see detached_no_fork.
@@ -6410,6 +6482,8 @@ def cli() -> None:
         raise SystemExit(list_sessions())
     if args.close:
         raise SystemExit(close_session(args.close))
+    if args.message is not None:
+        raise SystemExit(send_message(args.message, args.to))
     if args.stop:
         raise SystemExit(stop_daemon())
     if args.doctor:
