@@ -4096,6 +4096,12 @@ class TopRow(unittest.TestCase):
         self.assertFalse(self.b.ev("document.getElementById('mm').hidden"), "it did not come back")
 
     def test_search_is_behind_the_shortcut(self):
+        """From the page, not from inside a terminal. **Inside a terminal Ctrl+K is the shell's**
+        (kill to the end of the line) and xterm keeps it, so on Linux and Windows the shortcut does
+        not reach the page from there — ⌘K on a Mac does, since xterm leaves ⌘ combinations alone
+        (measured 2026-10-30). This passed on Linux only while an earlier test happened to leave
+        focus on a button; it now puts focus where the test means it to be."""
+        self.b.ev("document.activeElement && document.activeElement.blur(); 1")
         self.assertTrue(self.b.ev("document.getElementById('searchbox').hidden"))
         mod = 4 if self.b.ev("navigator.platform.startsWith('Mac')") else 2      # ⌘ or Ctrl
         self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "k", "code": "KeyK", "modifiers": mod, "windowsVirtualKeyCode": 75})
