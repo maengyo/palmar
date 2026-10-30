@@ -2344,6 +2344,34 @@ class AMessageFromInsideAPane(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(self.message_of(d, s["id"])["text"], "hi")
 
+    def test_the_daemon_keeps_them_for_the_bell_and_drops_them_on_request(self):
+        """**The list lives in the daemon** (2026-10-30). A page that opens later, or the window
+        beside a browser tab, sees the same list, and the moment it is wanted is after being away.
+        Newest last; one goes by id, all go at once; 100 is the ceiling."""
+        with Daemon() as d:
+            s = d.post("/api/sessions", {"cwd": d.home, "name": "pr-watch"})
+            d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "first"})
+            d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "second"})
+            d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": None})   # a clearing is not news
+            got = d.get("/api/messages")
+            self.assertEqual([m["text"] for m in got], ["first", "second"])
+            self.assertEqual(got[0]["name"], "pr-watch", "the pane's name is not pinned on the entry")
+            self.assertEqual(got[0]["pane"], s["id"])
+            self.assertLess(got[0]["at"], got[1]["at"])
+            st, _ = d.raw("DELETE", "/api/messages/" + got[0]["id"])
+            self.assertEqual(st, 204)
+            self.assertEqual([m["text"] for m in d.get("/api/messages")], ["second"])
+            st, _ = d.raw("DELETE", "/api/messages/nosuch")
+            self.assertEqual(st, 404)
+            for i in range(105):
+                d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "n%d" % i})
+            got = d.get("/api/messages")
+            self.assertEqual(len(got), 100, "the list is not capped")
+            self.assertEqual(got[-1]["text"], "n104", "the newest was dropped instead of the oldest")
+            st, _ = d.raw("DELETE", "/api/messages")
+            self.assertEqual(st, 204)
+            self.assertEqual(d.get("/api/messages"), [])
+
     def test_a_message_that_is_not_text_is_refused(self):
         with Daemon() as d:
             s = d.post("/api/sessions", {"cwd": d.home})

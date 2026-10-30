@@ -108,6 +108,8 @@ python3 -m palmar            # 127.0.0.1:8801. --port 만 받는다. host 옵션
 | `POST` | `/api/sessions?token=` | `{"cwd": "/abs/path", "canvas": "<id>", "name": "…"}` · `cwd` 없으면 홈 · `canvas` 가 없거나 `null` 이면 `order` 가 가장 앞인 캔버스 · `name` 없으면 이름 없음 | `Session` (201) · cwd 가 뿌리 밖이면 `400` · 모르는 `canvas` 면 `400` · 이름이 규칙에 안 맞으면 `400`. 세션은 80×24 로 태어나 첫 attach·resize 에서 크기가 잡힌다 |
 | `PATCH` | `/api/sessions/<id>?token=` | `{"name": …}` · `{"canvas": "<id>"}` · `{"message": …}` · 그 조합. **몸에 있는 키만 바꾼다** (`name` 은 문자열 또는 `null`, `canvas` 는 문자열만, `message` 는 문자열 또는 `null` — 빈 문자열도 지운다. 문자열이 아니면 `400`) | `Session` (200 — 아무 키도 없는 `{}` 도 200, 그대로 돌려준다) · 세션이 없으면 `404` · 모르는 `canvas` 면 `400`(경로의 세션은 있으니 `404` 가 아니다) · **`{"canvas": null}` 도 `400`** — 소속은 비울 수 없다(`Session.canvas` 는 `null` 이 아니다) · 몸이 객체가 아니면 `400` |
 | `DELETE` | `/api/sessions/<id>?token=` | | `204` · 없으면 `404`. SIGHUP → 2초 뒤 살아 있으면 SIGKILL |
+| `GET` | `/api/messages?token=` | | `[Message]` — 터미널이 `palmar --message` 로 말한 것, 오래된 것부터, 최근 100개 (2026-10-30). 데몬이 든다 — 나중에 연 페이지도 같은 목록을 본다 |
+| `DELETE` | `/api/messages/<id>?token=` · `/api/messages?token=` | | 하나를 지운다 · 전부 지운다. `204` · 없는 id 면 `404`. 지운 뒤 `messages` 프레임으로 남은 목록 전체가 방송된다. **POST 는 없다** — 메시지는 그 터미널의 `PATCH /api/sessions/<id>` `{"message": …}` 로 들어온다 |
 | `GET` | `/api/canvases?token=` | | `[Canvas]` (`order` 순) |
 | `POST` | `/api/canvases?token=` | `{"name": "…"}` · 없으면 이름 없음 | `Canvas` (201). **끝에 붙는다** — 있던 캔버스의 `order` 는 안 바뀐다 · 이름이 규칙에 안 맞으면 `400` |
 | `POST` | `/api/canvases/order?token=` | `{"order": ["<id>", …]}` — **지금 있는 전부를 새 순서로** | `[Canvas]` (200, `order` 순) · 배열이 아니거나 원소가 문자열이 아니면 `400` · 지금 집합과 다르면(빠짐·더함·중복) `409` |
@@ -165,10 +167,20 @@ python3 -m palmar            # 127.0.0.1:8801. --port 만 받는다. host 옵션
   "last_event": null,        // 마지막 훅 이벤트명, 없으면 null
   "canvas": "Qm2p…",         // 붙어 있는 캔버스의 id. **null 이 아니다** — 세션은 늘 어딘가에 있다 (⑪)
   "message": null,           // `palmar --message` 가 남긴 것: {"text": "...", "at": 1788900000.0} 또는 null
+                             //   **같은 글이 두 곳에 간다**: 여기(목록 줄, 손이 닿으면 지워짐)와
+                             //   `messages` 목록(종 버튼, × 로 지움). 수명이 다른 두 자리다
                              //   (2026-10-29). text 는 한 줄로 합치고 300자에서 자른다. **at 이 새것이면
                              //   새 메시지다** — 같은 글을 두 번 보내도 두 번 말한다. 상태가 아니다:
                              //   불을 건드리지 않는다. 사람이 그 판에 손을 대면 페이지가 null 로 지운다
   "name": null }             // 사람이 준 이름. null 이면 브라우저가 경로로 이름표를 만든다 (⑫)
+
+// Message (2026-10-30) — 종 버튼의 목록 한 줄
+{ "id": "m12",               // 데몬 생애 안의 순번. 되쓰지 않는다
+  "pane": "k3Jx…",           // 말한 터미널. 이미 닫혔을 수 있다 — 그래서 이름을 박아 둔다
+  "name": "pr-watch",        // 그때의 이름 (null 이면 페이지가 cwd 로 이름표를 만든다)
+  "cwd": "/home/me/work",
+  "text": "review requested …",   // 한 줄, 300자까지
+  "at": 1788900000.0 }       // unix 초. 페이지는 "3m" 처럼 지난 시간으로 보여 준다
 
 // Canvas
 { "id": "Qm2p…",             // Session id 와 같은 모양의 URL-safe 토큰. 순번 금지
@@ -580,6 +592,8 @@ macOS 의 맨 zsh 는 제목을 안 세워서 이 자리에서 안 보였다).
 { "t": "canvas", "c": Canvas }                    // 캔버스 하나가 생겼거나 이름이 바뀌었다
 { "t": "canvases", "cs": [Canvas…] }              // 순서가 바뀌었다 — order 순 전체
 { "t": "canvas_gone", "id": "Qm2p…" }             // 지워졌다. **바로 뒤에 canvases 가 따라온다**
+{ "t": "message", "m": Message }                  // 터미널이 말했다 (2026-10-30). hello 는 `messages` 로 전부 준다
+{ "t": "messages", "ms": [Message…] }             // 하나 또는 전부를 지운 뒤 남은 것 전체
 ```
 브라우저 → 서버:
 ```jsonc

@@ -483,9 +483,9 @@ function toast(parts) {
   // A toast you are meant to press needs longer than one you only read.
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), act ? 9000 : 4500);
 }
-function agoText(id) {
-  const at = changedAt.get(id) || 0;
-  const d = Math.max(0, (Date.now() - at) / 1000);
+function agoText(id) { return agoFrom(changedAt.get(id) || 0); }
+function agoFrom(atMs) {
+  const d = Math.max(0, (Date.now() - atMs) / 1000);
   if (d < 5) return 'now';
   if (d < 60) return Math.floor(d) + 's';
   if (d < 3600) return Math.floor(d / 60) + 'm';
@@ -4348,6 +4348,7 @@ function renderList() {
 setInterval(() => {
   for (const [id, it] of items) {
     it._ago.nodeValue = agoText(id);
+    paintInboxAges();
     const s = sessions.get(id);
     if (s && it._msg) it._msg.textContent = msgText(s);   // makes "quiet 6m" run without rebuilding the list
   }
@@ -4699,7 +4700,9 @@ function flushNotify() {
 
 // ── `palmar --message` ──
 // Said three ways, each for a different place the eye might be: the row (until cleared), a toast (if
-// this page is in front), and the OS notification (if it is not, and notifications are on).
+// this page is in front), and the OS notification (if it is not, and notifications are on) — and
+// kept in a fourth, the list behind the bell, until an × (2026-10-30). The `message` frame is what
+// says it; the session frame that comes with it only draws the row.
 const clearing = new Set();
 function clearMessage(id) {
   const s = sessions.get(id);
@@ -4708,17 +4711,111 @@ function clearMessage(id) {
   api('PATCH', '/api/sessions/' + encodeURIComponent(id), { message: null })
     .catch(() => {}).finally(() => clearing.delete(id));
 }
-function onMessage(s) {
-  const text = s.message.text;
+function messageLabel(e) {
+  const s = sessions.get(e.pane);
+  return s ? labelOf(s) : (e.name || shortPath(e.cwd || '') || 'a closed terminal');
+}
+function goToMessage(e) {
+  if (sessions.has(e.pane)) goToSession(e.pane);
+  else toast(['that terminal is closed']);
+}
+function sayMessage(e) {
+  const who = messageLabel(e);
   if (document.hasFocus()) {
-    toast([{ b: labelOf(s) }, text, { a: 'show', on: () => goToSession(s.id) }]);
+    toast([{ b: who }, e.text, { a: 'show', on: () => goToMessage(e) }]);
     return;
   }
   if (!notifyOn || !canRing()) return;
-  if (!hasNotificationAPI()) { notifyViaDaemon(labelOf(s), text).catch(() => {}); return; }
+  if (!hasNotificationAPI()) { notifyViaDaemon(who, e.text).catch(() => {}); return; }
   let n;
-  try { n = new Notification(labelOf(s), { body: text, tag: 'palmar-msg-' + s.id }); } catch (e) { return; }
-  n.onclick = () => { window.focus(); goToSession(s.id); n.close(); };
+  try { n = new Notification(who, { body: e.text, tag: 'palmar-msg-' + e.pane }); } catch (e2) { return; }
+  n.onclick = () => { window.focus(); goToMessage(e); n.close(); };
+}
+
+// ── the list behind the bell ──
+//: **The daemon keeps the list**, this is its copy, swapped whole on hello and on `messages` and
+//: appended on `message`. "Unread" is the one thing that is this browser's: the moment the list was
+//: last opened here, kept in localStorage, and a dot on the bell while something is newer.
+const LS_INBOX_SEEN = 'palmar.inbox-seen';
+let inbox = [];                 // oldest first, as the daemon sends it
+let inboxSeenAt = 0;
+try { inboxSeenAt = parseFloat(localStorage.getItem(LS_INBOX_SEEN) || '0') || 0; } catch (e) {}
+const inboxEl = document.getElementById('inbox');
+function setInbox(ms) { inbox = Array.isArray(ms) ? ms.slice() : []; renderInbox(); paintBell(); }
+function addInbox(e) { inbox.push(e); if (inbox.length > 100) inbox.shift(); renderInbox(); paintBell(); }
+function paintBell() {
+  if (!bellEl) return;
+  const unread = inbox.some((e) => e.at * 1000 > inboxSeenAt);
+  bellEl.dataset.unread = unread ? '1' : '0';
+}
+function renderInbox() {
+  const list = document.getElementById('inbox-list');
+  if (!list || !inboxEl || inboxEl.hidden) return;
+  list.textContent = '';
+  if (!inbox.length) {
+    list.appendChild(el('div', 'inbox-empty', 'Nothing yet. A terminal can say something with  palmar --message "…"'));
+  }
+  for (let i = inbox.length - 1; i >= 0; i--) {
+    const e = inbox[i];
+    const s = sessions.get(e.pane);
+    const row = el('div', 'ib-row' + (s ? '' : ' gone'));
+    row.dataset.id = e.id;
+    row.title = s ? 'click to go to ' + messageLabel(e) : 'that terminal is closed';
+    row.appendChild(el('span', 'dot ' + (s ? (STATUS_CLASS[s.status] || 'idle') : 'idle')));
+    row.appendChild(el('span', 'ib-name', messageLabel(e)));
+    const ago = el('span', 'ib-ago', agoFrom(e.at * 1000));
+    ago.dataset.at = String(e.at);
+    row.appendChild(ago);
+    const x = el('button', 'ib-x');
+    x.type = 'button';
+    x.title = 'remove this one';
+    x.setAttribute('aria-label', 'remove');
+    x.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      api('DELETE', '/api/messages/' + encodeURIComponent(e.id)).catch(() => {});
+    });
+    row.appendChild(x);
+    row.appendChild(el('span', 'ib-text', e.text));
+    row.addEventListener('click', () => { showInbox(false); goToMessage(e); });
+    list.appendChild(row);
+  }
+  const clear = document.getElementById('inbox-clear');
+  if (clear) clear.disabled = !inbox.length;
+}
+function paintInboxAges() {
+  if (!inboxEl || inboxEl.hidden) return;
+  for (const n of inboxEl.querySelectorAll('.ib-ago')) n.textContent = agoFrom(parseFloat(n.dataset.at) * 1000);
+}
+function showInbox(open) {
+  if (!inboxEl || !bellEl) return;
+  if (open) closePopups(inboxEl);
+  inboxEl.hidden = !open;
+  bellEl.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) {
+    const r = bellEl.getBoundingClientRect();
+    inboxEl.style.top = (r.bottom + 8) + 'px';
+    inboxEl.style.right = Math.max(8, window.innerWidth - r.right - 4) + 'px';
+    const sw = document.getElementById('notify-sw');
+    if (sw) sw.checked = notifyOn;
+    renderInbox();
+    // Opened is read. The dot goes out here, in this browser; another window keeps its own.
+    inboxSeenAt = Date.now();
+    try { localStorage.setItem(LS_INBOX_SEEN, String(inboxSeenAt)); } catch (e) {}
+    paintBell();
+  }
+}
+registerPopup(inboxEl, () => showInbox(false));
+if (inboxEl) {
+  inboxEl.addEventListener('click', (e) => e.stopPropagation());
+  addEventListener('click', () => { if (!inboxEl.hidden) showInbox(false); });
+  addEventListener('keydown', (e) => { if (e.key === 'Escape' && !inboxEl.hidden) showInbox(false); });
+  const clear = document.getElementById('inbox-clear');
+  if (clear) clear.addEventListener('click', () => api('DELETE', '/api/messages').catch(() => {}));
+  const sw = document.getElementById('notify-sw');
+  if (sw) sw.addEventListener('change', async () => {
+    await toggleNotify();
+    sw.checked = notifyOn;            // permission may have been refused — the switch says what is true
+  });
 }
 
 // **Ring once when it is turned on.** A notification has to pass browser permission, the OS's do-not-disturb and
@@ -4743,11 +4840,11 @@ const bellEl = document.getElementById('bell');
 function setNotify(on) {
   notifyOn = on;
   try { if (on) localStorage.setItem(LS_NOTIFY, '1'); else localStorage.removeItem(LS_NOTIFY); } catch (e) {}
-  if (bellEl) {
-    bellEl.dataset.on = on ? '1' : '0';
-    bellEl.title = on ? 'notifications on — click to turn off'
-                      : 'notify me when a terminal wants me (off)';
-  }
+  if (bellEl) bellEl.dataset.on = on ? '1' : '0';
+  const w = document.getElementById('notify-word');
+  if (w) w.textContent = on ? 'on' : 'off';
+  const sw = document.getElementById('notify-sw');
+  if (sw) sw.checked = on;
 }
 async function toggleNotify() {
   if (notifyOn) { setNotify(false); return; }
@@ -4772,12 +4869,13 @@ async function toggleNotify() {
   notifyTest();
 }
 if (bellEl) {
-  bellEl.addEventListener('click', () => {
+  bellEl.addEventListener('click', (e) => {
+    e.stopPropagation();
     bellEl.classList.remove('ping'); void bellEl.offsetWidth; bellEl.classList.add('ping');   // one ring, every press
-    toggleNotify();
+    showInbox(inboxEl && inboxEl.hidden);
   });
   bellEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleNotify(); }
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showInbox(inboxEl && inboxEl.hidden); }
   });
 }
 
@@ -5009,7 +5107,6 @@ function upsert(s) {
   if (wants) onWantsYou(s.id);
   // A message is new when its `at` is — the same words sent twice are two things that happened.
   // Not on the first sight of a pane (a hello after a reload): that one was already said.
-  if (old && s.message && (!old.message || old.message.at !== s.message.at)) onMessage(s);
   renderBadge();
   let t = tiles.get(s.id);
   if (!t) {
@@ -5127,7 +5224,10 @@ function connectEvents() {
       setCanvases(m.canvases || []); reconcile(m.sessions || []);
       restoreViewers();                    // the windows that are not sessions
       renderRestore(m.restore);
+      setInbox(m.messages || []);          // said already; nothing is said again on a hello
     }
+    else if (m.t === 'message' && m.m) { addInbox(m.m); sayMessage(m.m); }
+    else if (m.t === 'messages' && m.ms) setInbox(m.ms);
     else if (m.t === 'session' && m.s) upsert(m.s);
     else if (m.t === 'gone' && m.id) remove(m.id);
     else if (m.t === 'canvas' && m.c) putCanvas(m.c);           // created or renamed
@@ -5514,7 +5614,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   saveLayout, client: () => CLIENT, layoutOnDaemon: () => layoutOnDaemon,
                   holdStyle: () => holdStyle,
                   palette: () => root.dataset.pal || null, choosePalette, applyTheme, pickTheme, labelOf, renderers,
-                  showSearch, commandList,
+                  showSearch, commandList, showInbox, inbox: () => inbox.slice(),
                   baseFont: () => FONT_PX, setBaseFont, termTheme, minimapOn: () => minimapOn,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.

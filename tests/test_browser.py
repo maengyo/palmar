@@ -375,6 +375,64 @@ class CopyAndPasteKeys(unittest.TestCase):
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class AnInboxBehindTheBell(unittest.TestCase):
+    """What terminals said, kept behind the bell (2026-10-30): the notification switch at its head,
+    the messages under it newest first with how long ago and an ×, "clear all" at the foot, and a dot
+    on the bell while something is newer than the last look. The list is the daemon's — a reload
+    still has it — and only "last look" is this browser's."""
+
+    def rows(self, b):
+        return b.ev("""[...document.querySelectorAll('#inbox-list .ib-row')].map(r=>({
+          name: r.querySelector('.ib-name').textContent, text: r.querySelector('.ib-text').textContent,
+          ago: r.querySelector('.ib-ago').textContent, id: r.dataset.id}))""")
+
+    def test_it_lists_them_newest_first_and_an_x_or_clear_all_removes_them(self):
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="pr-watch")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            self.assertEqual(b.ev("document.getElementById('bell').dataset.unread"), "0")
+            d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "first thing"})
+            d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "second thing"})
+            time.sleep(1)
+            self.assertEqual(b.ev("document.getElementById('bell').dataset.unread"), "1", "no dot on the bell")
+            b.ev("document.getElementById('bell').click()")
+            time.sleep(0.3)
+            self.assertFalse(b.ev("document.getElementById('inbox').hidden"), "the bell did not open the list")
+            self.assertEqual(b.ev("document.getElementById('bell').dataset.unread"), "0", "opening it did not count as reading")
+            rows = self.rows(b)
+            self.assertEqual([r["text"] for r in rows], ["second thing", "first thing"])
+            self.assertEqual(rows[0]["name"], "pr-watch")
+            self.assertEqual(rows[0]["ago"], "now")
+            b.ev("document.querySelector('#inbox-list .ib-row[data-id=%s] .ib-x').click()" % json.dumps(rows[0]["id"]))
+            time.sleep(0.8)
+            self.assertEqual([r["text"] for r in self.rows(b)], ["first thing"], "the × did not remove one")
+            self.assertEqual([m["text"] for m in d.get("/api/messages")], ["first thing"], "the daemon disagrees")
+            # **A reload still has it** — the list is the daemon's, not the page's.
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            self.assertEqual(b.ev("document.getElementById('bell').dataset.unread"), "0", "a reload said it again")
+            b.ev("document.getElementById('bell').click()")
+            time.sleep(0.3)
+            self.assertEqual([r["text"] for r in self.rows(b)], ["first thing"], "a reload lost the list")
+            b.ev("document.getElementById('inbox-clear').click()")
+            time.sleep(0.8)
+            self.assertEqual(self.rows(b), [], "clear all left something")
+            self.assertEqual(d.get("/api/messages"), [])
+            self.assertIn("Nothing yet", b.ev("document.getElementById('inbox-list').textContent"))
+
+    def test_the_switch_at_its_head_is_the_notification_switch(self):
+        with Daemon() as d, Browser() as b:
+            b.open(d.url, script="window.Notification=function(){}; window.Notification.permission='granted';")
+            time.sleep(1.5)
+            b.ev("document.getElementById('bell').click()")
+            time.sleep(0.2)
+            b.ev("(()=>{const s=document.getElementById('notify-sw'); s.checked=true; s.dispatchEvent(new Event('change')); return 1;})()")
+            time.sleep(0.5)
+            r = b.ev("({on: document.getElementById('bell').dataset.on, word: document.getElementById('notify-word').textContent, kept: localStorage.getItem('palmar.notify')})")
+            self.assertEqual([r["on"], r["word"], r["kept"]], ["1", "on", "1"], r)
+
+
 class AMessageOnTheRail(unittest.TestCase):
     """`palmar --message` as the page shows it (2026-10-29): a line on the pane's row that stays until
     a hand goes to the pane, a toast when it arrives, and nothing said again on a reload."""
@@ -3853,7 +3911,7 @@ class Palettes(unittest.TestCase):
         options list — the same kind of setting in two places (2026-10-30)."""
         r = self.b.ev("""(()=>{const m=document.getElementById('options-menu');
           return {inList: !!m.querySelector('#theme'), onBar: !!document.querySelector('.top .r > #theme'),
-                  bar: [...document.querySelectorAll('.top .r .capsule > *')].map(e=>e.id).filter(id=>id!=='options-menu')};})()""")
+                  bar: [...document.querySelectorAll('.top .r .capsule > *')].filter(e=>e.tagName!=='DIV').map(e=>e.id)};})()""")
         self.assertTrue(r["inList"], "theme is not in the options list")
         self.assertFalse(r["onBar"], "theme is still a top-bar button")
         self.assertEqual(r["bar"], ["bell", "options"], "the top bar's right end holds more than the bell and options: %r" % r)
@@ -4887,7 +4945,8 @@ class AWindowWithoutTheNotificationAPI(unittest.TestCase):
         b.open(d.url, script="delete window.Notification")     # what WKWebView looks like to the page
         time.sleep(1.0)
         self.assertFalse(b.ev("'Notification' in window"))
-        b.ev("document.getElementById('bell').click(); 1")
+        # The bell opens a list now (2026-10-30); the switch at its head is what turns notifications on.
+        b.ev("document.getElementById('bell').click(); const s=document.getElementById('notify-sw'); s.checked=true; s.dispatchEvent(new Event('change')); 1")
         end = time.time() + 6
         while time.time() < end and not os.path.exists(note):
             time.sleep(0.1)

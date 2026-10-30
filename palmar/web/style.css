@@ -423,6 +423,66 @@ kbd {
 }
 .bell:hover { border-color: var(--accent); color: var(--ink); }
 .bell[data-on="1"] { color: var(--st-wait); }
+/* Something in the list is newer than the last time it was opened here: a dot on the bell, in the
+   accent — it is news, not a status (⑥). */
+.bell { position: relative; }
+.bell[data-unread="1"]::after {
+  content: ""; position: absolute; top: 5px; right: 7px; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 2px var(--btn);
+}
+/* The list behind the bell (2026-10-30). */
+.inbox { width: 340px; max-width: calc(100vw - 16px); padding: 0; }
+.inbox-h { display: flex; align-items: center; gap: 8px; padding: 10px 12px 8px; border-bottom: 1px solid var(--line); }
+.inbox-t { font-size: var(--t-12); font-weight: 600; color: var(--ink-2); flex: 1; }
+.inbox-sw { display: flex; align-items: center; gap: 8px; font-size: var(--t-12); color: var(--ink-3); cursor: pointer; }
+/* **A switch drawn as a switch** (user, 2026-10-30): a 34×20 track and a knob that travels, the accent
+   when on, the way a phone draws one. The checkbox underneath is kept for the keyboard and the tests. */
+.inbox-sw input {
+  -webkit-appearance: none; appearance: none; margin: 0; cursor: pointer; flex: none;
+  width: 34px; height: 20px; border-radius: 999px; position: relative;
+  background: color-mix(in srgb, var(--ink-3) 35%, var(--line));
+  transition: background .18s;
+}
+.inbox-sw input::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3), 0 0 0 .5px rgba(0,0,0,.08);
+  transition: transform .18s cubic-bezier(.2,.8,.2,1);
+}
+.inbox-sw input:checked { background: var(--accent); }
+.inbox-sw input:checked::after { transform: translateX(14px); }
+.inbox-sw input:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
+.inbox-sw input:active::after { width: 19px; }
+.inbox-sw input:checked:active::after { transform: translateX(11px); }
+@media (prefers-reduced-motion: reduce) { .inbox-sw input, .inbox-sw input::after { transition: none; } }
+.inbox-l { max-height: min(420px, 60vh); overflow-y: auto; padding: 4px; }
+.inbox-empty { padding: 14px 10px 12px; font-size: var(--t-12); color: var(--ink-3); line-height: 1.5; }
+.ib-row {
+  display: grid; grid-template-columns: 7px 1fr auto 18px; column-gap: 8px; row-gap: 2px; align-items: center;
+  padding: 7px 8px 8px 10px; border-radius: 6px; cursor: pointer;
+}
+.ib-row:hover { background: var(--hover); }
+.ib-row.gone { cursor: default; }
+.ib-row.gone .ib-name { color: var(--ink-3); }
+.ib-name { font-size: var(--t-13); font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ib-ago { font-size: var(--t-11); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.ib-text { grid-column: 2 / 5; font-size: var(--t-12); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ib-row .dot { align-self: center; }
+.ib-x {
+  width: 18px; height: 18px; border-radius: 4px; border: 1px solid transparent; background: transparent;
+  color: var(--ink-3); cursor: pointer; display: grid; place-items: center; padding: 0; opacity: 0;
+  -webkit-appearance: none; appearance: none;
+}
+.ib-x::before {
+  content: ""; width: 8px; height: 8px;
+  background: linear-gradient(45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%),
+              linear-gradient(-45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%);
+}
+.ib-row:hover .ib-x, .ib-x:focus-visible { opacity: 1; }
+.ib-x:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.inbox-f { border-top: 1px solid var(--line); padding: 4px; }
+.inbox-f .tm-i { padding-left: 10px; }
+.inbox-f .tm-i::before { display: none; }
+.inbox-f .tm-i:disabled { color: var(--ink-3); opacity: .5; cursor: default; }
 
 /* ── body grid ──────────────────────────────── */
 /* The rail widths live in **one place only** (--rail-l·--rail-r on :root). Before, .top and .body each wrote

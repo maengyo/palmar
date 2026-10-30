@@ -213,6 +213,9 @@ OUT_MIN_S = 1.0
 #: called for me, the moment it finished, things appearing and disappearing.
 #: idle→working and the like are not written: frequent, no shame in missing, and they bury the rest.
 LOG_MAX = 200
+#: How many `palmar --message` lines the daemon keeps for the bell's list (2026-10-30). A watcher that
+#: says something every five minutes for a day is 288; what matters is the last afternoon, not the week.
+MESSAGES_MAX = 100
 
 FIND_DEPTH = 4
 FIND_YIELD = 400        # yield to the loop every this many entries swept
@@ -1859,6 +1862,13 @@ class Registry:
         #: What happened (up to LOG_MAX entries, oldest first). It outlives the session — which is why the
         #: name is pinned in **as the value it had then**, not as a reference.
         self.log: collections.deque = collections.deque(maxlen=LOG_MAX)
+        #: What terminals said (`palmar --message`), newest last, up to MESSAGES_MAX. **The daemon
+        #: keeps it, not the page**: a page that opens later, or the window beside a browser tab, has
+        #: to see the same list, and the moment it is wanted is after being away (2026-10-30). It is
+        #: not in restore.json — it belongs to this daemon's lifetime, and a restart's offer is about
+        #: terminals, not news. Each entry pins the pane's name as it was: the pane may be gone.
+        self.messages: collections.deque = collections.deque(maxlen=MESSAGES_MAX)
+        self.message_seq = 0
         #: Exactly the order shown in the tab strip. Python dicts keep insertion order, so this is order —
         #: order is never sorted separately, so there is nowhere for "from 0 with no gaps" to break.
         self.canvases: dict[str, Canvas] = {}
@@ -1942,6 +1952,32 @@ class Registry:
                 w.write(frame)
             except Exception:
                 self.event_clients.discard(w)
+
+    # ── messages (`palmar --message`) ──
+    def post_message(self, s: Session, m: dict) -> dict:
+        """Keep what a terminal said and tell every page. Called once per new message, from PATCH."""
+        self.message_seq += 1
+        e = {"id": "m%d" % self.message_seq, "pane": s.id, "name": s.name, "cwd": s.cwd,
+             "text": m["text"], "at": m["at"]}
+        self.messages.append(e)
+        self.broadcast({"t": "message", "m": e})
+        return e
+
+    def drop_messages(self, mid=None) -> bool:
+        """One by id, or all of them. Every page gets the list that is left, whole — it is at most
+        MESSAGES_MAX small objects and a whole list cannot be applied out of order."""
+        if mid is None:
+            if not self.messages:
+                return True
+            self.messages.clear()
+        else:
+            keep = [e for e in self.messages if e["id"] != mid]
+            if len(keep) == len(self.messages):
+                return False
+            self.messages.clear()
+            self.messages.extend(keep)
+        self.broadcast({"t": "messages", "ms": list(self.messages)})
+        return True
 
     #: Transitions worth writing down. The value is the wording the browser shows as-is.
     LOG_WORTH = {"waiting": "wants you", "done": "finished"}
@@ -3760,6 +3796,8 @@ async def ws_events(reader, writer, headers: dict) -> None:
                              # **It comes along at the moment of attaching.** The moment you want to know
                              # "what happened while I was away" is exactly then, so it is not asked twice.
                              "log": list(registry.log),
+                             # What terminals said, for the bell's list — same reason as `log`.
+                             "messages": list(registry.messages),
                              # What the previous daemon left, offered rather than acted on. Dropped once
                              # anything has been opened — an offer to restore beside panes you already
                              # opened is noise, and the workspace it describes is no longer the one you have.
@@ -3989,6 +4027,10 @@ async def handle_request(reader, writer) -> None:
         if (new_name, new_canvas, new_message) != (s.name, s.canvas, s.message):
             s.name, s.canvas, s.message = new_name, new_canvas, new_message
             registry.changed(s)          # the sender gets the broadcast back too — the browser applies it idempotently by id
+            # A new message (not a clearing) also goes into the bell's list. The session frame above
+            # carries it to the row; this carries it to the list and is what the page toasts on.
+            if new_message is not None:
+                registry.post_message(s, new_message)
         writer.write(http_json(200, s.to_json()))
         return
 
@@ -4035,6 +4077,28 @@ async def handle_request(reader, writer) -> None:
         # Same spelling launch_target mints: the nonce in the query and a host with no dot, so
         # Chromium can keep this window's size across launches (loopback_name).
         writer.write(http_json(200, {"url": f"http://{loopback_name(PORT[0])}:{PORT[0]}/once?n={mint_once()}"}))
+        return
+    if path == "/api/messages" or path.startswith("/api/messages/"):
+        # The bell's list (2026-10-30). GET is for the tests and for a CLI that may come; DELETE is the
+        # × on a row and the "clear all" under the list. No POST: a message is posted through the
+        # pane it belongs to (PATCH /api/sessions/<id>), which is where `palmar --message` lands it.
+        if not token_ok:
+            writer.write(http(403))
+            return
+        mid = path[len("/api/messages/"):] if path.startswith("/api/messages/") else None
+        if method == "GET" and mid is None:
+            writer.write(http_json(200, list(registry.messages)))
+            return
+        if method != "DELETE":
+            writer.write(http(405))
+            return
+        if mid is not None and not _ID_RE.fullmatch(mid):
+            writer.write(http(404))
+            return
+        if not registry.drop_messages(mid):
+            writer.write(http(404))
+            return
+        writer.write(http(204))
         return
     if path == "/api/notify":
         # **The OS says it when the page cannot.** palmar's own window on a Mac (WKWebView) has no
