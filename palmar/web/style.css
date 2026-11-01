@@ -39,6 +39,18 @@
      controls, 11 the smallest a label goes, 14 the one step up. Glyph-sized things (the ＋, the ×)
      are not text and keep their own numbers. */
   --t-11: 11px; --t-12: 12px; --t-13: 13px; --t-14: 14px;
+  /* **One radius family** (2026-11-01). Radii in a product are bimodal — tight, 4-8px, or soft, 16-24px
+     with full pills for controls — and a screen that mixes them reads as undecided (taste-skill,
+     app-screens §9.4: 23 measured product screens). palmar had 3, 4, 5, 6, 7, 8, 9, 10, 14 and 999 at
+     once. The capsules are pills, so the family is the soft one: panels 16, rows and menu items 10,
+     anything you press or that labels something a pill, inputs 8. Keys (kbd) keep their 4 — a key is
+     drawn as a key. Nested radii step down (panel 16 → row 10 → input 8). */
+  --r-panel: 16px; --r-item: 10px; --r-pill: 999px; --r-input: 8px;
+  /* **Selection is neutral** (2026-11-01, same source §3.2, §9.2): the current tab, the current row and
+     an open menu's button are a grey step, not the accent — the accent stays on what is news (a
+     message, the unread dot) and on the one window in front. In the study the active nav item is a
+     grey pill on light and a brightness step on dark; a coloured active state appeared once in 23. */
+  --sel: rgba(31,34,41,.08); --sel-line: rgba(31,34,41,.14);
   color-scheme: light dark;
   --ground:   #f3f1ec;
   --canvas:   #ecebe5;
@@ -131,6 +143,7 @@
     --float:     rgba(25,23,20,.94);
     --topbar:    rgba(30,28,24,.78);
     --search:    rgba(18,17,16,.6);
+    --sel:       rgba(255,255,255,.09); --sel-line: rgba(255,255,255,.16);
     --term-ink:  #ded8cd;
     --term-box:  #8f887b;
     --st-work:   #6aa96f;
@@ -169,6 +182,7 @@
   --float:     rgba(25,23,20,.94);
   --topbar:    rgba(30,28,24,.78);
   --search:    rgba(18,17,16,.6);
+  --sel:       rgba(255,255,255,.09); --sel-line: rgba(255,255,255,.16);
   --term-ink:  #ded8cd;
   --term-box:  #8f887b;
   --st-work:   #6aa96f;
@@ -258,12 +272,12 @@ body.wants .brand .wd { fill: var(--st-wait); opacity: 1; }
    field, not beside the list. Rows are the options list's rows; the key sits at the right edge. */
 .cmds {
   margin-right: 34px; padding: 4px; max-height: min(440px, 60vh); overflow-y: auto;
-  background: var(--float); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow-2);
+  background: var(--float); border: 1px solid var(--line); border-radius: var(--r-panel); box-shadow: var(--shadow-2);
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
 }
 .cmds .cmd-h { padding: 6px 10px 2px; font-size: var(--t-11); color: var(--ink-3); }
 .cmd {
-  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: 0; border-radius: 6px;
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: 0; border-radius: var(--r-item);
   background: none; color: var(--ink-2); font: inherit; font-size: var(--t-13); text-align: left; cursor: pointer;
   -webkit-appearance: none; appearance: none;
 }
@@ -273,7 +287,7 @@ body.wants .brand .wd { fill: var(--st-wait); opacity: 1; }
 .cmd .k { display: flex; gap: 3px; flex: none; margin-left: auto; }
 .cmd .dot { flex: none; }
 .cmd:hover, .cmd.sel { background: var(--hover); color: var(--ink); }
-.cmd.sel { box-shadow: inset 2px 0 0 var(--accent); }
+.cmd.sel { background: var(--sel); }
 /* Floating over windows now, so it cannot be the translucent field it was on the bar: the title bar
    under it showed through (measured 2026-09-15). */
 .searchbox .search { background: var(--float); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
@@ -286,10 +300,10 @@ body.wants .brand .wd { fill: var(--st-wait); opacity: 1; }
   padding: 0; line-height: 0; box-shadow: var(--shadow-2); -webkit-appearance: none; appearance: none;
 }
 .sx svg { display: block; }
-.sx:hover { border-color: var(--accent); color: var(--ink); }
+.sx:hover { border-color: var(--line-2); color: var(--ink); }
 .search {
   display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 30px; box-shadow: var(--shadow-2);
-  padding: 0 10px; border: 1px solid var(--line); border-radius: 7px;
+  padding: 0 14px; border: 1px solid var(--line); border-radius: var(--r-pill);
   background: var(--search); color: var(--ink-3); font-size: var(--t-12);
   -webkit-app-region: no-drag;
 }
@@ -316,22 +330,22 @@ kbd {
   box-sizing: border-box; width: 26px; height: 26px; min-width: 26px; line-height: 0; color: var(--ink-2);
 }
 .options svg { display: block; }
-.options[aria-expanded="true"] { border-color: var(--accent); color: var(--ink); }
+.options[aria-expanded="true"] { color: var(--ink); }
 /* Settings rows inside the options list: a control and its name, the explanation in the title. */
 .options-menu { min-width: 240px; }
 .options-menu .tm-i::before { display: none; }   /* an action, not a choice among several */
 .options-menu .tm-i { padding-left: 10px; }
 .options-menu .tm-row {
-  display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px;
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--r-item);
   color: var(--ink-2); font-size: var(--t-12); cursor: pointer; white-space: nowrap;
 }
 .options-menu .tm-row:hover { background: var(--hover); color: var(--ink); }
 .options-menu .tm-row input { accent-color: var(--accent); margin: 0; }
-.options-menu .tm-row select { margin-left: auto; font: inherit; font-size: var(--t-12); color: var(--ink); background: var(--btn); border: 1px solid var(--line-2); border-radius: 5px; padding: 2px 4px; }
+.options-menu .tm-row select { margin-left: auto; font: inherit; font-size: var(--t-12); color: var(--ink); background: var(--btn); border: 1px solid var(--line-2); border-radius: var(--r-input); padding: 2px 6px; }
 /* Shortcuts panel. It opens under the right end of the top bar — near the button that called it. */
 .keys {
   position: absolute; top: 40px; right: 14px; z-index: 90; width: 372px; max-width: calc(100vw - 28px);
-  background: var(--float); border: 1px solid var(--line-2); border-radius: 10px;
+  background: var(--float); border: 1px solid var(--line-2); border-radius: var(--r-panel);
   box-shadow: var(--shadow); backdrop-filter: blur(8px); padding: 10px 14px 12px;
   font-size: var(--t-12); color: var(--ink-2);
 }
@@ -355,13 +369,13 @@ kbd {
 .diagbox {
   position: absolute; top: 60px; left: 50%; transform: translateX(-50%); z-index: 95;
   width: min(720px, calc(100vw - 40px)); background: var(--float);
-  border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--shadow);
+  border: 1px solid var(--line-2); border-radius: var(--r-panel); box-shadow: var(--shadow);
   backdrop-filter: blur(8px); padding: 10px 14px 12px; font-size: var(--t-12); color: var(--ink-2);
 }
 .diag-hint { padding-bottom: 8px; color: var(--ink-3); }
 .diag-out {
   width: 100%; height: 260px; resize: vertical; border: 1px solid var(--line);
-  border-radius: 6px; background: var(--search); color: var(--ink);
+  border-radius: var(--r-input); background: var(--search); color: var(--ink);
   font: 11px/1.5 var(--mono); padding: 8px; white-space: pre; overflow: auto;
 }
 .diagbox .keys-act { margin-top: 8px; padding-top: 8px; }
@@ -369,19 +383,19 @@ kbd {
 .keys-sw input { accent-color: var(--accent); margin: 0; }
 .keys .ex {
   font-family: var(--mono); font-size: var(--t-11); color: var(--ink-3);
-  border: 1px solid var(--line-2); border-radius: 3px; padding: 0 4px;
+  border: 1px solid var(--line-2); border-radius: var(--r-pill); padding: 0 6px;
 }
 /* The list behind the theme button. Fixed and placed by JS under the button, so it does not depend on
    the top bar being a positioning context. One column: three headings and the choices under each. */
 .theme-menu {
   position: fixed; z-index: 60; min-width: 176px; padding: 6px;
-  background: var(--float); border: 1px solid var(--line-2); border-radius: 9px; box-shadow: var(--shadow-2);
+  background: var(--float); border: 1px solid var(--line-2); border-radius: var(--r-panel); box-shadow: var(--shadow-2);
   -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
 }
 .theme-menu .tm-h { padding: 8px 10px 3px; font-size: var(--t-11); color: var(--ink-3); }   /* sentence case (2026-10-30): tracked capitals were the last template tell */
 .theme-menu .tm-h + .tm-h { margin-top: 4px; }
 .theme-menu .tm-i {
-  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: 0; border-radius: 6px;
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: 0; border-radius: var(--r-item);
   background: none; color: var(--ink-2); font: inherit; font-size: var(--t-12); text-align: left; cursor: pointer;
 }
 .theme-menu .tm-i::before { content: ''; width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--line-2); flex: none; }
@@ -398,7 +412,7 @@ kbd {
    along the top and a shadow under it that the eye reads as a raised key without noticing either (the
    desktop's own buttons; user, 2026-09-15: "Apple design 참조"). Pressed, it sits down by half a pixel. */
 .bell, .tidy, .ib, .options {
-  box-sizing: border-box; height: 26px; min-width: 26px; border-radius: 7px;
+  box-sizing: border-box; height: 26px; min-width: 26px; border-radius: var(--r-pill);
   border: 1px solid color-mix(in srgb, var(--line-2) 65%, transparent); background: var(--btn); color: var(--ink-2);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 1px 1px rgba(0,0,0,.05);
   cursor: pointer; -webkit-app-region: no-drag;
@@ -421,7 +435,7 @@ kbd {
 .bell {
   width: 26px; display: grid; place-items: center;
 }
-.bell:hover { border-color: var(--accent); color: var(--ink); }
+.bell:hover { color: var(--ink); }
 .bell[data-on="1"] { color: var(--st-wait); }
 /* Something in the list is newer than the last time it was opened here: a dot on the bell, in the
    accent — it is news, not a status (⑥). */
@@ -458,7 +472,7 @@ kbd {
 .inbox-empty { padding: 14px 10px 12px; font-size: var(--t-12); color: var(--ink-3); line-height: 1.5; }
 .ib-row {
   display: grid; grid-template-columns: 7px 1fr auto 18px; column-gap: 8px; row-gap: 2px; align-items: center;
-  padding: 7px 8px 8px 10px; border-radius: 6px; cursor: pointer;
+  padding: 7px 8px 8px 10px; border-radius: var(--r-item); cursor: pointer;
 }
 .ib-row:hover { background: var(--hover); }
 .ib-row.gone { cursor: default; }
@@ -468,7 +482,7 @@ kbd {
 .ib-text { grid-column: 2 / 5; font-size: var(--t-12); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ib-row .dot { align-self: center; }
 .ib-x {
-  width: 18px; height: 18px; border-radius: 4px; border: 1px solid transparent; background: transparent;
+  width: 18px; height: 18px; border-radius: var(--r-pill); border: 1px solid transparent; background: transparent;
   color: var(--ink-3); cursor: pointer; display: grid; place-items: center; padding: 0; opacity: 0;
   -webkit-appearance: none; appearance: none;
 }
@@ -478,7 +492,7 @@ kbd {
               linear-gradient(-45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%);
 }
 .ib-row:hover .ib-x, .ib-x:focus-visible { opacity: 1; }
-.ib-x:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.ib-x:hover { color: var(--ink); border-color: var(--line-2); }
 .inbox-f { border-top: 1px solid var(--line); padding: 4px; }
 .inbox-f .tm-i { padding-left: 10px; }
 .inbox-f .tm-i::before { display: none; }
@@ -532,7 +546,7 @@ body.fold-l .rail.left  .rail-fold,
 body.fold-r .rail.right .rail-fold       { display: none; }
 .rail-fold {
   border: 0; background: none; color: var(--ink-3); cursor: pointer; font-size: 17px; line-height: 1;
-  width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center;
+  width: 24px; height: 24px; border-radius: var(--r-pill); display: grid; place-items: center;
   padding: 0; -webkit-app-region: no-drag; flex: none; transition: background .12s, color .12s;
 }
 .rail-fold:hover { color: var(--ink); background: var(--hover); }
@@ -548,7 +562,7 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .rail-open.l { left: 0; border-right: 1px solid var(--line); }
 .rail-open.r { left: auto; right: 0; border-left: 1px solid var(--line); }
 .rail-open i {
-  width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center;
+  width: 22px; height: 22px; border-radius: var(--r-pill); display: grid; place-items: center;
   font: 16px/1 var(--mono); font-style: normal; transition: background .15s;
 }
 .rail-open:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 4%, var(--rail)); }
@@ -568,12 +582,12 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .rh .sp { flex: 1; min-width: 4px; }
 /* 26px, not 22: "버튼도 너무 작은 것 같아" (2026-09-15). Same box on both rails. */
 .ib {
-  width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line-2);
+  width: 26px; height: 26px; border-radius: var(--r-pill); border: 1px solid var(--line-2);
   background: var(--btn); color: var(--ink-2); display: grid; place-items: center;
   font-size: var(--t-14); letter-spacing: 0; cursor: pointer; transition: border-color .12s, background .12s;
 }
 .ib:hover { background: var(--hover); }
-.ib:hover { border-color: var(--accent); color: var(--ink); }
+.ib:hover { border-color: var(--line-2); color: var(--ink); }
 /* An ASCII '+' sits smaller and lighter than the fullwidth '＋' that used to be here, so it is given
    the weight back rather than the glyph. The line-height keeps it centred in the 22px box. */
 .ib.plus { font-size: 18px; font-weight: 500; line-height: 1; padding-bottom: 2px; }
@@ -610,8 +624,8 @@ body.fold-r .rail.right .rail-fold       { display: none; }
    down its left edge; the rows below stay 12.5px and lighter. Hover tints both. */
 .grp.cvg { padding: 9px 14px 8px 12px; background: color-mix(in srgb, var(--ink) 3%, var(--rail)); border-left: 3px solid transparent; }
 .grp.cvg:hover { background: color-mix(in srgb, var(--ink) 6%, var(--rail)); }
-.grp.cvg.cur { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--rail)); }
-.grp.cvg.cur:hover { background: color-mix(in srgb, var(--accent) 13%, var(--rail)); }
+.grp.cvg.cur { background: var(--sel); }                 /* a grey step; the left bar is gone (2026-11-01) */
+.grp.cvg.cur:hover { background: color-mix(in srgb, var(--sel), var(--hover)); }
 .grp.cvg + .ses { margin-top: 4px; }          /* a breath between the header and its first row (2026-09-15) */
 /* #31 ③ A group that does not fold (waiting, in the status grouping). It is not for pressing, so it gets no
    pointer and no hover — the cursor says "this one does not fold" first. The caret slot stays empty so the row
@@ -634,7 +648,7 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 /* The count a folded group hides. Pressing it unfolds too — one more way to what is hidden, besides the header. */
 .grest {
   margin: 0 6px 2px; padding: 3px 14px 5px 32px; font-size: var(--t-11); color: var(--ink-3);
-  cursor: pointer; border-radius: 6px;
+  cursor: pointer; border-radius: var(--r-item);
 }
 .grest:hover { background: var(--hover); color: var(--ink-2); }
 /* If anything the fold hides is calling for you, this row does not stay in the faint text color — the only two
@@ -648,7 +662,7 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .dot.idle { background: var(--st-idle); }
 .ses {
   display: grid; grid-template-columns: 7px 1fr auto 16px; column-gap: 9px; row-gap: 2px;
-  align-items: center; padding: 8px 14px 9px 14px; margin: 0 6px; border-radius: 6px;
+  align-items: center; padding: 8px 14px 9px 14px; margin: 0 6px; border-radius: var(--r-item);
   cursor: pointer; border: 1px solid transparent;
 }
 .ses { transition: background .12s; }
@@ -659,7 +673,7 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 /* A row in a canvas group indents one step — so that belonging to the header is visible. Not applied on the old
    status-grouping path (renderByStatus): there the group is a status, not a canvas, nothing to indent under. */
 .ses.cvrow { margin-left: 14px; }
-.ses.cur { background: var(--accent-2); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.ses.cur { background: var(--sel); border-color: var(--sel-line); }
 .ses .who { font-size: var(--t-13); font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ses .who span { color: var(--ink-3); font-weight: 400; }
 .ses .ago { font-size: var(--t-12); color: var(--ink-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -683,7 +697,7 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 /* ⑪: the label on a session from another canvas. **Same slot, same look** as "↗ off" — both say "not visible here".
    (Never both on one session: if it is on another canvas, being off-screen in this one is not asked.) */
 .ses .cvb {
-  font-size: var(--t-11); color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 3px;
+  font-size: var(--t-11); color: var(--ink-3); border: 1px solid var(--line-2); border-radius: var(--r-pill);
   padding: 0 4px; margin-right: 4px;
 }
 .ses .off { font-size: var(--t-11); color: var(--ink-3); margin-right: 5px; }   /* a glyph, not a boxed word (2026-10-30) */
@@ -734,9 +748,9 @@ body.ui-mono { --ui: var(--mono); }
 .capsule > :last-child { padding-right: 14px; margin-right: 0; }
 .capsule > * + * { border-left: 1px solid color-mix(in srgb, var(--line-2) 65%, transparent); }
 .capsule > :hover:not(:disabled) { background: var(--hover); color: var(--ink); }
-.capsule > :active:not(:disabled) { background: var(--accent-2); transform: none; }
+.capsule > :active:not(:disabled) { background: var(--sel); transform: none; }
 .capsule > :disabled { color: var(--ink-3); opacity: .38; cursor: default; }
-.capsule > [aria-pressed="true"], .capsule > [aria-expanded="true"] { color: var(--accent); background: var(--accent-2); }
+.capsule > [aria-pressed="true"], .capsule > [aria-expanded="true"] { color: var(--ink); background: var(--sel); }
 .capsule > :focus-visible { outline: none; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent); }
 :root[data-theme="dark"] .capsule { box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 1px 1px rgba(0,0,0,.35); }
 @media (prefers-color-scheme: dark) {
@@ -749,13 +763,13 @@ body.ui-mono { --ui: var(--mono); }
    "너무 작아서 깨져 보여"). */
 .tidy {
   flex: none; align-self: center; margin: 0 4px 0 2px;
-  min-width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line-2);
+  min-width: 26px; height: 26px; border-radius: var(--r-pill); border: 1px solid var(--line-2);
   background: var(--btn); color: var(--ink-2); font: inherit; font-size: var(--t-12);
   display: grid; place-items: center; cursor: pointer; padding: 0 8px;
   -webkit-appearance: none; appearance: none; -webkit-app-region: no-drag;
 }
 .tidy:last-child { margin-right: 8px; }
-.tidy:hover { border-color: var(--accent); color: var(--ink); }
+.tidy:hover { color: var(--ink); }
 /* With nothing to do it only says it is there and stays back — a button that does nothing when pressed lies. */
 .tidy:disabled { opacity: .3; cursor: default; border-color: var(--line); }
 .tidy:disabled:hover { color: var(--ink-3); }
@@ -768,7 +782,7 @@ body.ui-mono { --ui: var(--mono); }
 .tab {
   flex: none; display: flex; align-items: center; gap: 7px; max-width: 220px;
   height: 29px; padding: 0 12px; margin-bottom: -1px;
-  border: 1px solid transparent; border-bottom: 0; border-radius: 7px 7px 0 0;
+  border: 1px solid transparent; border-bottom: 0; border-radius: 12px 12px 0 0;
   color: var(--ink-2); font-size: var(--t-13); cursor: pointer; user-select: none;   /* 11.5 → 13 (2026-09-15) */
 }
 .tab:hover { background: var(--hover); }
@@ -777,7 +791,7 @@ body.ui-mono { --ui: var(--mono); }
    with 409, so the screen never sends a request that will be refused. While absent it takes up no space either.
    The × is the **same drawing** as a tile's close (.cl) — the same meaning does not get a different drawing. */
 .tab .cx {
-  width: 14px; height: 14px; border-radius: 3px; border: 0; flex: none; margin-right: -3px;
+  width: 14px; height: 14px; border-radius: var(--r-pill); border: 0; flex: none; margin-right: -3px;
   display: grid; place-items: center; cursor: pointer; color: var(--ink-3); background: transparent;
   padding: 0; font: inherit; -webkit-appearance: none; appearance: none; opacity: .55;
 }
@@ -790,8 +804,8 @@ body.ui-mono { --ui: var(--mono); }
 .tab .cx:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 /* Selection is shown as in the list and the tree (.ses.cur / .row.sel) — no new expression is made */
 .tab.cur {
-  background: var(--accent-2); color: var(--ink);
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: var(--sel); color: var(--ink);
+  border-color: var(--sel-line);
 }
 .tab .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* One dot on a tab and nothing more (decisions.md ⑪ "그 이상 안 넣는다"). Color --st-wait — not a new color */
@@ -895,7 +909,7 @@ body.ui-mono { --ui: var(--mono); }
    full as soon as the pointer is on it, so there is no doubt it is a button. */
 .cv-empty-go {
   pointer-events: auto; cursor: pointer; font: inherit; font-size: var(--t-13); font-weight: 600;
-  padding: 9px 20px; border-radius: 9px;
+  padding: 9px 22px; border-radius: var(--r-pill);
   color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
   opacity: .62; transition: opacity .15s, background-color .15s, border-color .15s;
@@ -920,7 +934,7 @@ body.ui-mono { --ui: var(--mono); }
 .tile {
   pointer-events: auto;              /* .cv-world takes none; its windows still do */
   position: absolute; display: flex; flex-direction: column;
-  background: var(--tile); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  background: var(--tile); border: 1px solid var(--line); border-radius: var(--r-panel); overflow: hidden;
   box-shadow: var(--shadow);
   transition: left .35s cubic-bezier(.2,.8,.2,1), top .35s cubic-bezier(.2,.8,.2,1),
               width .35s cubic-bezier(.2,.8,.2,1), height .35s cubic-bezier(.2,.8,.2,1);
@@ -948,7 +962,7 @@ body.ui-mono { --ui: var(--mono); }
   filter: drop-shadow(0 0 2px var(--group));
 }
 .gcell {
-  position: absolute; border-radius: 14px; background: var(--group);
+  position: absolute; border-radius: 20px; background: var(--group);   /* one step out from the tiles' 16 */
   transition: left .35s cubic-bezier(.2,.8,.2,1), top .35s cubic-bezier(.2,.8,.2,1),
               width .35s cubic-bezier(.2,.8,.2,1), height .35s cubic-bezier(.2,.8,.2,1);
 }
@@ -972,7 +986,7 @@ body.ui-mono { --ui: var(--mono); }
      의도된거야?"). It was hidden behind that window before the names got a layer of their own —
      moving it up made an old collision visible, not a new one. The ground colour punches a hole in
      whatever is behind, and the group's own colour on the edge says whose name it is. */
-  padding: 1px 6px; border-radius: 6px;
+  padding: 1px 8px; border-radius: var(--r-pill);
   background: var(--ground);
   border: 1px solid color-mix(in srgb, var(--group) 42%, transparent);
   box-shadow: 0 1px 3px rgba(0,0,0,.18);
@@ -1033,7 +1047,7 @@ body.ui-mono { --ui: var(--mono); }
 
 /* Where it will land. Faint on purpose: it is an offer, not a thing that exists yet. */
 .ghost {
-  position: absolute; z-index: 0; pointer-events: none; border-radius: 10px; overflow: hidden;
+  position: absolute; z-index: 0; pointer-events: none; border-radius: var(--r-panel); overflow: hidden;
   border: 2px dashed color-mix(in srgb, var(--accent) 75%, transparent);
   background: color-mix(in srgb, var(--accent) 13%, transparent);
   transition: --p .1s linear, border-color .15s;
@@ -1083,7 +1097,7 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
    one underline — laid onto the size readout already there, to avoid one more button on the title bar. */
 .tb .sz.own { cursor: pointer; color: var(--ink-2); text-decoration: underline dotted; text-underline-offset: 2px; }
 .tb .sz.own:hover { color: var(--ink); }
-.tb .st { font-size: var(--t-11); padding: 1px 6px; border-radius: 3px; flex: none; }
+.tb .st { font-size: var(--t-11); padding: 1px 8px; border-radius: var(--r-pill); flex: none; }
 .tb .st.wait { color: var(--st-wait); background: color-mix(in srgb, var(--st-wait) 14%, transparent); }
 .tb .st.work { color: var(--st-work); background: color-mix(in srgb, var(--st-work) 14%, transparent); }
 .tb .st.done { color: var(--st-done); background: color-mix(in srgb, var(--st-done) 14%, transparent); }
@@ -1091,7 +1105,7 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
    or hover to diverge in two spots. Only .cl is a <button> (the keyboard must reach it), so the button defaults
    are cleared here. */
 .xp, .cl {
-  width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--line-2); flex: none;
+  width: 18px; height: 18px; border-radius: var(--r-pill); border: 1px solid var(--line-2); flex: none;
   display: grid; place-items: center; cursor: pointer; color: var(--ink-3); background: transparent;
   padding: 0; font: inherit; -webkit-appearance: none; appearance: none;
 }
@@ -1119,7 +1133,7 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
 /* 26px and 12px, like the buttons everywhere else — at 18px and 10.5 they were hard to hit and hard to
    read (user, 2026-09-15). */
 .cbtn {
-  flex: none; height: 26px; padding: 0 12px; border-radius: 6px; cursor: pointer;
+  flex: none; height: 26px; padding: 0 13px; border-radius: var(--r-pill); cursor: pointer;
   border: 1px solid var(--line-2); background: var(--btn); color: var(--ink);
   font: 600 12px var(--mono); -webkit-appearance: none; appearance: none;
 }
@@ -1129,7 +1143,7 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
 /* The field for fixing a name in place. Tabs and tile titles share it — the font is inherited where it sits */
 .ed {
   font: inherit; color: var(--ink); background: var(--btn); min-width: 60px; width: 100%;
-  border: 1px solid var(--accent); border-radius: 4px; padding: 0 4px; outline: 0;
+  border: 1px solid var(--accent); border-radius: var(--r-input); padding: 0 6px; outline: 0;
 }
 .tile.max .xp { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 /* The mockup's .term held the text itself. Here xterm.js draws inside it — JS reads the CSS variables and hands
@@ -1179,7 +1193,7 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
    --no-titlebar). Drawn rather than set as glyphs: ✕ and ─ are drawn differently by every font and
    are missing from some, which is the same rule that keeps the tile's close button in CSS. */
 .wctl {
-  width: 22px; height: 22px; border-radius: 6px; border: 1px solid transparent;
+  width: 22px; height: 22px; border-radius: var(--r-pill); border: 1px solid transparent;
   background: transparent; color: var(--ink-3); cursor: pointer; position: relative;
   -webkit-app-region: no-drag; flex: none;
 }
@@ -1207,7 +1221,7 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
 /* The panel it opens. Sized to the address rather than to the screen. */
 .webbox {
   position: absolute; right: 12px; top: 40px; z-index: 1200; width: min(500px, calc(100vw - 24px));
-  background: var(--float); border: 1px solid var(--line-2); border-radius: 10px;
+  background: var(--float); border: 1px solid var(--line-2); border-radius: var(--r-panel);
   box-shadow: var(--shadow-2); padding: 2px 0 12px; backdrop-filter: blur(8px);
 }
 /* The text was squeezed ("글자가 많이 욱여져서", 2026-09-15): a wider box, a looser line, a size up. */
@@ -1216,11 +1230,11 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
   font-size: var(--t-13); letter-spacing: 0; text-transform: none; color: var(--ink); font-weight: 600;
   padding: 12px 16px 10px; margin: 0 0 4px; line-height: 1.3; white-space: nowrap;
 }
-.webbox .keys-x { font-size: 18px; width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center; }
+.webbox .keys-x { font-size: 18px; width: 26px; height: 26px; border-radius: var(--r-pill); display: grid; place-items: center; }
 .webbox .keys-x:hover { background: var(--hover); }
 /* The two buttons: the one that acts is the accent, the other is the ordinary box — no UA button. */
 .webbox .keys-btn {
-  height: 32px; border-radius: 7px; border: 1px solid var(--line-2); background: var(--btn); color: var(--ink);
+  height: 32px; border-radius: var(--r-input); border: 1px solid var(--line-2); background: var(--btn); color: var(--ink);
   font: 500 12px var(--mono); cursor: pointer; -webkit-appearance: none; appearance: none;
   transition: border-color .12s, background .12s;
 }
@@ -1230,7 +1244,7 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
 .webbox #web-open:disabled { opacity: .5; cursor: default; }
 .web-url {
   display: block; width: calc(100% - 32px); margin: 2px 16px 12px; padding: 8px 10px;
-  border: 1px solid var(--line-2); border-radius: 6px; background: var(--tile);
+  border: 1px solid var(--line-2); border-radius: var(--r-pill); background: var(--tile);
   color: var(--ink); font: 12px var(--mono);
 }
 /* Two buttons of the same weight. .keys-act elsewhere is a button beside a run of explaining text,
@@ -1254,7 +1268,7 @@ body.fold-l .fab { display: grid; }
    is a size up. Still one line, still where it was. */
 .toast {
   position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%) translateY(8px);
-  background: var(--float); border: 1px solid var(--line-2); border-radius: 8px;
+  background: var(--float); border: 1px solid var(--line-2); border-radius: var(--r-panel);
   padding: 8px 14px; font-size: var(--t-12); line-height: 1.45; color: var(--ink-2);
   width: max-content; max-width: min(640px, calc(100% - 32px));
   box-shadow: var(--shadow-2); z-index: 20;
@@ -1290,7 +1304,7 @@ body.fold-l .fab { display: grid; }
    The colors are the same --st-* as the status dots. There is no new color for the minimap. */
 .mm {
   position: absolute; right: 12px; bottom: 12px; width: 168px; height: 108px; z-index: 15;
-  background: var(--float); border: 1px solid var(--line-2); border-radius: 8px;
+  background: var(--float); border: 1px solid var(--line-2); border-radius: var(--r-panel);
   box-shadow: var(--shadow-2); overflow: hidden; cursor: crosshair;
 }
 .mm-w { position: absolute; inset: 0; }
@@ -1308,7 +1322,7 @@ body.fold-l .fab { display: grid; }
 
 .esc {
   position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 1001;
-  background: var(--float); border: 1px solid var(--line-2); border-radius: 7px;
+  background: var(--float); border: 1px solid var(--line-2); border-radius: var(--r-panel);
   padding: 5px 10px; font-size: var(--t-11); color: var(--ink-2); display: none; gap: 8px; align-items: center;
   cursor: pointer;   /* #21: clicking returns to the canvas too — an expanded tile focuses the terminal, so Esc can miss */
 }
@@ -1321,7 +1335,7 @@ body.fold-l .fab { display: grid; }
    restart this **is** the question of what to do next. No new color: the accent it already uses for
    "the thing to press", and the same faint ink as the rows below it. */
 .restore { flex: none; margin: 8px; padding: 9px 10px 10px; border: 1px solid var(--line-2);
-  border-radius: 7px; background: var(--btn); }
+  border-radius: var(--r-pill); background: var(--btn); }
 .rs-h { font-size: var(--t-12); color: var(--ink); margin-bottom: 6px; }
 .rs-r { font-size: var(--t-12); color: var(--ink-2); padding: 2px 0; }
 .rs-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
@@ -1336,7 +1350,7 @@ body.fold-l .fab { display: grid; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .rs-a { display: flex; gap: 6px; margin-top: 9px; }
-.rs-a button { height: 26px; border-radius: 6px; font: 500 11.5px var(--mono); cursor: pointer;
+.rs-a button { height: 26px; border-radius: var(--r-pill); font: 500 11.5px var(--mono); cursor: pointer;
   padding: 0 10px; border: 1px solid transparent; }
 .rs-a button:disabled { opacity: .45; cursor: default; }
 .rs-y { background: var(--accent); color: var(--on-accent); flex: 1; }
@@ -1348,7 +1362,7 @@ body.fold-l .fab { display: grid; }
 .row.found { padding-left: 8px; }
 .row.found .nm { overflow: hidden; text-overflow: ellipsis; }
 .row.found .br { margin-left: auto; }
-.row { display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 5px; color: var(--ink-2); white-space: nowrap; cursor: pointer; transition: background .12s; }
+.row { display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: var(--r-item); color: var(--ink-2); white-space: nowrap; cursor: pointer; transition: background .12s; }
 .row:hover { background: var(--hover); }
 .row .car { color: var(--ink-3); font-size: var(--t-11); width: 12px; flex: none; text-align: center; }
 .row .car.none { visibility: hidden; }
@@ -1375,7 +1389,7 @@ body.fold-l .fab { display: grid; }
 .row.file.dragging { opacity: .5; }
 /* While a file is over the canvas, the canvas says it will take it. */
 .cv.dropping::after {
-  content: ''; position: absolute; inset: 6px; z-index: 20; pointer-events: none; border-radius: 10px;
+  content: ''; position: absolute; inset: 6px; z-index: 20; pointer-events: none; border-radius: 12px;
   border: 2px dashed color-mix(in srgb, var(--accent) 60%, transparent);
   background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
@@ -1416,7 +1430,7 @@ body.fold-l .fab { display: grid; }
 }
 .view-bar .m { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .view-bar .vb {
-  margin-left: auto; flex: none; height: 22px; padding: 0 9px; border-radius: 6px;
+  margin-left: auto; flex: none; height: 22px; padding: 0 10px; border-radius: var(--r-pill);
   border: 1px solid var(--line-2); background: var(--btn); color: var(--ink); cursor: pointer;
   font: 500 11px var(--mono); -webkit-appearance: none; appearance: none;
 }
@@ -1433,7 +1447,7 @@ body.fold-l .fab { display: grid; }
 .view.html, .view.pdf { padding: 0; overflow: hidden; }
 .view iframe.doc { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
 .btn {
-  height: 30px; border-radius: 6px; border: 1px solid transparent; font: 500 12px var(--mono);
+  height: 30px; border-radius: var(--r-pill); border: 1px solid transparent; font: 500 12px var(--mono);
   display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer;
   background: var(--accent); color: var(--on-accent);
 }
