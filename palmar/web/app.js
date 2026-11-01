@@ -3684,7 +3684,9 @@ cvScroll.addEventListener('pointerdown', (ev) => {
 // which is what the add-canvas button looked like under WSLg (user report 2026-09-11). The same
 // reason the close button is drawn in CSS rather than set as ✕ (AGENTS.md): chrome should not
 // depend on a glyph that the machine may not have.
-const addTabEl = el('span', 'ib plus', '+');
+const addTabEl = el('span', 'ib plus');
+// Drawn, not typed (2026-11-01): the same two strokes as the rail headers' ＋, centred on a 24-grid.
+addTabEl.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
 addTabEl.id = 'tab-add';
 addTabEl.title = 'new canvas';
 

@@ -285,7 +285,7 @@
     <aside class="rail left">
       <!-- ＋ here: the list of terminals is where a new one belongs, the same way the folder tree has
            its own ＋ — the launcher that used to live in the right rail is gone (2026-09-15). -->
-      <div class="rh"><span class="t">Terminals <span class="n" id="count">0</span></span><span class="sp"></span><span class="ib plus" id="newterm" role="button" tabindex="0" title="new terminal, in your home folder (Ctrl/⌘ ⏎)">+</span><button class="rail-fold" id="fold-l" type="button" data-kmod title="collapse (Ctrl \)" aria-label="collapse the terminal list">‹</button></div>
+      <div class="rh"><span class="t">Terminals <span class="n" id="count">0</span></span><span class="sp"></span><span class="ib plus" id="newterm" role="button" tabindex="0" title="new terminal, in your home folder (Ctrl/⌘ ⏎)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></span><button class="rail-fold" id="fold-l" type="button" data-kmod title="collapse (Ctrl \)" aria-label="collapse the terminal list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 6l-6 6 6 6"/></svg></button></div>
       <div class="scroll" id="list"></div>
       <!-- The line that says where status comes from. Not a value asked of the daemon — a stated fact.
            **No listing of agent names** — reading by title (protocol.md "제목으로 읽기") works with
@@ -342,7 +342,7 @@
            processes, so opening eight of them is a thing a person presses once. Hidden unless there
            is something to offer, and gone once anything has been opened. -->
       <div class="restore" id="restore" hidden></div>
-      <div class="rh"><button class="rail-fold r" id="fold-r" type="button" data-kmod title="collapse (Ctrl Shift \)" aria-label="collapse the right rail">›</button><span class="t">Directories</span><span class="sp"></span><span class="ib plus" id="mkdir" title="new folder">+</span><span class="ib" id="refresh" title="refresh">↻</span></div>
+      <div class="rh"><button class="rail-fold r" id="fold-r" type="button" data-kmod title="collapse (Ctrl Shift \)" aria-label="collapse the right rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 6l6 6-6 6"/></svg></button><span class="t">Directories</span><span class="sp"></span><span class="ib plus" id="mkdir" title="new folder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></span><span class="ib" id="refresh" title="refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v4.5h-4.5"/></svg></span></div>
       <div class="scroll">
         <div class="tree" id="tree"></div>
         <!-- No standing hint under the tree (2026-10-30) — "click a file to view it" sat there for

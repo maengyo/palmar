@@ -492,7 +492,7 @@ kbd {
               linear-gradient(-45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%);
 }
 .ib-row:hover .ib-x, .ib-x:focus-visible { opacity: 1; }
-.ib-x:hover { color: var(--ink); border-color: var(--line-2); }
+.ib-x:hover { color: var(--ink); background: var(--hover); }
 .inbox-f { border-top: 1px solid var(--line); padding: 4px; }
 .inbox-f .tm-i { padding-left: 10px; }
 .inbox-f .tm-i::before { display: none; }
@@ -545,8 +545,8 @@ body.fold-l .rz.l,   body.fold-r .rz.r   { display: none; }
 body.fold-l .rail.left  .rail-fold,
 body.fold-r .rail.right .rail-fold       { display: none; }
 .rail-fold {
-  border: 0; background: none; color: var(--ink-3); cursor: pointer; font-size: 17px; line-height: 1;
-  width: 24px; height: 24px; border-radius: var(--r-pill); display: grid; place-items: center;
+  border: 0; background: none; color: var(--ink-3); cursor: pointer; line-height: 1;
+  width: 26px; height: 26px; border-radius: var(--r-pill); display: grid; place-items: center;
   padding: 0; -webkit-app-region: no-drag; flex: none; transition: background .12s, color .12s;
 }
 .rail-fold:hover { color: var(--ink); background: var(--hover); }
@@ -588,9 +588,11 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 }
 .ib:hover { background: var(--hover); }
 .ib:hover { border-color: var(--line-2); color: var(--ink); }
-/* An ASCII '+' sits smaller and lighter than the fullwidth '＋' that used to be here, so it is given
-   the weight back rather than the glyph. The line-height keeps it centred in the 22px box. */
-.ib.plus { font-size: 18px; font-weight: 500; line-height: 1; padding-bottom: 2px; }
+/* **Drawn, not typed** (2026-11-01). The ＋ and the ‹ were glyphs, each at its own font baseline, and
+   in two circles side by side they sat at two heights (user: "정렬이 잘 안 맞아 보여"). They are
+   strokes on a 24-grid now, like the top bar's drawings, and a grid cell centres them exactly. */
+.ib svg, .rail-fold svg { width: 14px; height: 14px; display: block; }
+.ib.plus svg { width: 15px; height: 15px; }
 .scroll { overflow-y: auto; min-height: 0; flex: 1; }
 /* Thick enough to grab — at 8px the hand kept missing. And **hover is said with color**: the cursor shape
    does not change over a scrollbar, so there is no other way to tell. */
@@ -708,6 +710,13 @@ body.fold-r .rail.right .rail-fold       { display: none; }
    hover draws the edge (user, 2026-09-15: "테두리가 안 보이는 상태에서 마우스 올리면 조금 보이게"). */
 .rh .ib { border-color: transparent; background: transparent; box-shadow: none; color: var(--ink-3); }
 .rh .ib:hover { border-color: color-mix(in srgb, var(--line-2) 80%, transparent); background: var(--hover); color: var(--ink); box-shadow: inset 0 1px 0 rgba(255,255,255,.35); }
+/* The dark theme's button shadow outranks the quiet rule above (an attribute selector weighs more than
+   a class), so the dark side says it again: nothing at rest. Measured 2026-11-01 — a faint ring on the
+   right rail's ＋ and ↻ in dark only. */
+:root[data-theme="dark"] .rh .ib { box-shadow: none; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .rh .ib { box-shadow: none; } }
+:root[data-theme="dark"] .rh .ib:hover { box-shadow: inset 0 1px 0 rgba(255,255,255,.06); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .rh .ib:hover { box-shadow: inset 0 1px 0 rgba(255,255,255,.06); } }
 body.ui-mono { --ui: var(--mono); }
 
 /* ── canvas tabs (⑪) ────────────────────────── */
@@ -1104,12 +1113,16 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
 /* #31 ① Close (.cl) sits in the **same one rule** as expand (.xp) and rename (.rn) — no place for size, border
    or hover to diverge in two spots. Only .cl is a <button> (the keyboard must reach it), so the button defaults
    are cleared here. */
+/* **A quiet glyph, and a soft disc under the hand** (2026-11-01). They were 18px boxes with an edge,
+   and as pills the glyph filled the circle to its rim (user: "꽉 차게 들어가 있고 부자연스러워"). The
+   way a desktop draws a title-bar button: nothing at rest but the mark, a round tint on hover, the
+   hit area a little larger than the mark looks. */
 .xp, .cl {
-  width: 18px; height: 18px; border-radius: var(--r-pill); border: 1px solid var(--line-2); flex: none;
+  width: 22px; height: 22px; border-radius: var(--r-pill); border: 0; flex: none;
   display: grid; place-items: center; cursor: pointer; color: var(--ink-3); background: transparent;
-  padding: 0; font: inherit; -webkit-appearance: none; appearance: none;
+  padding: 0; font: inherit; -webkit-appearance: none; appearance: none; transition: background .12s, color .12s;
 }
-.xp::before { content: ""; width: 7px; height: 7px; border: 1.5px solid currentColor; border-radius: 1px; }
+.xp::before { content: ""; width: 8px; height: 8px; border: 1.5px solid currentColor; border-radius: 2px; }
 /* Two strokes (×). The glyph (✕) is avoided for the same reason as .rn — fonts draw it differently (AGENTS.md).
    The hover color is not red: red belongs to the status lights (AGENTS "do not use the status-light colors
    elsewhere", the same spot as #18). So it lights up **exactly like** .xp·.rn, in --accent. What holds back
@@ -1119,10 +1132,9 @@ body.hold-grow .ghost::before, body.hold-both .ghost::before { display: block; }
   background: linear-gradient(45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%),
               linear-gradient(-45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%);
 }
-.xp:hover, .cl:hover, .cl:focus-visible,
-.tile.focus .xp, .tile.focus .cl {
-  color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent);
-}
+.xp:hover, .cl:hover, .cl:focus-visible { color: var(--ink); background: var(--hover); }
+.tile.focus .xp, .tile.focus .cl { color: var(--ink-2); }
+.cl:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent); outline: none; }
 /* ── close confirm (#31 ①④) ─────────────────
    The tile title bar and the list row use the **same row, the same two buttons**. While it is up, host wears
    .cfm-on and host's other children go down — no child is detached and re-attached, so an arriving broadcast
