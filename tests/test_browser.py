@@ -401,9 +401,12 @@ class AnInboxBehindTheBell(unittest.TestCase):
             # **Or, with motion reduced, a steady tint.** The macOS runner asks for reduced motion
             # (CI, 2026-11-02: animationName was "none" there and nowhere else), and the page honours
             # that with a tint that does not move — which is the same promise kept the other way.
-            breath = b.ev("""(()=>{const c=getComputedStyle(document.getElementById('bell'));
-              return {anim: c.animationName, bg: c.backgroundColor,
-                      reduced: matchMedia('(prefers-reduced-motion: reduce)').matches};})()""")
+            # The tint arrives through a .12s transition, and this headless page advances transitions
+            # only when it draws a frame — read the resting value by switching the transition off first.
+            breath = b.ev("""(()=>{const e=document.getElementById('bell'); e.style.transition='none';
+              const c=getComputedStyle(e); const out={anim: c.animationName, bg: c.backgroundColor,
+                      reduced: matchMedia('(prefers-reduced-motion: reduce)').matches};
+              e.style.transition=''; return out;})()""")
             if breath["reduced"]:
                 self.assertNotIn(breath["bg"], ("rgba(0, 0, 0, 0)", "transparent"),
                                  "with motion reduced the bell carries no tint while unread: %r" % breath)
