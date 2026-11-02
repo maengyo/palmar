@@ -89,13 +89,14 @@ If 8801 is busy — a palmar on Windows beside one in WSL, say — it takes the 
 The window is a **712 KB** program that shows the same thing without a browser
 ([`app/`](app/README.md)) — the OS's own webview, not Electron. (That is the Linux download; the
 macOS one is 1.5 MB because the single file carries both Intel and Apple Silicon.) `palmar` opens it when it is there;
-the web button inside it opens a browser, and so does `palmar --web`. Both at once is fine: one daemon
+*Open in a browser* in its options list opens a browser, and so does `palmar --web`. Both at once is fine: one daemon
 per home, and a terminal opened in either shows up in the other, live.
 
 **Something running in a terminal can say something.** `palmar --message "build done"` puts that
 line on the terminal's row in the left list, shows it at the bottom of the page, and sends a
 notification if you are elsewhere and have turned them on. It stays on the row until you click the
-terminal. It needs no id — it knows which terminal it was typed in — so a script that watches
+terminal, and the bell keeps the last hundred — with how long ago, an × on each, and the
+notification switch at the top. It needs no id — it knows which terminal it was typed in — so a script that watches
 something can call it in a loop; from outside a terminal, name one with `--to <id>` (`palmar --list`).
 
 ## Worth knowing

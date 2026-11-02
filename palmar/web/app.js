@@ -61,10 +61,11 @@ const GRID = 22, GAP = 12;                              // scan for free slots o
 const DEFAULT_W = 520, DEFAULT_H = 360;                 // ⑩ provisional default size
 const MIN_W = 220, MIN_H = 110;
 const LS_THEME = 'palmar-theme';
-// Palettes — one choice per side, the browser's taste like the theme. The defaults (paper, earth)
-// are the tokens on :root and in the dark blocks and write nothing to the store.
+// Palettes — one per side. Eight until 2026-10-30 (try/chrome-tidy); a stored choice that is no
+// longer offered falls back to this side's one, which is the tokens on :root and in the dark blocks.
+// The per-side store stays so a palette can come back without a new key.
 const LS_PAL_L = 'palmar.pal-light', LS_PAL_D = 'palmar.pal-dark';
-const PALETTES = { light: ['paper', 'sky', 'porcelain', 'lilac'], dark: ['earth', 'graphite', 'deep', 'midnight'] };
+const PALETTES = { light: ['paper'], dark: ['earth'] };
 let palLight = 'paper', palDark = 'earth';
 try {
   const l = localStorage.getItem(LS_PAL_L), d = localStorage.getItem(LS_PAL_D);
@@ -163,8 +164,13 @@ try {
 function showSearch(on) {
   if (!searchBox) return;
   searchBox.hidden = !on;
-  if (on) { searchEl.focus(); searchEl.select(); }
-  else if (searchEl.value) { searchEl.value = ''; searchEl.dispatchEvent(new Event('input')); }
+  if (on) { searchEl.focus(); searchEl.select(); cmdSel = 0; renderCmds(); }
+  else {
+    if (searchEl.value) { searchEl.value = ''; searchEl.dispatchEvent(new Event('input')); }
+    const box = document.getElementById('cmds');
+    if (box) box.hidden = true;
+    searchEl.setAttribute('aria-expanded', 'false');
+  }
 }
 
 // ── state ───────────────────────────────────────────────
@@ -447,8 +453,13 @@ function paintClosing(id) {
 }
 
 let toastTimer = null;
-function toast(parts) {
+function toast(parts, opts) {
   // parts: [{b:'bold'}, 'plain', {d:'dim'}, {a:'undo', on:fn}, {spin:1}], or a string.
+  // opts.msg: a terminal said this (`palmar --message`) — set larger and kept longer than a note about
+  // what the page just did, because it is news from elsewhere and the eye was not waiting for it
+  // (user, 2026-10-30: "너무 작게 뜨고, 너무 단기간").
+  opts = opts || {};
+  toastEl.classList.toggle('msg', !!opts.msg);
   // **The toast is one line of prose.** Parts are laid end to end with a space between, and the
   // punctuation is the caller's — a dash before a second clause, a colon before an error. It used to
   // be a flex row with a gap, and two plain strings in a row merged into one item with no gap at all
@@ -475,11 +486,11 @@ function toast(parts) {
   toastEl.classList.add('show');
   clearTimeout(toastTimer);
   // A toast you are meant to press needs longer than one you only read.
-  toastTimer = setTimeout(() => toastEl.classList.remove('show'), act ? 9000 : 4500);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), opts.msg ? 10000 : act ? 9000 : 4500);
 }
-function agoText(id) {
-  const at = changedAt.get(id) || 0;
-  const d = Math.max(0, (Date.now() - at) / 1000);
+function agoText(id) { return agoFrom(changedAt.get(id) || 0); }
+function agoFrom(atMs) {
+  const d = Math.max(0, (Date.now() - atMs) / 1000);
   if (d < 5) return 'now';
   if (d < 60) return Math.floor(d) + 's';
   if (d < 3600) return Math.floor(d / 60) + 'm';
@@ -488,7 +499,11 @@ function agoText(id) {
 }
 
 // ── theme (system / light / dark, localStorage 'palmar-theme') ──
-const themeBtn = $('#theme');
+//: **One select in the options list** (2026-10-30). It was a button of its own on the top bar with
+//: a list under it, while the interface font and the text size were rows in the options list — the
+//: same kind of setting in two places. The value is "system", or "<side>:<palette>": picking a
+//: palette is how a side is picked (2026-09-15, "system light dark 대분류").
+const themeSel = $('#theme');
 const darkMq = matchMedia('(prefers-color-scheme: dark)');
 function storedTheme() {
   try { const v = localStorage.getItem(LS_THEME); return v === 'light' || v === 'dark' ? v : null; }
@@ -516,55 +531,17 @@ darkMq.addEventListener('change', applyPalette);   // the system flipped: the ot
 function applyTheme(mode) {   // mode: 'light' | 'dark' | null (system)
   if (mode) root.dataset.theme = mode; else delete root.dataset.theme;
   applyPalette();
-  themeBtn.dataset.mode = mode || 'system';
-  // The button says "theme" and opens the list (2026-09-15), and beside it, fainter, **the state in a
-  // word** — #16 still holds: three marks cannot say which is which on their own, and a title
-  // attribute needs a hover nobody performs.
-  const st = themeBtn.querySelector('small');
-  if (st) st.textContent = mode || 'auto';
-  themeBtn.title = 'theme: ' + (mode || 'follows the system') + ' — click for the list';
   markThemeMenu();
   try { if (mode) localStorage.setItem(LS_THEME, mode); else localStorage.removeItem(LS_THEME); } catch (e) {}
   if (typeof renderBadge === 'function') renderBadge(true);   // the favicon color reads --st-*
   rethemeTerminals();
 }
-// ── popups: one at a time ──
-// Every popup closes on a press outside it, and a press on another popup's button is not "outside" —
-// that button stops the event so its own popup is not closed by it — so two could be up at once
-// (user, 2026-09-15). Each popup registers how it closes, and opening one closes the rest.
-const popups = new Map();     // element → its close()
-function registerPopup(el, close) { if (el) popups.set(el, close); }
-function closePopups(keep) { for (const [el, close] of popups) if (el !== keep && !el.hidden) close(); }
-
-// ── the theme list: System · Light (a palette) · Dark (a palette) ──
-const themeMenu = $('#theme-menu');
+// The select shows the state: "follow the system", or this side's palette. #16 still holds — the
+// state is in words, not in a mark that needs a hover to explain.
 function markThemeMenu() {
-  if (!themeMenu) return;
+  if (!themeSel) return;
   const mode = root.dataset.theme || null;
-  for (const b of themeMenu.querySelectorAll('.tm-i')) {
-    const v = b.dataset.pick;
-    const on = v === 'system' ? mode === null
-             : v === 'light:' + palLight ? mode === 'light'
-             : v === 'dark:' + palDark ? mode === 'dark' : false;
-    const chosen = v === 'light:' + palLight || v === 'dark:' + palDark;   // this side's palette, even when the other side is showing
-    b.classList.toggle('on', on);
-    b.classList.toggle('chosen', chosen && !on);
-    b.setAttribute('aria-checked', on ? 'true' : 'false');
-  }
-}
-function showThemeMenu(open) {
-  if (!themeMenu) return;
-  if (open) closePopups(themeMenu);
-  themeMenu.hidden = !open;
-  themeBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-  if (open) {
-    const r = themeBtn.getBoundingClientRect();
-    themeMenu.style.top = (r.bottom + 6) + 'px';
-    themeMenu.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
-    markThemeMenu();
-    const cur = themeMenu.querySelector('.tm-i.on') || themeMenu.querySelector('.tm-i');
-    if (cur) cur.focus();
-  }
+  themeSel.value = mode === null ? 'system' : mode + ':' + (mode === 'light' ? palLight : palDark);
 }
 function pickTheme(v) {
   if (v === 'system') applyTheme(null);
@@ -573,28 +550,15 @@ function pickTheme(v) {
     choosePalette(side, name);
     applyTheme(side);
   }
-  showThemeMenu(false);
-  themeBtn.focus();
 }
-registerPopup(themeMenu, () => showThemeMenu(false));
-themeBtn.addEventListener('click', (e) => { e.stopPropagation(); showThemeMenu(themeMenu && themeMenu.hidden); });
-themeBtn.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showThemeMenu(themeMenu && themeMenu.hidden); } });
-if (themeMenu) {
-  themeMenu.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const b = e.target.closest('.tm-i');
-    if (b) pickTheme(b.dataset.pick);
-  });
-  themeMenu.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { showThemeMenu(false); themeBtn.focus(); return; }
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-    e.preventDefault();
-    const items = [...themeMenu.querySelectorAll('.tm-i')];
-    const i = items.indexOf(document.activeElement);
-    items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
-  });
-  document.addEventListener('click', () => { if (!themeMenu.hidden) showThemeMenu(false); });
-}
+if (themeSel) themeSel.addEventListener('change', () => pickTheme(themeSel.value));
+// ── popups: one at a time ──
+// Every popup closes on a press outside it, and a press on another popup's button is not "outside" —
+// that button stops the event so its own popup is not closed by it — so two could be up at once
+// (user, 2026-09-15). Each popup registers how it closes, and opening one closes the rest.
+const popups = new Map();     // element → its close()
+function registerPopup(el, close) { if (el) popups.set(el, close); }
+function closePopups(keep) { for (const [el, close] of popups) if (el !== keep && !el.hidden) close(); }
 if (darkMq.addEventListener) darkMq.addEventListener('change', () => { if (!root.dataset.theme) rethemeTerminals(); });
 
 // xterm takes colors as values. Read the values out of the CSS variables and hand them over — so a color never lives in two places.
@@ -704,7 +668,8 @@ function buildFrame(t, s) {
     t.nameEl = el('span', 'name');
     t.pillEl = el('span', 'st');
     t.szEl = el('span', 'sz');
-    t.rnEl = el('span', 'rn'); t.rnEl.title = 'rename (or double-click the name)';
+    // No pencil (2026-10-30): a double-click on the name renames, and the key panel says so. The
+    // slot it held was the one thing in the bar that was there for a rare action.
     // A viewer's two: hand the file to the machine's own program, and edit it here. Hidden on a
     // terminal by CSS — the frame is shared, so both are built either way.
     t.owEl = el('span', 'vw-open'); t.owEl.title = 'open with the system default program';
@@ -720,7 +685,7 @@ function buildFrame(t, s) {
     // (#31 ④). It looks like the spans.
     t.clEl = el('button', 'cl'); t.clEl.type = 'button';
     t.clEl.title = 'close terminal'; t.clEl.setAttribute('aria-label', 'close terminal');
-    tb.append(t.dotEl, t.nameEl, t.pillEl, t.szEl, t.rnEl, t.owEl, t.edEl, t.xpEl, t.clEl);
+    tb.append(t.dotEl, t.nameEl, t.pillEl, t.szEl, t.owEl, t.edEl, t.xpEl, t.clEl);
     // #25 text size per pane. Ctrl/⌘+wheel is also browser zoom, so it must be blocked — leave it and reaching
     // to enlarge one window enlarges the whole page. A plain wheel is left alone so xterm's scrollback lives.
     // **Take it on the capture phase.** On bubble, xterm's scrollback handler eats it at the child first, and it
@@ -1003,7 +968,6 @@ class Tile {
       if (this.ws && this.ws.readyState === 1) this.ws.send(b);
     });
 
-    this.rnEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.rename(); });
     this.clEl.addEventListener('click', (ev) => { ev.stopPropagation(); this.askClose(); });
     // Double-click on the name is caught in dragify's down(), not here: the title bar takes pointer
     // capture on pointerdown, and a captured pointer's click and dblclick are retargeted to the
@@ -3720,7 +3684,9 @@ cvScroll.addEventListener('pointerdown', (ev) => {
 // which is what the add-canvas button looked like under WSLg (user report 2026-09-11). The same
 // reason the close button is drawn in CSS rather than set as ✕ (AGENTS.md): chrome should not
 // depend on a glyph that the machine may not have.
-const addTabEl = el('span', 'ib plus', '+');
+const addTabEl = el('span', 'ib plus');
+// Drawn, not typed (2026-11-01): the same two strokes as the rail headers' ＋, centred on a 24-grid.
+addTabEl.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
 addTabEl.id = 'tab-add';
 addTabEl.title = 'new canvas';
 
@@ -4143,7 +4109,11 @@ function msgText(s) {
     const q = quietFor(s);
     if (q !== null && q >= STUCK_S) parts.push('quiet ' + agoShort(lastOutAt.get(s.id)));
   }
-  if (t && t.lastLine) parts.push(t.lastLine);
+  // **At rest, the folder — not the prompt** (2026-10-30). The last line of a resting shell is its
+  // prompt, and ten rows of `user@host dir %` said nothing ten times. While something is running
+  // or has just finished, the last line is what it is doing, and that stays.
+  if (s.status === 'idle') { if (s.name) parts.push(shortPath(s.cwd)); else if (t && t.lastLine) parts.push(t.lastLine); }
+  else if (t && t.lastLine) parts.push(t.lastLine);
   if (parts.length) return parts.join(' · ');
   // Do not leave something with no hooks quietly grey (AGENTS.md principle 3) — say it in words
   if (s.status === 'unknown') return s.agent ? 'no hook event yet' : 'no hook seen — status unknown';
@@ -4179,7 +4149,7 @@ function buildItem(s, pinned) {
     const b = el('span', 'cvb', label);
     b.title = 'in ' + label + ' — click to go there';
     ago.appendChild(b);
-  } else if (t && t.off) ago.appendChild(el('span', 'off', '↗ off'));
+  } else if (t && t.off) ago.appendChild(offMark());
   it._ago = document.createTextNode(agoText(s.id));
   it._agoEl = ago;              // held so only "↗ off" can be flipped during a scroll (paintOff)
   ago.appendChild(it._ago);
@@ -4206,6 +4176,9 @@ function buildItem(s, pinned) {
   it.addEventListener('click', () => goToSession(s.id));
   return it;
 }
+// The mark for "its window is off-screen on this canvas". A glyph alone (2026-10-30): with ten rows
+// the boxed word "↗ off" was ten boxes, and the row's second line already carries the words.
+function offMark() { const m = el('span', 'off', '↗'); m.title = 'off-screen — click to go there'; return m; }
 // Flip only "↗ off", in place. It is called from the scroll path, so it never rebuilds the list (see refreshOff).
 // It uses the same rule as buildItem: something on another canvas gets a canvas label and no "↗ off" (⑪).
 function paintOff(id) {
@@ -4213,7 +4186,7 @@ function paintOff(id) {
   if (!it || !t || !s) return;
   const want = t.off && !(current !== null && s.canvas !== current);
   const has = $('.off', it._agoEl);
-  if (want && !has) it._agoEl.insertBefore(el('span', 'off', '↗ off'), it._ago);
+  if (want && !has) it._agoEl.insertBefore(offMark(), it._ago);
   else if (!want && has) has.remove();
 }
 // While searching, folds are ignored — otherwise a match hides inside a folded group and cannot be found
@@ -4382,6 +4355,7 @@ function renderList() {
 setInterval(() => {
   for (const [id, it] of items) {
     it._ago.nodeValue = agoText(id);
+    paintInboxAges();
     const s = sessions.get(id);
     if (s && it._msg) it._msg.textContent = msgText(s);   // makes "quiet 6m" run without rebuilding the list
   }
@@ -4444,10 +4418,129 @@ function onSearch() {
   if (q !== hadQuery) { hadQuery = q; renderList(); }   // ignoring folds turns on or off — rebuild the list
   else applyFilter();
   findDirs();
+  cmdSel = 0;
+  renderCmds();
 }
 searchEl.addEventListener('input', onSearch);
+
+// ── the commands under the field (2026-10-30) ──────────────────────
+//: Every action the page has, with its key beside it, and the terminals that match what is typed.
+//: The field is the one that was already there — it goes on filtering the list and the tree — and
+//: the list under it is what makes Ctrl/⌘K a way to *do* something and not only to find it. The
+//: keys are printed here on purpose: the bar lost most of its buttons this week, and a key nobody
+//: can see is a feature that does not exist (decisions.md). Nothing moved out of the bar into here
+//: alone — the four canvas tools keep their place beside the tabs; this adds a way in.
+const CMD_HOOKS = {};        // what lives in boot()'s closure and is reached from here (the key panel)
+let cmdSel = 0;
+function kbdOf(keys) { const k = el('span', 'k'); for (const x of keys) k.appendChild(el('kbd', null, x)); return k; }
+// The list is built on every keystroke, so a label can say what it would do *now* — "Fold" or
+// "Show", "Back to 1:1" or "See the whole canvas" — and an action that cannot act is not offered.
+function commandList() {
+  const dark = isDarkNow();
+  const front = focused && tiles.get(focused);
+  const list = [
+    { l: 'New terminal', sub: 'in your home folder', keys: [KMOD, '⏎'], run: () => newTerminal() },
+    { l: 'New canvas', keys: [KMOD, 'Shift', '⏎'], run: () => newCanvas() },
+    { l: 'Tidy this canvas', sub: 'pull the windows back to the corner',
+      run: () => { undoMark('tidying up'); tidyCanvas(current, true); },
+      when: () => { const b = $('#tidy'); return !!b && !b.disabled; } },
+    { l: 'Bring them closer', sub: 'keep the arrangement, close the gaps',
+      run: () => { undoMark('bringing them closer'); gatherCanvas(current); },
+      when: () => { const b = $('#gather'); return !!b && !b.disabled; } },
+    { l: zoom < 1 ? 'Back to 1:1' : 'See the whole canvas', sub: KMOD + ' + wheel over the empty canvas',
+      run: () => { if (zoom < 1) backTo11(); else seeEverything(); } },
+    { l: 'Undo', sub: undoStack.length ? undoStack[undoStack.length - 1].label : '', keys: [KMOD, 'Z'],
+      run: () => undoLast(), when: () => undoStack.length > 0 },
+    { l: (railFolded.l ? 'Show' : 'Fold') + ' the terminal list', keys: [KMOD, '\\'], run: () => setFold('l', !railFolded.l) },
+    { l: (railFolded.r ? 'Show' : 'Fold') + ' the directory rail', keys: [KMOD, 'Shift', '\\'], run: () => setFold('r', !railFolded.r) },
+    { l: 'Rename this terminal', sub: front ? labelOf(front.s) : '', run: () => front.rename(),
+      when: () => !!front && !front.closed },
+    { l: 'Theme: ' + (dark ? 'light' : 'dark'), run: () => pickTheme(dark ? 'light:paper' : 'dark:earth') },
+    { l: 'Theme: follow the system', run: () => pickTheme('system'), when: () => !!root.dataset.theme },
+    { l: (notifyOn ? 'Turn off' : 'Turn on') + ' notifications', sub: 'when a terminal wants you', run: () => toggleNotify() },
+    { l: (minimapOn ? 'Hide' : 'Show') + ' the minimap',
+      run: () => { const s = $('#minimap'); if (s) { s.checked = !minimapOn; s.dispatchEvent(new Event('change')); } } },
+    { l: 'Open in a browser', sub: 'the same terminals, in a tab', run: () => { const b = $('#toweb'); if (b) b.click(); } },
+    { l: 'Keyboard shortcuts', run: () => { if (CMD_HOOKS.keys) CMD_HOOKS.keys(); } },
+  ];
+  return list.filter((c) => !c.when || c.when());
+}
+// Where the words match: the start of the label outranks the start of a word, which outranks the
+// middle of one. Empty query: everything, in the order above.
+function cmdMatch(q, c) {
+  if (!q) return 1;
+  const hay = (c.l + ' ' + (c.sub || '')).toLowerCase();
+  const i = hay.indexOf(q);
+  return i < 0 ? 0 : i === 0 ? 3 : hay[i - 1] === ' ' ? 2 : 1;
+}
+function cmdRow(c) {
+  const b = el('button', 'cmd');
+  b.type = 'button';
+  b.setAttribute('role', 'option');
+  if (c.s) b.appendChild(el('span', 'dot ' + (STATUS_CLASS[c.s.status] || 'idle')));
+  b.appendChild(el('span', 'l', c.l));
+  if (c.sub) b.appendChild(el('span', 'sub' + (c.s ? ' path' : ''), c.sub));
+  if (c.keys) b.appendChild(kbdOf(c.keys));
+  b.addEventListener('click', (e) => { e.preventDefault(); runCmd(c); });
+  b._cmd = c;
+  return b;
+}
+function renderCmds() {
+  const box = document.getElementById('cmds');
+  if (!box || !searchBox || searchBox.hidden) return;
+  const q = searchEl.value.trim().toLowerCase();
+  const rows = [];
+  // **A terminal's name first.** "api" typed means the api terminal before it means anything else;
+  // with nothing typed the rail already lists them all, so only the commands show.
+  if (q) {
+    for (const s of sessions.values()) {
+      const hay = (labelOf(s) + ' ' + shortPath(s.cwd) + ' ' + (s.fg || '')).toLowerCase();
+      if (hay.includes(q)) rows.push({ s, l: labelOf(s), sub: shortPath(s.cwd), run: () => goToSession(s.id) });
+    }
+  }
+  const cmds = commandList().map((c) => [cmdMatch(q, c), c]).filter((x) => x[0] > 0)
+    .sort((x, y) => y[0] - x[0]).map((x) => x[1]);
+  box.textContent = '';
+  if (rows.length) box.appendChild(el('div', 'cmd-h', 'Terminals'));
+  for (const r of rows) box.appendChild(cmdRow(r));
+  if (cmds.length) box.appendChild(el('div', 'cmd-h', 'Commands'));
+  for (const c of cmds) box.appendChild(cmdRow(c));
+  const n = rows.length + cmds.length;
+  box.hidden = !n;
+  searchEl.setAttribute('aria-expanded', n ? 'true' : 'false');
+  if (cmdSel >= n) cmdSel = Math.max(0, n - 1);
+  paintCmdSel();
+}
+function paintCmdSel() {
+  const box = document.getElementById('cmds');
+  if (!box) return;
+  const bs = box.querySelectorAll('.cmd');
+  bs.forEach((b, i) => b.classList.toggle('sel', i === cmdSel));
+  const s = bs[cmdSel];
+  if (s && s.scrollIntoView) s.scrollIntoView({ block: 'nearest' });
+}
+function runCmd(c) {
+  showSearch(false);
+  c.run();
+}
 // Esc in the field: a search input clears itself on Esc; with nothing left to clear, the box goes away.
-searchEl.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !searchEl.value) { e.preventDefault(); showSearch(false); } });
+// Arrows walk the list under it, Enter runs the row that is lit — the first one, unless walked.
+searchEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !searchEl.value) { e.preventDefault(); showSearch(false); return; }
+  const box = document.getElementById('cmds');
+  if (!box || box.hidden) return;
+  const n = box.querySelectorAll('.cmd').length;
+  if (!n) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    cmdSel = (cmdSel + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+    paintCmdSel();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const b = box.querySelectorAll('.cmd')[cmdSel];
+    if (b && b._cmd) runCmd(b._cmd);
+  }
+});
 const searchX = $('#search-x');
 if (searchX) searchX.addEventListener('click', () => showSearch(false));   // the plain way out (user, 2026-09-15)
 addEventListener('keydown', (e) => {
@@ -4614,7 +4707,9 @@ function flushNotify() {
 
 // ── `palmar --message` ──
 // Said three ways, each for a different place the eye might be: the row (until cleared), a toast (if
-// this page is in front), and the OS notification (if it is not, and notifications are on).
+// this page is in front), and the OS notification (if it is not, and notifications are on) — and
+// kept in a fourth, the list behind the bell, until an × (2026-10-30). The `message` frame is what
+// says it; the session frame that comes with it only draws the row.
 const clearing = new Set();
 function clearMessage(id) {
   const s = sessions.get(id);
@@ -4623,17 +4718,111 @@ function clearMessage(id) {
   api('PATCH', '/api/sessions/' + encodeURIComponent(id), { message: null })
     .catch(() => {}).finally(() => clearing.delete(id));
 }
-function onMessage(s) {
-  const text = s.message.text;
+function messageLabel(e) {
+  const s = sessions.get(e.pane);
+  return s ? labelOf(s) : (e.name || shortPath(e.cwd || '') || 'a closed terminal');
+}
+function goToMessage(e) {
+  if (sessions.has(e.pane)) goToSession(e.pane);
+  else toast(['that terminal is closed']);
+}
+function sayMessage(e) {
+  const who = messageLabel(e);
   if (document.hasFocus()) {
-    toast([{ b: labelOf(s) }, text, { a: 'show', on: () => goToSession(s.id) }]);
+    toast([{ b: who }, e.text, { a: 'show', on: () => goToMessage(e) }], { msg: true });
     return;
   }
   if (!notifyOn || !canRing()) return;
-  if (!hasNotificationAPI()) { notifyViaDaemon(labelOf(s), text).catch(() => {}); return; }
+  if (!hasNotificationAPI()) { notifyViaDaemon(who, e.text).catch(() => {}); return; }
   let n;
-  try { n = new Notification(labelOf(s), { body: text, tag: 'palmar-msg-' + s.id }); } catch (e) { return; }
-  n.onclick = () => { window.focus(); goToSession(s.id); n.close(); };
+  try { n = new Notification(who, { body: e.text, tag: 'palmar-msg-' + e.pane }); } catch (e2) { return; }
+  n.onclick = () => { window.focus(); goToMessage(e); n.close(); };
+}
+
+// ── the list behind the bell ──
+//: **The daemon keeps the list**, this is its copy, swapped whole on hello and on `messages` and
+//: appended on `message`. "Unread" is the one thing that is this browser's: the moment the list was
+//: last opened here, kept in localStorage, and a dot on the bell while something is newer.
+const LS_INBOX_SEEN = 'palmar.inbox-seen';
+let inbox = [];                 // oldest first, as the daemon sends it
+let inboxSeenAt = 0;
+try { inboxSeenAt = parseFloat(localStorage.getItem(LS_INBOX_SEEN) || '0') || 0; } catch (e) {}
+const inboxEl = document.getElementById('inbox');
+function setInbox(ms) { inbox = Array.isArray(ms) ? ms.slice() : []; renderInbox(); paintBell(); }
+function addInbox(e) { inbox.push(e); if (inbox.length > 100) inbox.shift(); renderInbox(); paintBell(); }
+function paintBell() {
+  if (!bellEl) return;
+  const unread = inbox.some((e) => e.at * 1000 > inboxSeenAt);
+  bellEl.dataset.unread = unread ? '1' : '0';
+}
+function renderInbox() {
+  const list = document.getElementById('inbox-list');
+  if (!list || !inboxEl || inboxEl.hidden) return;
+  list.textContent = '';
+  if (!inbox.length) {
+    list.appendChild(el('div', 'inbox-empty', 'Nothing yet. A terminal can say something with  palmar --message "…"'));
+  }
+  for (let i = inbox.length - 1; i >= 0; i--) {
+    const e = inbox[i];
+    const s = sessions.get(e.pane);
+    const row = el('div', 'ib-row' + (s ? '' : ' gone'));
+    row.dataset.id = e.id;
+    row.title = s ? 'click to go to ' + messageLabel(e) : 'that terminal is closed';
+    row.appendChild(el('span', 'dot ' + (s ? (STATUS_CLASS[s.status] || 'idle') : 'idle')));
+    row.appendChild(el('span', 'ib-name', messageLabel(e)));
+    const ago = el('span', 'ib-ago', agoFrom(e.at * 1000));
+    ago.dataset.at = String(e.at);
+    row.appendChild(ago);
+    const x = el('button', 'ib-x');
+    x.type = 'button';
+    x.title = 'remove this one';
+    x.setAttribute('aria-label', 'remove');
+    x.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      api('DELETE', '/api/messages/' + encodeURIComponent(e.id)).catch(() => {});
+    });
+    row.appendChild(x);
+    row.appendChild(el('span', 'ib-text', e.text));
+    row.addEventListener('click', () => { showInbox(false); goToMessage(e); });
+    list.appendChild(row);
+  }
+  const clear = document.getElementById('inbox-clear');
+  if (clear) clear.disabled = !inbox.length;
+}
+function paintInboxAges() {
+  if (!inboxEl || inboxEl.hidden) return;
+  for (const n of inboxEl.querySelectorAll('.ib-ago')) n.textContent = agoFrom(parseFloat(n.dataset.at) * 1000);
+}
+function showInbox(open) {
+  if (!inboxEl || !bellEl) return;
+  if (open) closePopups(inboxEl);
+  inboxEl.hidden = !open;
+  bellEl.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) {
+    const r = bellEl.getBoundingClientRect();
+    inboxEl.style.top = (r.bottom + 8) + 'px';
+    inboxEl.style.right = Math.max(8, window.innerWidth - r.right - 4) + 'px';
+    const sw = document.getElementById('notify-sw');
+    if (sw) sw.checked = notifyOn;
+    renderInbox();
+    // Opened is read. The dot goes out here, in this browser; another window keeps its own.
+    inboxSeenAt = Date.now();
+    try { localStorage.setItem(LS_INBOX_SEEN, String(inboxSeenAt)); } catch (e) {}
+    paintBell();
+  }
+}
+registerPopup(inboxEl, () => showInbox(false));
+if (inboxEl) {
+  inboxEl.addEventListener('click', (e) => e.stopPropagation());
+  addEventListener('click', () => { if (!inboxEl.hidden) showInbox(false); });
+  addEventListener('keydown', (e) => { if (e.key === 'Escape' && !inboxEl.hidden) showInbox(false); });
+  const clear = document.getElementById('inbox-clear');
+  if (clear) clear.addEventListener('click', () => api('DELETE', '/api/messages').catch(() => {}));
+  const sw = document.getElementById('notify-sw');
+  if (sw) sw.addEventListener('change', async () => {
+    await toggleNotify();
+    sw.checked = notifyOn;            // permission may have been refused — the switch says what is true
+  });
 }
 
 // **Ring once when it is turned on.** A notification has to pass browser permission, the OS's do-not-disturb and
@@ -4658,11 +4847,11 @@ const bellEl = document.getElementById('bell');
 function setNotify(on) {
   notifyOn = on;
   try { if (on) localStorage.setItem(LS_NOTIFY, '1'); else localStorage.removeItem(LS_NOTIFY); } catch (e) {}
-  if (bellEl) {
-    bellEl.dataset.on = on ? '1' : '0';
-    bellEl.title = on ? 'notifications on — click to turn off'
-                      : 'notify me when a terminal wants me (off)';
-  }
+  if (bellEl) bellEl.dataset.on = on ? '1' : '0';
+  const w = document.getElementById('notify-word');
+  if (w) w.textContent = on ? 'on' : 'off';
+  const sw = document.getElementById('notify-sw');
+  if (sw) sw.checked = on;
 }
 async function toggleNotify() {
   if (notifyOn) { setNotify(false); return; }
@@ -4687,12 +4876,13 @@ async function toggleNotify() {
   notifyTest();
 }
 if (bellEl) {
-  bellEl.addEventListener('click', () => {
+  bellEl.addEventListener('click', (e) => {
+    e.stopPropagation();
     bellEl.classList.remove('ping'); void bellEl.offsetWidth; bellEl.classList.add('ping');   // one ring, every press
-    toggleNotify();
+    showInbox(inboxEl && inboxEl.hidden);
   });
   bellEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleNotify(); }
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showInbox(inboxEl && inboxEl.hidden); }
   });
 }
 
@@ -4924,7 +5114,6 @@ function upsert(s) {
   if (wants) onWantsYou(s.id);
   // A message is new when its `at` is — the same words sent twice are two things that happened.
   // Not on the first sight of a pane (a hello after a reload): that one was already said.
-  if (old && s.message && (!old.message || old.message.at !== s.message.at)) onMessage(s);
   renderBadge();
   let t = tiles.get(s.id);
   if (!t) {
@@ -4933,6 +5122,11 @@ function upsert(s) {
     t.off = false;
     refreshOff();    // a window another browser opened can land off-screen — the viewport is measured once in there
     if (layout[s.id] && layout[s.id].g) paintGroups();   // now it can be seen — see the Tile constructor
+    // **A window arriving is a reason to repaint the canvas tools** (2026-10-30). They were repainted
+    // on moves and closes and never here, so tidy and gather sat disabled after a terminal opened
+    // until something else happened — boxed and grey that read as idle; quiet beside the tabs it
+    // read as dead, which it was.
+    paintTidy();
   } else {
     const wasVisible = !t.el.classList.contains('other');
     t.update(s);
@@ -4941,6 +5135,7 @@ function upsert(s) {
       t.el.classList.toggle('other', !on);
       if (on) t.refit(); else { t.off = false; syncMax(); }   // the expanded window went to somebody else's canvas
       paintGroups();                                          // a group lives on one canvas — its frame moves with it
+      paintTidy();                                            // and the tools speak about this canvas
     }
   }
   renderTabs();      // the dot is computed — recount when status or canvas changes
@@ -5036,7 +5231,10 @@ function connectEvents() {
       setCanvases(m.canvases || []); reconcile(m.sessions || []);
       restoreViewers();                    // the windows that are not sessions
       renderRestore(m.restore);
+      setInbox(m.messages || []);          // said already; nothing is said again on a hello
     }
+    else if (m.t === 'message' && m.m) { addInbox(m.m); sayMessage(m.m); }
+    else if (m.t === 'messages' && m.ms) setInbox(m.ms);
     else if (m.t === 'session' && m.s) upsert(m.s);
     else if (m.t === 'gone' && m.id) remove(m.id);
     else if (m.t === 'canvas' && m.c) putCanvas(m.c);           // created or renamed
@@ -5106,13 +5304,15 @@ function rendererOf(t) {
   if (!el) return 'dom';
   return el.querySelectorAll('.xterm-screen canvas').length >= 2 ? 'webgl' : 'dom';
 }
-function updateStatusBar(note) {
+//: The bar no longer counts renderers (2026-10-30: "webgl 0 · dom 10" was a developer's number on
+//: everybody's screen). `palmar.renderers()` from the console still says, which is what it was for.
+function renderers() {
   let gl = 0, dom = 0;
   for (const t of tiles.values()) (rendererOf(t) === 'webgl' ? gl++ : dom++);
-  const parts = [];
-  if (note) parts.push(note);
-  if (tiles.size) parts.push('webgl ' + gl + ' · dom ' + dom);
-  $('#sb-right').textContent = parts.join(' · ');
+  return { webgl: gl, dom };
+}
+function updateStatusBar(note) {
+  $('#sb-right').textContent = note || '';
 }
 $('#sb-host').textContent = location.host;
 
@@ -5211,11 +5411,10 @@ let findResults = null;      // { q, entries } — only while searching. null me
 function renderTree() {
   treeEl.textContent = '';
   const hint0 = document.getElementById('tree-hint');
-  if (hint0 && !findResults) hint0.textContent = 'click a file to view it · read when expanded';
+  if (hint0) hint0.hidden = !findResults;        // the line is for the flat search list only
   if (findResults) {
     // **Show the matches flat.** Expanding down into the tree loses track of where you are looking.
-    const hint = document.getElementById('tree-hint');
-    if (hint) hint.textContent = 'matching folders · click one to look inside';
+    if (hint0) hint0.textContent = 'matching folders · click one to look inside';
     if (!findResults.entries.length) {
       treeEl.appendChild(el('div', 'hint2', findResults.error
         ? 'search failed: ' + findResults.error
@@ -5421,7 +5620,8 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   // to the daemon — a test with two browsers needs to tell the two apart.
                   saveLayout, client: () => CLIENT, layoutOnDaemon: () => layoutOnDaemon,
                   holdStyle: () => holdStyle,
-                  palette: () => root.dataset.pal || null, choosePalette, applyTheme, labelOf,
+                  palette: () => root.dataset.pal || null, choosePalette, applyTheme, pickTheme, labelOf, renderers,
+                  showSearch, commandList, showInbox, inbox: () => inbox.slice(),
                   baseFont: () => FONT_PX, setBaseFont, termTheme, minimapOn: () => minimapOn,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
@@ -5596,6 +5796,7 @@ function boot() {
   const keysEl = document.getElementById('keys');
   const showKeys = (on) => { if (on) closePopups(keysEl); keysEl.hidden = !on; };
   registerPopup(keysEl, () => showKeys(false));
+  CMD_HOOKS.keys = () => showKeys(true);         // reached from the command list under Ctrl/⌘K
   const showOptions = (on) => {
     if (!optMenu) return;
     if (on) closePopups(optMenu);

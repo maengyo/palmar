@@ -306,12 +306,12 @@ class ASelectionYouCanSee(unittest.TestCase):
             d.open_pane(name="sel")
             b.open(d.url)
             time.sleep(3)
-            picks = b.ev("[...document.querySelectorAll('#theme-menu [data-pick]')]"
-                         ".map(x=>x.dataset.pick).filter(x=>x!=='system')")
+            picks = b.ev("[...document.querySelectorAll('#theme option')]"
+                         ".map(x=>x.value).filter(x=>x!=='system')")
             self.assertGreaterEqual(len(picks), 2, picks)
             for pick in picks:
-                b.ev("document.getElementById('theme').click()")
-                b.ev("document.querySelector('#theme-menu [data-pick=%s]').click()" % json.dumps(pick))
+                b.ev("(()=>{const s=document.getElementById('theme'); s.value=%s;"
+                     " s.dispatchEvent(new Event('change')); return 1;})()" % json.dumps(pick))
                 time.sleep(0.3)
                 th = b.ev("(()=>{const o=[...window.palmar.tiles.values()][0].term.options.theme;"
                           "return [o.selectionBackground,o.background];})()")
@@ -375,6 +375,64 @@ class CopyAndPasteKeys(unittest.TestCase):
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class AnInboxBehindTheBell(unittest.TestCase):
+    """What terminals said, kept behind the bell (2026-10-30): the notification switch at its head,
+    the messages under it newest first with how long ago and an ×, "clear all" at the foot, and a dot
+    on the bell while something is newer than the last look. The list is the daemon's — a reload
+    still has it — and only "last look" is this browser's."""
+
+    def rows(self, b):
+        return b.ev("""[...document.querySelectorAll('#inbox-list .ib-row')].map(r=>({
+          name: r.querySelector('.ib-name').textContent, text: r.querySelector('.ib-text').textContent,
+          ago: r.querySelector('.ib-ago').textContent, id: r.dataset.id}))""")
+
+    def test_it_lists_them_newest_first_and_an_x_or_clear_all_removes_them(self):
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="pr-watch")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            self.assertEqual(b.ev("document.getElementById('bell').dataset.unread"), "0")
+            d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "first thing"})
+            d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "second thing"})
+            time.sleep(1)
+            self.assertEqual(b.ev("document.getElementById('bell').dataset.unread"), "1", "no dot on the bell")
+            b.ev("document.getElementById('bell').click()")
+            time.sleep(0.3)
+            self.assertFalse(b.ev("document.getElementById('inbox').hidden"), "the bell did not open the list")
+            self.assertEqual(b.ev("document.getElementById('bell').dataset.unread"), "0", "opening it did not count as reading")
+            rows = self.rows(b)
+            self.assertEqual([r["text"] for r in rows], ["second thing", "first thing"])
+            self.assertEqual(rows[0]["name"], "pr-watch")
+            self.assertEqual(rows[0]["ago"], "now")
+            b.ev("document.querySelector('#inbox-list .ib-row[data-id=%s] .ib-x').click()" % json.dumps(rows[0]["id"]))
+            time.sleep(0.8)
+            self.assertEqual([r["text"] for r in self.rows(b)], ["first thing"], "the × did not remove one")
+            self.assertEqual([m["text"] for m in d.get("/api/messages")], ["first thing"], "the daemon disagrees")
+            # **A reload still has it** — the list is the daemon's, not the page's.
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            self.assertEqual(b.ev("document.getElementById('bell').dataset.unread"), "0", "a reload said it again")
+            b.ev("document.getElementById('bell').click()")
+            time.sleep(0.3)
+            self.assertEqual([r["text"] for r in self.rows(b)], ["first thing"], "a reload lost the list")
+            b.ev("document.getElementById('inbox-clear').click()")
+            time.sleep(0.8)
+            self.assertEqual(self.rows(b), [], "clear all left something")
+            self.assertEqual(d.get("/api/messages"), [])
+            self.assertIn("Nothing yet", b.ev("document.getElementById('inbox-list').textContent"))
+
+    def test_the_switch_at_its_head_is_the_notification_switch(self):
+        with Daemon() as d, Browser() as b:
+            b.open(d.url, script="window.Notification=function(){}; window.Notification.permission='granted';")
+            time.sleep(1.5)
+            b.ev("document.getElementById('bell').click()")
+            time.sleep(0.2)
+            b.ev("(()=>{const s=document.getElementById('notify-sw'); s.checked=true; s.dispatchEvent(new Event('change')); return 1;})()")
+            time.sleep(0.5)
+            r = b.ev("({on: document.getElementById('bell').dataset.on, word: document.getElementById('notify-word').textContent, kept: localStorage.getItem('palmar.notify')})")
+            self.assertEqual([r["on"], r["word"], r["kept"]], ["1", "on", "1"], r)
+
+
 class AMessageOnTheRail(unittest.TestCase):
     """`palmar --message` as the page shows it (2026-10-29): a line on the pane's row that stays until
     a hand goes to the pane, a toast when it arrives, and nothing said again on a reload."""
@@ -433,20 +491,20 @@ class Theme(unittest.TestCase):
         cls.d.stop()
 
     def test_each_state_names_itself(self):
-        """The button reads "theme" and opens a list now (2026-09-15); the state still stands beside
-        it in a word, because the mark alone cannot say which of three it is."""
+        """A select in the options list now (2026-10-30; a button with a list of its own until then).
+        The state is the chosen option's own words, so the three cannot read the same."""
         seen = []
         for pick in ("system", "light:paper", "dark:earth"):
-            self.b.ev("document.getElementById('theme').click()")
-            self.b.ev("document.querySelector('#theme-menu [data-pick=%s]').click()" % json.dumps(pick))
+            self.b.ev("(()=>{const s=document.getElementById('theme'); s.value=%s;"
+                      " s.dispatchEvent(new Event('change')); return 1;})()" % json.dumps(pick))
             time.sleep(0.2)
-            seen.append(self.b.ev("""(()=>{const b=document.getElementById('theme');
-              return [b.dataset.mode, (b.querySelector('small')||{}).textContent];})()"""))
+            seen.append(self.b.ev("""(()=>{const s=document.getElementById('theme');
+              return [document.documentElement.dataset.theme || 'system', s.selectedOptions[0].textContent];})()"""))
         modes = [m for m, _ in seen]
         labels = [l for _, l in seen]
         self.assertEqual(len(set(labels)), 3, "two states read the same: %s" % labels)
         self.assertEqual(set(modes), {"system", "light", "dark"})
-        self.assertIn("auto", labels)
+        self.assertIn("follow the system", labels)
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
@@ -3810,47 +3868,53 @@ class Palettes(unittest.TestCase):
         return self.b.ev("""(()=>{const root=document.documentElement;
           return {theme: root.dataset.theme || null, pal: window.palmar.palette(),
                   accent: getComputedStyle(root).getPropertyValue('--accent').trim(),
-                  open: !document.getElementById('theme-menu').hidden,
-                  on: [...document.querySelectorAll('#theme-menu .tm-i.on')].map(b=>b.dataset.pick)};})()""")
+                  on: [document.getElementById('theme').value]};})()""")
 
     def pick(self, v):
-        self.b.ev("document.getElementById('theme').click()")
-        self.assertTrue(self.state()["open"], "the list did not open")
-        self.b.ev("document.querySelector('#theme-menu [data-pick=%s]').click()" % json.dumps(v))
+        self.b.ev("(()=>{const s=document.getElementById('theme'); s.value=%s;"
+                  " s.dispatchEvent(new Event('change')); return 1;})()" % json.dumps(v))
 
     def test_the_list_sets_theme_and_palette_together(self):
-        self.pick("light:sky")
+        """Two palettes now, one a side (2026-10-30; eight from 2026-09-15). The value still carries
+        the side and the palette, and the dark side has an accent of its own at last — it used to be
+        the text colour a shade warmer, so nothing chosen stood out."""
+        self.pick("light:paper")
         st = self.state()
-        self.assertEqual([st["theme"], st["pal"], st["accent"], st["open"]], ["light", "sky", "#2f6fed", False], st)
-        self.assertEqual(st["on"], ["light:sky"], "the list does not mark what is in effect: %r" % st)
-        self.pick("dark:graphite")
+        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["light", None, "#4a58b8"], st)
+        self.assertEqual(st["on"], ["light:paper"], "the list does not mark what is in effect: %r" % st)
+        self.pick("dark:earth")
         st = self.state()
-        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["dark", "graphite", "#7cb3ff"], st)
+        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["dark", None, "#9aa5f0"], st)
+        ink = self.b.ev("getComputedStyle(document.documentElement).getPropertyValue('--ink').trim()")
+        self.assertNotEqual(st["accent"], ink, "the dark accent is still the text colour")
         self.pick("system")
         st = self.state()
         self.assertIsNone(st["theme"], "system did not clear the explicit theme: %r" % st)
         self.assertEqual(st["on"], ["system"])
         kept = self.b.ev("[localStorage.getItem('palmar.pal-light'), localStorage.getItem('palmar.pal-dark'), localStorage.getItem('palmar-theme')]")
-        self.assertEqual(kept, ["sky", "graphite", None], "the choices were not kept the way the theme is")
+        self.assertEqual(kept, [None, None, None], "the defaults were written to the store")
 
-    def test_a_choice_survives_a_reload(self):
-        self.pick("light:lilac")
-        self.b.ev("location.reload()")
+    def test_a_choice_survives_a_reload_and_a_gone_palette_falls_back(self):
+        """A stored "sky" from the eight-palette days is no longer offered: the page falls back to this
+        side's palette rather than to nothing, and the theme itself is kept."""
+        self.pick("dark:earth")
+        self.b.ev("localStorage.setItem('palmar.pal-light', 'sky'); localStorage.setItem('palmar.pal-dark', 'graphite'); location.reload()")
         for _ in range(40):
             time.sleep(0.25)
             if self.b.ev("!!(window.palmar && window.palmar.palette)"):
                 break
         st = self.state()
-        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["light", "lilac", "#6d4de6"], st)
+        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["dark", None, "#9aa5f0"], st)
 
-    def test_escape_and_a_click_outside_close_it(self):
-        self.b.ev("document.getElementById('theme').click()")
-        self.assertTrue(self.state()["open"])
-        self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
-        self.assertFalse(self.state()["open"], "Escape did not close the list")
-        self.b.ev("document.getElementById('theme').click()")
-        self.b.ev("document.body.click()")
-        self.assertFalse(self.state()["open"], "a click outside did not close the list")
+    def test_it_is_a_row_of_the_options_list(self):
+        """Theme sat on the top bar as a button of its own while font and text size were rows in the
+        options list — the same kind of setting in two places (2026-10-30)."""
+        r = self.b.ev("""(()=>{const m=document.getElementById('options-menu');
+          return {inList: !!m.querySelector('#theme'), onBar: !!document.querySelector('.top .r > #theme'),
+                  bar: [...document.querySelectorAll('.top .r .capsule > *')].filter(e=>e.tagName!=='DIV').map(e=>e.id)};})()""")
+        self.assertTrue(r["inList"], "theme is not in the options list")
+        self.assertFalse(r["onBar"], "theme is still a top-bar button")
+        self.assertEqual(r["bar"], ["bell", "options"], "the top bar's right end holds more than the bell and options: %r" % r)
 
 
 class TopRow(unittest.TestCase):
@@ -3886,10 +3950,13 @@ class TopRow(unittest.TestCase):
 
     def test_the_buttons_up_there_are_not_tiny(self):
         r = self.b.ev("""(()=>{const h=(id)=>Math.round(document.getElementById(id).getBoundingClientRect().height);
-          return {undo: h('undo'), tidy: h('tidy'), options: h('options'),
+          const cap=Math.round(document.querySelector('.cvtools').getBoundingClientRect().height);
+          const rt=Math.round(document.getElementById('r-tools').getBoundingClientRect().height);
+          return {capsule: cap, rtools: rt,
                   tab: parseFloat(getComputedStyle(document.querySelector('.tab')).fontSize)};})()""")
-        for k in ("undo", "tidy", "options"):
-            self.assertGreaterEqual(r[k], 26, "%s is %spx tall" % (k, r[k]))
+        # undo·tidy and bell·options are segments of two 26px capsules now (2026-10-30); the capsules are measured
+        for k in ("capsule", "rtools"):
+            self.assertGreaterEqual(r[k], 30, "%s is %spx tall" % (k, r[k]))
         self.assertGreaterEqual(r["tab"], 13, "the canvas tab text is %spx" % r["tab"])
 
     def test_the_row_is_drawings_and_every_one_of_them_has_a_name(self):
@@ -3962,11 +4029,30 @@ class TopRow(unittest.TestCase):
         self.d.delete("/api/sessions/" + s["id"])
 
     def test_every_button_up_there_is_the_same_height(self):
+        """The canvas tools are one capsule now (2026-10-30), so the capsule is what stands at 26px;
+        its four segments fill it."""
         r = self.b.ev("""(()=>{const out={};
-          for (const id of ['bell','theme','toweb','undo','tidy','options','mkdir','refresh'])
-            out[id]=Math.round(document.getElementById(id).getBoundingClientRect().height);
+          for (const id of ['mkdir','refresh'])
+            out.rail=(out.rail||[]).concat(Math.round(document.getElementById(id).getBoundingClientRect().height));
+          out.top=[...document.querySelectorAll('.top .capsule, .tabs .ib')].map(e=>Math.round(e.getBoundingClientRect().height));
           return out;})()""")
-        self.assertEqual(set(r.values()), {26}, "the buttons do not share one height: %r" % r)
+        # The top bar's controls are 30px since 2026-10-30 ("버튼이 너무 작아진 거 같아"); the rail
+        # headers' quiet buttons stay 26. One height within each row.
+        self.assertEqual(len(r["top"]), 3, "two capsules and the + up top: %r" % r)
+        self.assertEqual(set(r["top"]), {30}, "the top bar's controls do not share one height: %r" % r)
+        self.assertEqual(set(r["rail"]), {26}, "the rail buttons do not share one height: %r" % r)
+
+    def test_the_canvas_tools_stay_put_when_the_tabs_change(self):
+        """A tool has to stay where the hand left it (user, 2026-10-30). For a morning the four sat
+        beside the tabs and moved whenever a canvas was added or renamed."""
+        before = self.b.ev("Math.round(document.querySelector('.cvtools').getBoundingClientRect().left)")
+        self.d.post("/api/canvases", {"name": "a much longer canvas name than the first"})
+        self.d.post("/api/canvases", {})
+        time.sleep(1)
+        after = self.b.ev("Math.round(document.querySelector('.cvtools').getBoundingClientRect().left)")
+        self.assertEqual(before, after, "the canvas tools moved when tabs were added")
+        self.assertLessEqual(after, self.b.ev("document.getElementById('bell').getBoundingClientRect().left"),
+                             "the capsule sits on the bell")
 
     def test_the_right_hand_buttons_never_sit_on_undo_and_tidy(self):
         """Dragging the rails narrow used to spill the right-hand buttons over undo and tidy: the
@@ -4031,15 +4117,16 @@ class TopRow(unittest.TestCase):
         r = self.b.ev("""(()=>{const h=(id)=>document.getElementById(id).hidden;
           document.getElementById('options').click();
           const a = !h('options-menu');
-          document.getElementById('theme').click();
-          const b = [h('options-menu'), !h('theme-menu')];
+          document.getElementById('keys-x').click(); document.getElementById('options').click();
+          document.querySelector('#options-menu [data-do="keys"]').click();
+          const b = [h('options-menu'), !h('keys')];
           document.getElementById('toweb').click();
-          const c = [h('theme-menu'), !h('webbox')];
+          const c = [h('keys'), !h('webbox')];
           document.body.click();
           return {a, b, c, end: h('webbox')};})()""")
         self.assertTrue(r["a"])
-        self.assertEqual(r["b"], [True, True], "the theme button left the options list open: %r" % r)
-        self.assertEqual(r["c"], [True, True], "the web button left the theme list open: %r" % r)
+        self.assertEqual(r["b"], [True, True], "the shortcuts item left the options list open: %r" % r)
+        self.assertEqual(r["c"], [True, True], "the web item left the shortcuts open: %r" % r)
         self.assertTrue(r["end"])
 
     def test_a_narrow_rail_keeps_its_buttons(self):
@@ -4085,9 +4172,15 @@ class TopRow(unittest.TestCase):
         self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
         self.assertTrue(self.b.ev("document.getElementById('webbox').hidden"), "Escape did not close it")
 
-    def test_the_options_button_is_a_square(self):
-        r = self.b.ev("(()=>{const b=document.getElementById('options').getBoundingClientRect(); return [Math.round(b.width), Math.round(b.height)];})()")
-        self.assertEqual(r, [26, 26], "the options button is %r, not a 26px square" % (r,))
+    def test_the_options_button_is_a_segment_of_the_right_capsule(self):
+        """It was a 26px square of its own; now it is the last segment of the bell's capsule
+        (2026-10-30) and fills the capsule's height."""
+        r = self.b.ev("""(()=>{const b=document.getElementById('options').getBoundingClientRect(),
+          c=document.getElementById('r-tools').getBoundingClientRect();
+          return [Math.round(b.height), Math.round(c.height), Math.round(c.right-b.right)];})()""")
+        self.assertEqual(r[1], 30, "the right capsule is %spx tall" % r[1])
+        self.assertEqual(r[0], 28, "the segment does not fill the capsule: %r" % (r,))
+        self.assertLessEqual(r[2], 1, "options is not the capsule's last segment: %r" % (r,))
 
     def test_a_round_button_stands_in_for_the_folded_rail(self):
         """＋ lives in the terminal list's header now; fold that rail and a round button floats over the
@@ -4131,6 +4224,12 @@ class TopRow(unittest.TestCase):
         self.assertFalse(self.b.ev("document.getElementById('mm').hidden"), "it did not come back")
 
     def test_search_is_behind_the_shortcut(self):
+        """From the page, not from inside a terminal. **Inside a terminal Ctrl+K is the shell's**
+        (kill to the end of the line) and xterm keeps it, so on Linux and Windows the shortcut does
+        not reach the page from there — ⌘K on a Mac does, since xterm leaves ⌘ combinations alone
+        (measured 2026-10-30). This passed on Linux only while an earlier test happened to leave
+        focus on a button; it now puts focus where the test means it to be."""
+        self.b.ev("document.activeElement && document.activeElement.blur(); 1")
         self.assertTrue(self.b.ev("document.getElementById('searchbox').hidden"))
         mod = 4 if self.b.ev("navigator.platform.startsWith('Mac')") else 2      # ⌘ or Ctrl
         self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "k", "code": "KeyK", "modifiers": mod, "windowsVirtualKeyCode": 75})
@@ -4141,6 +4240,106 @@ class TopRow(unittest.TestCase):
         self.b.ws.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27})
         time.sleep(0.2)
         self.assertTrue(self.b.ev("document.getElementById('searchbox').hidden"), "Escape did not put the search away")
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class TheCanvasToolsWakeUp(unittest.TestCase):
+    """Tidy and gather stayed disabled after a terminal opened, until something else happened to
+    repaint them — a drag, a close. Found when the tools went quiet beside the tabs (2026-10-30):
+    boxed and grey they looked merely idle; faded they looked dead, and they were. Pre-existing on
+    main: the repaint ran on moves and closes, never on a window arriving."""
+
+    def test_tidy_is_offered_once_a_window_is_on_the_canvas(self):
+        with Daemon() as d, Browser() as b:
+            b.open(d.url)
+            time.sleep(1.5)
+            self.assertTrue(b.ev("document.getElementById('tidy').disabled"), "tidy offered on an empty canvas")
+            d.open_pane(name="api")
+            d.open_pane(name="web")
+            end = time.time() + 8
+            while time.time() < end and b.ev("document.getElementById('tidy').disabled"):
+                time.sleep(0.25)
+            self.assertFalse(b.ev("document.getElementById('tidy').disabled"),
+                             "two windows are on the canvas and tidy still says there is nothing on it")
+            self.assertIn("Tidy this canvas", b.ev("window.palmar.commandList().map(c=>c.l)"),
+                          "the command list does not offer tidy either")
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class CommandsBehindCtrlK(unittest.TestCase):
+    """The field behind Ctrl/⌘K lists every command with its key, and the terminals that match
+    (2026-10-30, try/chrome-tidy). The bar lost most of its buttons the same week, and a key nobody
+    can see is a feature that does not exist — so the keys are written where the hand goes to look."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.b.open(cls.d.url)
+        time.sleep(1)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def rows(self):
+        return self.b.ev("""[...document.querySelectorAll('#cmds .cmd')].map(b=>({
+          l: b.querySelector('.l').textContent, keys: [...b.querySelectorAll('kbd')].map(k=>k.textContent),
+          session: !!b.querySelector('.dot'), sel: b.classList.contains('sel')}))""")
+
+    def type_(self, text):
+        self.b.ev("(()=>{const s=document.getElementById('search'); s.value=%s;"
+                  " s.dispatchEvent(new Event('input')); return 1;})()" % json.dumps(text))
+
+    def test_every_command_is_listed_with_its_key(self):
+        self.b.ev("window.palmar.showSearch(true)")
+        rows = self.rows()
+        labels = [r["l"] for r in rows]
+        self.assertIn("New terminal", labels)
+        self.assertIn("Keyboard shortcuts", labels)
+        self.assertNotIn("Undo", labels, "undo is offered with nothing to undo")
+        new = [r for r in rows if r["l"] == "New terminal"][0]
+        self.assertEqual(new["keys"][-1], "⏎", "the key is not printed beside the command: %r" % new)
+        self.assertIn(new["keys"][0], ("⌘", "Ctrl"))
+        self.assertTrue(rows[0]["sel"], "nothing is lit, so Enter would do nothing")
+        self.b.ev("window.palmar.showSearch(false)")
+
+    def test_typing_narrows_it_and_enter_runs_the_lit_one(self):
+        self.b.ev("window.palmar.showSearch(true)")
+        self.type_("new term")
+        rows = self.rows()
+        self.assertEqual([r["l"] for r in rows][:1], ["New terminal"], rows)
+        self.b.ev("""document.getElementById('search').dispatchEvent(
+          new KeyboardEvent('keydown', {key:'Enter', bubbles:true}))""")
+        for _ in range(40):
+            time.sleep(0.25)
+            got = self.d.get("/api/sessions")
+            got = got["sessions"] if isinstance(got, dict) else got
+            if got:
+                break
+        self.assertEqual(len(got), 1, "Enter on 'New terminal' did not open one")
+        self.assertTrue(self.b.ev("document.getElementById('searchbox').hidden"), "running a command left the field open")
+        time.sleep(2)
+        self.d.delete("/api/sessions/" + got[0]["id"])
+        time.sleep(1)
+
+    def test_a_terminal_comes_first_when_its_name_is_typed(self):
+        a = self.d.open_pane(name="api")
+        w = self.d.open_pane(name="web")
+        time.sleep(3)
+        self.b.ev("window.palmar.showSearch(true)")
+        self.type_("web")
+        rows = self.rows()
+        self.assertTrue(rows and rows[0]["session"] and rows[0]["l"] == "web", rows)
+        self.b.ev("""document.getElementById('search').dispatchEvent(
+          new KeyboardEvent('keydown', {key:'Enter', bubbles:true}))""")
+        time.sleep(0.5)
+        front = self.b.ev("(()=>{const t=document.querySelector('.tile.focus .name'); return t && t.textContent;})()")
+        self.assertEqual(front, "web", "Enter did not go to the terminal that was typed")
+        self.d.delete("/api/sessions/" + a["id"])
+        self.d.delete("/api/sessions/" + w["id"])
+        time.sleep(1)
 
 
 class Viewing(unittest.TestCase):
@@ -4748,7 +4947,8 @@ class AWindowWithoutTheNotificationAPI(unittest.TestCase):
         b.open(d.url, script="delete window.Notification")     # what WKWebView looks like to the page
         time.sleep(1.0)
         self.assertFalse(b.ev("'Notification' in window"))
-        b.ev("document.getElementById('bell').click(); 1")
+        # The bell opens a list now (2026-10-30); the switch at its head is what turns notifications on.
+        b.ev("document.getElementById('bell').click(); const s=document.getElementById('notify-sw'); s.checked=true; s.dispatchEvent(new Event('change')); 1")
         end = time.time() + 6
         while time.time() < end and not os.path.exists(note):
             time.sleep(0.1)
