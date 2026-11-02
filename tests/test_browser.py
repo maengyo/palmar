@@ -4405,6 +4405,47 @@ class APressOnTheFloor(unittest.TestCase):
         self.ctrl_k()
         self.assertFalse(self.b.ev("document.getElementById('searchbox').hidden"), "Ctrl+K did not open the commands after the window was let go")
 
+    def test_a_press_outside_the_commands_puts_them_away(self):
+        """The box behind Ctrl+K stayed up over whatever was clicked next — the floor, a terminal
+        (user, 2026-11-02). A press anywhere outside it closes it; the options item that opens it
+        stays a switch."""
+        p = self.floor()
+        shown = "!document.getElementById('searchbox').hidden"
+        self.b.ev("window.palmar.showSearch(true)")
+        self.assertTrue(self.b.ev(shown))
+        self.mouse("mousePressed", p["x"], p["y"]); self.mouse("mouseReleased", p["x"], p["y"])
+        time.sleep(0.2)
+        self.assertFalse(self.b.ev(shown), "a press on the floor left the commands up")
+        self.b.ev("window.palmar.showSearch(true)")
+        # A point on the terminal that the box does not cover — its rows float over the middle of
+        # the canvas, and a press on a row is the row's (it runs the command), not this.
+        t = self.b.ev("""(()=>{const tile=[...window.palmar.tiles.values()][0].el, r=tile.getBoundingClientRect();
+          for (const [fx, fy] of [[0.1,0.9],[0.9,0.9],[0.1,0.5],[0.9,0.5],[0.1,0.1]]) {
+            const p={x: r.left + r.width*fx, y: r.top + r.height*fy};
+            const e=document.elementFromPoint(p.x,p.y);
+            if (e && tile.contains(e) && !document.getElementById('searchbox').contains(e)) return p;
+          }
+          throw new Error('the box covers the whole terminal');})()""")
+        self.mouse("mousePressed", t["x"], t["y"]); self.mouse("mouseReleased", t["x"], t["y"])
+        time.sleep(0.2)
+        self.assertFalse(self.b.ev(shown), "a press on a terminal left the commands up")
+        self.assertTrue(self.b.ev("!!document.querySelector('.tile.focus')"), "the press did not also select the terminal")
+        # The field itself is inside: a press there keeps it (and the X is what closes it from there).
+        self.b.ev("window.palmar.showSearch(true)")
+        s = self.b.ev("(()=>{const r=document.getElementById('search').getBoundingClientRect();"
+                      " return {x: r.left + r.width/2, y: r.top + r.height/2};})()")
+        self.mouse("mousePressed", s["x"], s["y"]); self.mouse("mouseReleased", s["x"], s["y"])
+        time.sleep(0.2)
+        self.assertTrue(self.b.ev(shown), "a press in the field closed the box")
+        # And the options item still switches: open → press it → closed, not closed-then-reopened.
+        self.b.ev("(()=>{document.getElementById('options').click(); return 1;})()")
+        time.sleep(0.2)
+        it = self.b.ev("(()=>{const r=document.querySelector('[data-do=\"search\"]').getBoundingClientRect();"
+                       " return {x: r.left + r.width/2, y: r.top + r.height/2};})()")
+        self.mouse("mousePressed", it["x"], it["y"]); self.mouse("mouseReleased", it["x"], it["y"])
+        time.sleep(0.2)
+        self.assertFalse(self.b.ev(shown), "the options item reopened the box instead of putting it away")
+
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
 class CommandsBehindCtrlK(unittest.TestCase):
