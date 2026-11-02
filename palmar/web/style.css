@@ -1347,7 +1347,7 @@ body.fold-l .fab { display: grid; }
    restart this **is** the question of what to do next. No new color: the accent it already uses for
    "the thing to press", and the same faint ink as the rows below it. */
 .restore { flex: none; margin: 8px; padding: 9px 10px 10px; border: 1px solid var(--line-2);
-  border-radius: var(--r-pill); background: var(--btn); }
+  border-radius: var(--r-panel); background: var(--btn); }   /* a panel, not a pill — the radius pass of 2026-11-01 caught it by its last line (user, 2026-11-02) */
 .rs-h { font-size: var(--t-12); color: var(--ink); margin-bottom: 6px; }
 .rs-r { font-size: var(--t-12); color: var(--ink-2); padding: 2px 0; }
 .rs-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
