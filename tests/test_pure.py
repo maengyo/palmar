@@ -219,6 +219,18 @@ class RestoreFile(unittest.TestCase):
                          "the snapshot wrote what it had instead of looking")
 
 
+class AnIdIsAlsoAnArgument(unittest.TestCase):
+    """`palmar --close <id>` and `--message … --to <id>` hand an id to argparse, which reads one that
+    begins with a dash as an option and quits. One id in 64 did (2026-11-02, a CLI test failing now
+    and then on CI). Ten thousand draws here: none may start with a dash, and they stay 22 wide."""
+
+    def test_no_id_starts_with_a_dash(self):
+        ids = [D.fresh_id() for _ in range(10000)]
+        self.assertFalse([x for x in ids if x.startswith("-")], "an id began with a dash")
+        self.assertEqual({len(x) for x in ids}, {22})
+        self.assertEqual(len(set(ids)), 10000, "ids repeated")
+
+
 class Names(unittest.TestCase):
     """protocol.md "이름 규칙": 1–64 characters, trimmed, no control characters."""
 

@@ -1856,6 +1856,19 @@ class Canvas:
 
 
 # ── Session registry + the /events broadcast ──────────────────────────────────────────
+def fresh_id() -> str:
+    """A session or canvas id: 22 URL-safe characters, unguessable, no sequence numbers (#29).
+
+    **Never starting with a dash.** An id is also a command-line argument (`palmar --close <id>`,
+    `--message … --to <id>`), and argparse reads `--to -Qx…` as a second option and quits with
+    "expected one argument". One id in 64 began that way, which is how the CLI tests failed once
+    in a while on CI and nowhere else (2026-11-02)."""
+    while True:
+        s = secrets.token_urlsafe(16)
+        if not s.startswith("-"):
+            return s
+
+
 class Registry:
     def __init__(self):
         self.sessions: dict[str, Session] = {}
@@ -1885,7 +1898,7 @@ class Registry:
         return sorted(self.sessions.values(), key=lambda s: s.created)
 
     def create(self, cwd: str, canvas=None, name=None) -> Session:
-        sid = secrets.token_urlsafe(16)          # 22 chars, unguessable. No sequence numbers (#29)
+        sid = fresh_id()                         # 22 chars, unguessable. No sequence numbers (#29)
         # Unknown canvas (or none given) → the default canvas. A session does not exist without one (⑪).
         cid = canvas if canvas in self.canvases else self.default_canvas().id
         write_pane_settings(sid)                 # must exist before the shell starts, so a claude typed at once finds it
@@ -1915,7 +1928,7 @@ class Registry:
     def new_canvas(self, name=None) -> Canvas:
         """**Appended at the end** — existing canvases keep their order, so one canvas frame broadcasts it."""
         self.canvas_seq += 1
-        c = Canvas(secrets.token_urlsafe(16), name, self.canvas_seq)
+        c = Canvas(fresh_id(), name, self.canvas_seq)
         self.canvases[c.id] = c
         self._renumber()
         return c
