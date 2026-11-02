@@ -4,7 +4,9 @@
 
 **Many terminals, one place, and each one keeps where you put it.**
 
-![palmar: three terminals on a canvas. Each carries a light — one working, one waiting for you, one finished. Two are dragged together into a named group and travel as one until a held Alt takes one back out, a PDF opens in a window of its own, and Ctrl with the wheel stands back far enough to see all of it](docs/img/palmar.gif)
+<p align="center"><img src="docs/img/palmar-light.png" alt="palmar in the light theme: three terminals on the canvas, the list on the left with one waiting at the top, the folder rail on the right" width="49%"> <img src="docs/img/palmar-dark.png" alt="the same screen in the dark theme" width="49%"></p>
+
+![palmar: three terminals on a canvas. Each carries a light — one working, one waiting for you, one finished. Two are dragged together into a named group and travel as one until a held Alt takes one back out, a PDF opens in a window of its own, Ctrl with the wheel stands back far enough to see all of it, and a terminal says something — a card at the bottom, then the bell's list with the address already a link](docs/img/palmar.gif)
 
 > palmar runs no model, calls no API, and sends your work nowhere. It opens shells and shows you
 > where they are. The agents are the ones you already run.
@@ -39,6 +41,13 @@ file opens in a window like any other — text with line numbers, a table for CS
 and text can be edited and saved in place. If something else wrote the file meanwhile, palmar says
 so instead of winning. Drag one in from Finder or Explorer and it opens where you let go; a button
 on its title bar hands it to the program your machine would have opened it with.
+
+**It says what happened while you were away.** A terminal can say something — `palmar --message
+"review requested …"` from a script that watches for it — and the bell keeps the last hundred: who
+said it, how long ago, with an address in it already a link. A dot on the bell, and a slow pulse,
+until you look. Notifications, if you turn them on, reach you when the window is not in front.
+Every command has a key and `Ctrl`/`⌘`+`K` lists them all, with the terminals that match what you
+type.
 
 **Nothing to install but Python.** The standard library and a vendored copy of xterm.js. No build
 step, no packages, and no network at runtime — palmar opens no connection of its own unless you turn
@@ -103,8 +112,15 @@ If 8801 is busy — a palmar on Windows beside one in WSL, say — it takes the 
 The window is a **712 KB** program that shows the same thing without a browser
 ([`app/`](app/README.md)) — the OS's own webview, not Electron. (That is the Linux download; the
 macOS one is 1.5 MB because the single file carries both Intel and Apple Silicon.) `palmar` opens it when it is there;
-the web button inside it opens a browser, and so does `palmar --web`. Both at once is fine: one daemon
+*Open in a browser* in its options list opens a browser, and so does `palmar --web`. Both at once is fine: one daemon
 per home, and a terminal opened in either shows up in the other, live.
+
+**Something running in a terminal can say something.** `palmar --message "build done"` puts that
+line on the terminal's row in the left list, shows it at the bottom of the page, and sends a
+notification if you are elsewhere and have turned them on. It stays on the row until you click the
+terminal, and the bell keeps the last hundred — with how long ago, an × on each, and the
+notification switch at the top. It needs no id — it knows which terminal it was typed in — so a script that watches
+something can call it in a loop; from outside a terminal, name one with `--to <id>` (`palmar --list`).
 
 ## Worth knowing
 

@@ -125,7 +125,14 @@ else
   else
     say "downloading palmar"
     command -v curl >/dev/null 2>&1 || die "curl is needed to download palmar (or git clone it and run install.sh from the clone)"
-    curl -fsSL "$PALMAR_TARBALL" -o "$TMP/palmar.tar.gz" || die "download failed — is the repository public, and is the network up?"
+    if ! curl -fsSL "$PALMAR_TARBALL" -o "$TMP/palmar.tar.gz"; then
+      # The same trap as install.ps1's: a PALMAR_TARBALL exported while trying a branch outlives the
+      # branch, and the usual line fails for no visible reason (2026-11-02).
+      case "$PALMAR_TARBALL" in
+        *codeload.github.com/maengyo/palmar/tar.gz/refs/heads/main) die "download failed — is the repository public, and is the network up?" ;;
+        *) die "download failed for PALMAR_TARBALL=$PALMAR_TARBALL — that variable is set in this shell, so the usual install line is not being used. \`unset PALMAR_TARBALL\` and run it again." ;;
+      esac
+    fi
   fi
   mkdir -p "$TMP/x" && tar -xzf "$TMP/palmar.tar.gz" -C "$TMP/x" || die "could not unpack the archive"
   GOT="$(find "$TMP/x" -maxdepth 3 -name '__init__.py' -path '*/palmar/*' | head -1)"

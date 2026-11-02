@@ -213,6 +213,9 @@ OUT_MIN_S = 1.0
 #: called for me, the moment it finished, things appearing and disappearing.
 #: idle→working and the like are not written: frequent, no shame in missing, and they bury the rest.
 LOG_MAX = 200
+#: How many `palmar --message` lines the daemon keeps for the bell's list (2026-10-30). A watcher that
+#: says something every five minutes for a day is 288; what matters is the last afternoon, not the week.
+MESSAGES_MAX = 100
 
 FIND_DEPTH = 4
 FIND_YIELD = 400        # yield to the loop every this many entries swept
@@ -641,6 +644,30 @@ def clamp_int(raw, default: int, lo: int, hi: int) -> int:
 NAME_MAX = 64
 
 
+#: How long a message may be. It is read on one line of the rail and in a notification, and a
+#: program that pipes a log into it should not be able to fill the page.
+MESSAGE_MAX = 300
+
+
+def clean_message(v, old=None):
+    """A message as the daemon keeps it: {"text", "at"}, or None to clear it.
+
+    **Each one is new, even with the same words.** `at` is what the page compares to decide whether to
+    say it, so "build done" sent twice is said twice — that is two builds. Lines are joined: the rail
+    shows one, and a newline in a notification is a different layout on every OS."""
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        raise ValueError("message must be a string or null")
+    text = " ".join(v.split())[:MESSAGE_MAX]
+    if not text:
+        return None
+    at = time.time()
+    if old and old.get("at", 0) >= at:          # the clock is not trusted to tick between two calls
+        at = old["at"] + 0.001
+    return {"text": text, "at": at}
+
+
 def clean_name(raw):
     """Name rules (canvases and sessions alike, protocol.md "캔버스"). What comes back is what is stored.
 
@@ -891,6 +918,9 @@ class Session:
         #: The last wait ended without a person typing here. Set in registry.changed, cleared the
         #: moment they type or a new wait begins.
         self.answered_elsewhere = False
+        #: `palmar --message` — {"text", "at"} or None. Held here and not in the page so a page that
+        #: opens later still sees it; cleared by a hand on the pane (the page PATCHes it to null).
+        self.message = None
         self.last_out = 0.0          # when bytes last came out (monotonic)
         self.out_start = 0.0         # when the output run now in progress started
         self.out_break = False       # a person typed — the next byte opens a new run
@@ -983,6 +1013,9 @@ class Session:
             "last_cursor": self.last_cursor,
             "created": self.created, "last_event": self.last_event,
             "canvas": self.canvas, "name": self.name,
+            # What something running in this pane asked to be said (`palmar --message`), until a
+            # person puts a hand on the pane. Not a status: it never touches the light.
+            "message": self.message,
             # True when this pane's last wait ended with nobody typing here (#14). The browser reads
             # it so the live row says "answered — not here" instead of claiming you finished it.
             "answered_elsewhere": self.answered_elsewhere,
@@ -1823,12 +1856,32 @@ class Canvas:
 
 
 # ── Session registry + the /events broadcast ──────────────────────────────────────────
+def fresh_id() -> str:
+    """A session or canvas id: 22 URL-safe characters, unguessable, no sequence numbers (#29).
+
+    **Never starting with a dash.** An id is also a command-line argument (`palmar --close <id>`,
+    `--message … --to <id>`), and argparse reads `--to -Qx…` as a second option and quits with
+    "expected one argument". One id in 64 began that way, which is how the CLI tests failed once
+    in a while on CI and nowhere else (2026-11-02)."""
+    while True:
+        s = secrets.token_urlsafe(16)
+        if not s.startswith("-"):
+            return s
+
+
 class Registry:
     def __init__(self):
         self.sessions: dict[str, Session] = {}
         #: What happened (up to LOG_MAX entries, oldest first). It outlives the session — which is why the
         #: name is pinned in **as the value it had then**, not as a reference.
         self.log: collections.deque = collections.deque(maxlen=LOG_MAX)
+        #: What terminals said (`palmar --message`), newest last, up to MESSAGES_MAX. **The daemon
+        #: keeps it, not the page**: a page that opens later, or the window beside a browser tab, has
+        #: to see the same list, and the moment it is wanted is after being away (2026-10-30). It is
+        #: not in restore.json — it belongs to this daemon's lifetime, and a restart's offer is about
+        #: terminals, not news. Each entry pins the pane's name as it was: the pane may be gone.
+        self.messages: collections.deque = collections.deque(maxlen=MESSAGES_MAX)
+        self.message_seq = 0
         #: Exactly the order shown in the tab strip. Python dicts keep insertion order, so this is order —
         #: order is never sorted separately, so there is nowhere for "from 0 with no gaps" to break.
         self.canvases: dict[str, Canvas] = {}
@@ -1845,7 +1898,7 @@ class Registry:
         return sorted(self.sessions.values(), key=lambda s: s.created)
 
     def create(self, cwd: str, canvas=None, name=None) -> Session:
-        sid = secrets.token_urlsafe(16)          # 22 chars, unguessable. No sequence numbers (#29)
+        sid = fresh_id()                         # 22 chars, unguessable. No sequence numbers (#29)
         # Unknown canvas (or none given) → the default canvas. A session does not exist without one (⑪).
         cid = canvas if canvas in self.canvases else self.default_canvas().id
         write_pane_settings(sid)                 # must exist before the shell starts, so a claude typed at once finds it
@@ -1875,7 +1928,7 @@ class Registry:
     def new_canvas(self, name=None) -> Canvas:
         """**Appended at the end** — existing canvases keep their order, so one canvas frame broadcasts it."""
         self.canvas_seq += 1
-        c = Canvas(secrets.token_urlsafe(16), name, self.canvas_seq)
+        c = Canvas(fresh_id(), name, self.canvas_seq)
         self.canvases[c.id] = c
         self._renumber()
         return c
@@ -1912,6 +1965,32 @@ class Registry:
                 w.write(frame)
             except Exception:
                 self.event_clients.discard(w)
+
+    # ── messages (`palmar --message`) ──
+    def post_message(self, s: Session, m: dict) -> dict:
+        """Keep what a terminal said and tell every page. Called once per new message, from PATCH."""
+        self.message_seq += 1
+        e = {"id": "m%d" % self.message_seq, "pane": s.id, "name": s.name, "cwd": s.cwd,
+             "text": m["text"], "at": m["at"]}
+        self.messages.append(e)
+        self.broadcast({"t": "message", "m": e})
+        return e
+
+    def drop_messages(self, mid=None) -> bool:
+        """One by id, or all of them. Every page gets the list that is left, whole — it is at most
+        MESSAGES_MAX small objects and a whole list cannot be applied out of order."""
+        if mid is None:
+            if not self.messages:
+                return True
+            self.messages.clear()
+        else:
+            keep = [e for e in self.messages if e["id"] != mid]
+            if len(keep) == len(self.messages):
+                return False
+            self.messages.clear()
+            self.messages.extend(keep)
+        self.broadcast({"t": "messages", "ms": list(self.messages)})
+        return True
 
     #: Transitions worth writing down. The value is the wording the browser shows as-is.
     LOG_WORTH = {"waiting": "wants you", "done": "finished"}
@@ -3720,6 +3799,12 @@ async def ws_events(reader, writer, headers: dict) -> None:
                              # Whether POST /api/notify can reach the OS here — for a window with no
                              # Notification API of its own (palmar's own window on a Mac).
                              "notify": notifier_argv("", "") is not None,
+                             # Which kind of pty is under the panes. xterm.js draws a ConPTY stream
+                             # differently once told (`windowsPty`): ConPTY repaints the screen with
+                             # moves and clears of its own, and without the flag a popup list that
+                             # closed took the lines above it with it — on Windows only, never on a
+                             # POSIX pty (user, 2026-11-02; a completion menu measured clean on macOS).
+                             "pty": "conpty" if sys.platform == "win32" else "posix",
                              # Whether the release check is on, and the newest version if it is
                              # newer than this one. Off by default; the page's switch turns it on.
                              "update": update_state(),
@@ -3730,6 +3815,8 @@ async def ws_events(reader, writer, headers: dict) -> None:
                              # **It comes along at the moment of attaching.** The moment you want to know
                              # "what happened while I was away" is exactly then, so it is not asked twice.
                              "log": list(registry.log),
+                             # What terminals said, for the bell's list — same reason as `log`.
+                             "messages": list(registry.messages),
                              # What the previous daemon left, offered rather than acted on. Dropped once
                              # anything has been opened — an offer to restore beside panes you already
                              # opened is noise, and the workspace it describes is no longer the one you have.
@@ -3949,9 +4036,20 @@ async def handle_request(reader, writer) -> None:
                 writer.write(http_error(400, "unknown canvas"))
                 return
             new_canvas = cid
-        if (new_name, new_canvas) != (s.name, s.canvas):
-            s.name, s.canvas = new_name, new_canvas
+        new_message = s.message
+        if "message" in obj:
+            try:
+                new_message = clean_message(obj.get("message"), s.message)
+            except ValueError as e:
+                writer.write(http_error(400, str(e)))
+                return
+        if (new_name, new_canvas, new_message) != (s.name, s.canvas, s.message):
+            s.name, s.canvas, s.message = new_name, new_canvas, new_message
             registry.changed(s)          # the sender gets the broadcast back too — the browser applies it idempotently by id
+            # A new message (not a clearing) also goes into the bell's list. The session frame above
+            # carries it to the row; this carries it to the list and is what the page toasts on.
+            if new_message is not None:
+                registry.post_message(s, new_message)
         writer.write(http_json(200, s.to_json()))
         return
 
@@ -3998,6 +4096,28 @@ async def handle_request(reader, writer) -> None:
         # Same spelling launch_target mints: the nonce in the query and a host with no dot, so
         # Chromium can keep this window's size across launches (loopback_name).
         writer.write(http_json(200, {"url": f"http://{loopback_name(PORT[0])}:{PORT[0]}/once?n={mint_once()}"}))
+        return
+    if path == "/api/messages" or path.startswith("/api/messages/"):
+        # The bell's list (2026-10-30). GET is for the tests and for a CLI that may come; DELETE is the
+        # × on a row and the "clear all" under the list. No POST: a message is posted through the
+        # pane it belongs to (PATCH /api/sessions/<id>), which is where `palmar --message` lands it.
+        if not token_ok:
+            writer.write(http(403))
+            return
+        mid = path[len("/api/messages/"):] if path.startswith("/api/messages/") else None
+        if method == "GET" and mid is None:
+            writer.write(http_json(200, list(registry.messages)))
+            return
+        if method != "DELETE":
+            writer.write(http(405))
+            return
+        if mid is not None and not _ID_RE.fullmatch(mid):
+            writer.write(http(404))
+            return
+        if not registry.drop_messages(mid):
+            writer.write(http(404))
+            return
+        writer.write(http(204))
         return
     if path == "/api/notify":
         # **The OS says it when the page cannot.** palmar's own window on a Mac (WKWebView) has no
@@ -5267,8 +5387,9 @@ def raise_windows_window() -> bool:
 #: of `run/token`, the way `--stop` and `--doctor` already reach a running daemon. Anything this
 #: could do, a person with that token could do with `curl` — which is the point: it is the same
 #: authority, not a second one.
-def ask_daemon(path: str, method: str = "GET", timeout: float = 5.0):
-    """(status, body) from the running daemon, or (0, reason) when there is nobody to ask."""
+def ask_daemon(path: str, method: str = "GET", timeout: float = 5.0, data=None):
+    """(status, body) from the running daemon, or (0, reason) when there is nobody to ask. `data`,
+    when given, goes as a JSON body."""
     try:
         token = TOKEN_FILE.read_text("utf-8").strip()
     except OSError:
@@ -5278,8 +5399,13 @@ def ask_daemon(path: str, method: str = "GET", timeout: float = 5.0):
     except OSError:
         return 0, "no address (%s) — is a daemon running for this HOME?" % URL_FILE
     base = url.split("/?")[0]
+    headers = {"Origin": base}
+    raw_body = None
+    if data is not None:
+        raw_body = json.dumps(data).encode("utf-8")
+        headers["Content-Type"] = "application/json"
     req = urllib.request.Request(base + path + ("&" if "?" in path else "?") + "token=" + token,
-                                 headers={"Origin": base}, method=method)
+                                 data=raw_body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read()
@@ -5331,6 +5457,31 @@ def close_session(sid: str) -> int:
         print("the daemon answered %d" % status, file=sys.stderr)
         return 1
     print("closed %s." % sid)
+    return 0
+
+
+def send_message(text: str, to: str = None) -> int:
+    """`palmar --message TEXT` — say something on the rail row of the pane it was typed in.
+
+    **The pane is the one this runs inside** (`$PALMAR_PANE`, which every pane's shell carries), so a
+    script that is watching something needs no id: it just says what it found. `--to` is for saying
+    it from outside, by an id from `--list`. An empty TEXT clears the message."""
+    sid = to or os.environ.get("PALMAR_PANE")
+    if not sid:
+        print("not inside a palmar terminal — run it in one, or name one with --to <id> "
+              "(`palmar --list` shows them).", file=sys.stderr)
+        return 1
+    status, body = ask_daemon("/api/sessions/" + quote(str(sid), safe=""), method="PATCH",
+                              data={"message": text})
+    if status == 0:
+        print(body, file=sys.stderr)
+        return 1
+    if status == 404:
+        print("no terminal with that id — `palmar --list` shows them.", file=sys.stderr)
+        return 1
+    if status != 200:
+        print("the daemon answered %d" % status, file=sys.stderr)
+        return 1
     return 0
 
 
@@ -6576,6 +6727,10 @@ def cli() -> None:
                     help="close one terminal by id (`--list` shows the ids), and exit")
     ap.add_argument("--stop", action="store_true",
                     help="stop this HOME's daemon (the shells in it die with it)")
+    ap.add_argument("--message", metavar="TEXT",
+                    help="show TEXT on this terminal's row in the page, until you click the terminal")
+    ap.add_argument("--to", metavar="ID",
+                    help="with --message: the terminal to say it on, when not run inside one")
     # **Detached is the default**, because the daemon outliving the terminal is the point of it
     # (principle 2). --foreground is for developing on it and for the tests, which have to be able to
     # terminate what they started. Windows gets there a different way — see detached_no_fork.
@@ -6590,6 +6745,8 @@ def cli() -> None:
         raise SystemExit(list_sessions())
     if args.close:
         raise SystemExit(close_session(args.close))
+    if args.message is not None:
+        raise SystemExit(send_message(args.message, args.to))
     if args.stop:
         raise SystemExit(stop_daemon())
     if args.doctor:

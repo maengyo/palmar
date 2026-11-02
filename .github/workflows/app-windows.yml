@@ -1,0 +1,48 @@
+# The window, built for Windows: `palmar-app.exe`, on WebView2 (wry's Windows backend). Nothing else
+# is linked — WebView2 is on every Windows 10/11 with Edge, which is every Windows.
+#
+# **A try, first** (2026-11-02, user: "windows는 창을 만들 수 없나?"). The Rust source has its
+# `cfg(not(unix))` branches, and `find_app` in the daemon already looks for `palmar-app.exe`; what
+# nobody had done was build it. This job says whether it builds at all and hands the exe out as an
+# artifact. Attaching it to a release is the step after — once somebody has run it.
+#
+#   gh workflow run app-windows.yml && gh run watch
+#   gh run download -n palmar-app-windows-x86_64
+#
+# It runs by hand, and on a push that touches app/ — the same rule as the Linux one.
+name: app (windows)
+
+on:
+  workflow_dispatch:
+  push:
+    paths: ["app/src/**", "app/Cargo.toml", "app/Cargo.lock", ".github/workflows/app-windows.yml"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: rust
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: build
+        working-directory: app
+        run: cargo build --release
+
+      - name: what came out
+        working-directory: app
+        shell: pwsh
+        run: |
+          Get-Item target/release/palmar-app.exe | Format-List Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: palmar-app-windows-x86_64
+          path: app/target/release/palmar-app.exe
+          if-no-files-found: error
+          retention-days: 90

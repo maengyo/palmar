@@ -129,15 +129,29 @@ enum Said {
 /// window *is* the browser here — without it the daemon would also open a tab.
 fn spawn_daemon() -> Result<String, String> {
     // `palmar` first: that is what install.sh puts on PATH, and it works from any directory.
+    // **On Windows it is `palmar.cmd`**, and CreateProcess does not look for `.cmd` the way a shell
+    // does (PATHEXT is the shell's), so it goes through `cmd /c` there (2026-11-02, first Windows
+    // build). The python fallback is `python` on Windows: there is no `python3` command.
+    #[cfg(windows)]
+    let mut attempts = vec![Attempt {
+        program: "cmd".into(),
+        args: vec!["/c".into(), "palmar".into(), "--no-browser".into()],
+        cwd: None,
+    }];
+    #[cfg(not(windows))]
     let mut attempts = vec![Attempt {
         program: "palmar".into(),
         args: vec!["--no-browser".into()],
         cwd: None,
     }];
+    #[cfg(windows)]
+    let python = "python";
+    #[cfg(not(windows))]
+    let python = "python3";
     // `python3 -m palmar` second, and **only with the checkout as its working directory**.
     match checkout_dir() {
         Some(dir) => attempts.push(Attempt {
-            program: "python3".into(),
+            program: python.into(),
             args: vec!["-m".into(), "palmar".into(), "--no-browser".into()],
             cwd: Some(dir),
         }),
@@ -162,6 +176,12 @@ fn spawn_daemon() -> Result<String, String> {
             .stderr(Stdio::piped());
         if let Some(dir) = &a.cwd {
             cmd.current_dir(dir);
+        }
+        // A console window would open behind the window for the child otherwise.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
         let mut child = match cmd.spawn() {
             Ok(c) => c,
