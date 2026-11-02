@@ -1310,8 +1310,17 @@ body.fold-l .fab { display: grid; }
 @keyframes bell-ping { 0% { background: color-mix(in srgb, var(--accent) 35%, transparent); } 100% { background: transparent; } }
 /* A terminal's message: one size up, more room, an accent edge on the left — news from elsewhere,
    not a note about what the page just did. Ten seconds, then the bell's list has it. */
-.toast.msg { font-size: var(--t-13); padding: 11px 16px 11px 13px; border-left: 3px solid var(--accent); max-width: min(760px, calc(100% - 32px)); }
-.toast.msg b { font-weight: 600; }
+/* **A card, not a line** (user, 2026-11-02: "더 크면 좋겠어"). The terminal's name as a small label on
+   its own line, the message under it at 14px, wrapping to three lines before it is cut, an accent
+   edge on the left and more room all round. 380px at the least, so a short message still reads as
+   a card and not as a chip. */
+.toast.msg {
+  font-size: var(--t-14); line-height: 1.5; padding: 14px 20px 15px 18px; border-left: 4px solid var(--accent);
+  min-width: min(380px, calc(100% - 32px)); max-width: min(760px, calc(100% - 32px));
+  white-space: normal; color: var(--ink); bottom: 22px; text-align: left;
+}
+.toast.msg b { display: block; font-size: var(--t-12); font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
+.toast.msg .undo { font-size: var(--t-13); margin-left: 8px; }
 .toast b { color: var(--ink); font-weight: 500; }
 .toast .d { color: var(--ink-3); }
 /* The undo beside a push-aside toast. A real <button> so it is reachable by keyboard, stripped back to
