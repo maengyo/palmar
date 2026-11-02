@@ -333,7 +333,7 @@ def run(out_dir: str, keep: bool) -> int:
 
         # ① the lights. **All three at once**, which is the whole point of them — one working, one
         # wanting you, one finished — and they arrive one at a time so you see them change. The
-        # mapping shown here is the one the code already has; ⑥ has not been settled.
+        # mapping is ⑥, settled as the code had it (2026-11-02).
         take.hold(1.4)
         d.raw("POST", "/hook/claude?pane=%s" % b["id"], {"hook_event_name": "UserPromptSubmit"})
         take.hold(1.1)

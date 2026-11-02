@@ -10,7 +10,7 @@
  *
  * Added 2026-09-08 (⑪ ⑫): the canvas tab row (.tabs), the minimap (.mm), list group folding (.grp),
  * renaming (.ed). **No new color was made** — the tab's dot and the minimap rectangles both use the
- * --st-* above as-is (⑥ is still undecided).
+ * --st-* above as-is (⑥, settled as they are on 2026-11-02).
  */
 
 /* **`hidden` must actually hide.** Any author rule that sets `display` beats the UA stylesheet's
@@ -686,7 +686,7 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .ses { transition: background .12s; }
 .ses:hover { background: var(--hover); }
 /* #31 ③ A row that stays even inside a folded canvas group — it is waiting. Marked with one --st-wait line on
-   the left. Not a new color (⑥ is still undecided). It answers "why is this showing when I folded it". */
+   the left. Not a new color (⑥). It answers "why is this showing when I folded it". */
 .ses.pinned { box-shadow: inset 2px 0 0 var(--st-wait); }
 /* A row in a canvas group indents one step — so that belonging to the header is visible. Not applied on the old
    status-grouping path (renderByStatus): there the group is a status, not a canvas, nothing to indent under. */
