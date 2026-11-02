@@ -74,7 +74,7 @@ WSL 안에서는 이미 된다. 이 문서는 **WSL 없이 윈도우에서 직�
 터미널이 열리고 연결된다.** 아침에 이 문서는 "멈춤 — 기계가 없어서" 였다.
 
 ```powershell
-$env:PALMAR_WINDOWS_ANYWAY=1
+$env:PALMAR_WINDOWS_ANYWAY=1      # 2026-11-02 부터는 없어도 뜬다 — 아래는 그때의 기록
 python -m palmar
 ```
 

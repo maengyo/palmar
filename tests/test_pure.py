@@ -254,15 +254,18 @@ class Startup(unittest.TestCase):
     """The guards at the top of the module — both of them used to sit *below* `import fcntl`, where
     neither could ever run on a platform that could not import it."""
 
-    def test_windows_gets_a_sentence_not_a_stack(self):
+    def test_windows_is_not_refused(self):
+        """The daemon used to quit on win32 with a sentence ("does not run natively yet") unless
+        PALMAR_WINDOWS_ANYWAY was set. Lifted 2026-11-02 (#29): the port has been the user's daily
+        Windows palmar since October. What is left to check here, on a POSIX machine pretending to
+        be Windows, is only that nothing above the imports quits — the imports themselves then fail
+        for want of Windows' asyncio, which is the platform's, not a guard's."""
         code = ("import sys; sys.platform = 'win32'; sys.path.insert(0, %r); import palmar.daemon"
                 % os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
         out = r.stdout + r.stderr
-        self.assertEqual(r.returncode, 1)
-        self.assertNotIn("Traceback", out)
-        self.assertIn("does not run natively on Windows", out)
-        self.assertIn("issues/29", out)
+        self.assertNotIn("does not run natively", out, "the Windows refusal is back")
+        self.assertNotIn("PALMAR_WINDOWS_ANYWAY", out)
 
     def test_the_package_itself_imports_anywhere(self):
         """`import palmar` must work even where the daemon cannot — it is what lets dev-stub run

@@ -460,5 +460,5 @@ if ($env:PATH -and ($env:PATH -split ';' | Where-Object { $_ -eq $bin })) {
   }
 }
 Say ''
-Say 'The launcher sets PALMAR_WINDOWS_ANYWAY for you, so `palmar` runs rather than refusing.'
+Say 'palmar runs natively here since 0.2.1 -- the launcher still sets PALMAR_WINDOWS_ANYWAY, which older daemons needed.'
 Say 'What is still missing there is at the top of this output, and in docs/windows.md.'

@@ -33,10 +33,11 @@ import sys
 # block so a missing module cannot turn "not supported yet" into an ImportError stack — and above
 # the Python-version check below, which was equally unreachable.
 #
-# `PALMAR_WINDOWS_ANYWAY` is **a development escape hatch, not a feature.** The port is being built
-# in steps and each round has to get further than the last, so there has to be a way to say "go on
-# and tell me what breaks". An environment variable rather than a flag, because nobody should find
-# it by reading `--help`. **Step 4 deletes this whole block**, hatch and all (docs/windows.md).
+# `PALMAR_WINDOWS_ANYWAY` **was** the development escape hatch for the Windows port: the daemon
+# refused to start on win32 without it. Lifted on 2026-11-02 — the port has been the user's daily
+# Windows palmar since October (hooks through the PowerShell preamble, the lights, copy and paste,
+# ConPTY read as ConPTY), so refusing by default had become a lie. The variable is still accepted
+# and means nothing; install.ps1's launcher may go on setting it.
 #
 # `pty` and `termios` used to be on that list too. They are gone from here as of #29 step 1: the pty
 # lives behind palmar/posixpty.py (palmar/conpty.py on Windows) and this file talks to an object.
@@ -54,19 +55,6 @@ if sys.platform == "win32":                      # pragma: no cover - Windows co
         except Exception:
             pass
 
-if sys.platform == "win32" and not os.environ.get("PALMAR_WINDOWS_ANYWAY"):
-    raise SystemExit(
-        "palmar does not run natively on Windows yet.\n"
-        "  Run the daemon inside WSL and open the address it prints in your Windows browser.\n"
-        "  The native port is tracked at https://github.com/maengyo/palmar/issues/29\n"
-        "\n"
-        "  The port is far enough along to try, if you want to help find what is missing:\n"
-        "      $env:PALMAR_WINDOWS_ANYWAY=1 ; palmar\n"
-        "  A daemon comes up and serves the page, terminals open, the hooks attach through a\n"
-        "  PowerShell preamble, and a pane says where it is and what it is doing (2026-09-18).\n"
-        "  What is not there yet: it stays attached to the terminal (no fork on Windows), and a\n"
-        "  pane opened with cmd.exe gets no hooks. docs/windows.md has the list."
-    )
 if sys.version_info < (3, 9):
     raise SystemExit("palmar: Python 3.9 or newer is required (/usr/bin/python3 is 3.9.6)")
 

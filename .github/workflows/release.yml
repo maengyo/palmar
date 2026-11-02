@@ -93,8 +93,26 @@ jobs:
           path: app/target/release/palmar-app
           if-no-files-found: error
 
+  # The Windows window (2026-11-02): WebView2, nothing else linked. Unsigned — SmartScreen asks
+  # once; signing is #12's. The runner has Rust already.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with:
+          persist-credentials: false
+      - name: build
+        working-directory: app
+        run: cargo build --release
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
+        with:
+          name: palmar-app-windows-x86_64
+          path: app/target/release/palmar-app.exe
+          if-no-files-found: error
+
   release:
-    needs: [mac, linux]
+    needs: [mac, linux, windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -108,8 +126,9 @@ jobs:
           set -eux
           mv out/palmar-app-macos-universal/palmar-app palmar-app-macos-universal
           mv out/palmar-app-linux-x86_64/palmar-app palmar-app-linux-x86_64
+          mv out/palmar-app-windows-x86_64/palmar-app.exe palmar-app-windows-x86_64.exe
           chmod +x palmar-app-macos-universal palmar-app-linux-x86_64
-          sha256sum palmar-app-macos-universal palmar-app-linux-x86_64 > SHA256SUMS
+          sha256sum palmar-app-macos-universal palmar-app-linux-x86_64 palmar-app-windows-x86_64.exe > SHA256SUMS
           cat SHA256SUMS
           ls -l palmar-app-*
       - name: the release
@@ -121,8 +140,8 @@ jobs:
           set -eux
           NOTES="palmar's own window, built for macOS (universal: Apple Silicon and Intel, 11.0+) and Linux x86_64 (glibc 2.35+, needs libwebkit2gtk-4.1-0). \`curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | sh\` fetches the one for your machine; the daemon itself is the Python tree on main."
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" palmar-app-macos-universal palmar-app-linux-x86_64 SHA256SUMS --clobber
+            gh release upload "$TAG" palmar-app-macos-universal palmar-app-linux-x86_64 palmar-app-windows-x86_64.exe SHA256SUMS --clobber
           else
-            gh release create "$TAG" palmar-app-macos-universal palmar-app-linux-x86_64 SHA256SUMS \
+            gh release create "$TAG" palmar-app-macos-universal palmar-app-linux-x86_64 palmar-app-windows-x86_64.exe SHA256SUMS \
               --title "palmar $TAG" --notes "$NOTES"
           fi
