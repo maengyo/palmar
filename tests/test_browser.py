@@ -4315,6 +4315,72 @@ class TheCanvasToolsWakeUp(unittest.TestCase):
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class APressOnTheFloor(unittest.TestCase):
+    """A press on the bare canvas lets go of the selected window; a press that becomes a drag (panning)
+    does not (user, 2026-11-02). What hangs on it: with a window selected its shell hears the keys, so
+    on Windows and Linux Ctrl+K is the shell's; let go, and Ctrl+K opens the commands."""
+
+    def setUp(self):
+        self.d = Daemon().start()
+        self.addCleanup(self.d.stop)
+        self.b = Browser().start()
+        self.addCleanup(self.b.stop)
+        self.d.open_pane(name="api")
+        self.b.open(self.d.url)
+        time.sleep(3)
+
+    def floor(self):
+        """A point on the bare floor: inside the scroller, clear of the window and of the minimap."""
+        return self.b.ev("""(()=>{const s=document.getElementById('cv-scroll').getBoundingClientRect();
+          const p={x: s.right-80, y: s.top+80};
+          if (document.elementFromPoint(p.x,p.y).id!=='cv-scroll') throw new Error('not the floor');
+          return p;})()""")
+
+    def mouse(self, kind, x, y, **kw):
+        a = {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1}
+        a.update(kw)
+        self.b.ws.call("Input.dispatchMouseEvent", a)
+
+    def select_window(self):
+        self.b.ev("""(()=>{const t=[...window.palmar.tiles.values()][0];
+          t.el.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true})); t.term.focus(); return 1;})()""")
+        time.sleep(0.2)
+        self.assertTrue(self.b.ev("!!document.querySelector('.tile.focus')"))
+
+    def ctrl_k(self):
+        for kind in ("keyDown", "keyUp"):
+            self.b.ws.call("Input.dispatchKeyEvent", {"type": kind, "key": "k", "code": "KeyK", "modifiers": 2, "windowsVirtualKeyCode": 75})
+        time.sleep(0.3)
+
+    def test_a_click_lets_go_and_a_drag_does_not(self):
+        p = self.floor()
+        self.select_window()
+        self.mouse("mousePressed", p["x"], p["y"]); self.mouse("mouseReleased", p["x"], p["y"])
+        time.sleep(0.2)
+        self.assertFalse(self.b.ev("!!document.querySelector('.tile.focus')"), "a click on the floor left the window selected")
+        self.assertIsNone(self.b.ev("window.palmar.focused()"))
+        self.assertFalse(self.b.ev("document.activeElement.closest && !!document.activeElement.closest('.tile')"), "the shell still has the keys")
+        self.select_window()
+        self.mouse("mousePressed", p["x"], p["y"])
+        for i in range(1, 7):
+            self.mouse("mouseMoved", p["x"] - 12 * i, p["y"] - 8 * i, buttons=1)
+            time.sleep(0.03)
+        self.mouse("mouseReleased", p["x"] - 72, p["y"] - 48)
+        time.sleep(0.2)
+        self.assertTrue(self.b.ev("!!document.querySelector('.tile.focus')"), "panning the view let go of the window")
+
+    def test_ctrl_k_is_the_shells_while_a_window_is_selected_and_the_pages_after(self):
+        p = self.floor()
+        self.select_window()
+        self.ctrl_k()
+        self.assertTrue(self.b.ev("document.getElementById('searchbox').hidden"), "Ctrl+K left the shell while its window was selected")
+        self.mouse("mousePressed", p["x"], p["y"]); self.mouse("mouseReleased", p["x"], p["y"])
+        time.sleep(0.2)
+        self.ctrl_k()
+        self.assertFalse(self.b.ev("document.getElementById('searchbox').hidden"), "Ctrl+K did not open the commands after the window was let go")
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
 class CommandsBehindCtrlK(unittest.TestCase):
     """The field behind Ctrl/⌘K lists every command with its key, and the terminals that match
     (2026-10-30, try/chrome-tidy). The bar lost most of its buttons the same week, and a key nobody

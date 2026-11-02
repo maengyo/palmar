@@ -3118,6 +3118,20 @@ function arrangeCanvas(canvasId) {
 }
 
 // ── focus · expand ──────────────────────────────────────
+// **A press on the bare floor lets go of the window** (user, 2026-11-02). Until now a window stayed
+// selected — accent edge, and the keys going to its shell — until another window was pressed, so on
+// Windows and Linux Ctrl+K kept going to the shell long after the hand had left the terminal. A press
+// that turns into a drag (panning) does not count: the hand is moving the view, not leaving anything.
+function unfocusTile() {
+  const t = tiles.get(focused);
+  if (!t) return;
+  t.el.classList.remove('focus');
+  focused = null;
+  for (const it of items.values()) it.classList.remove('cur');
+  const ae = document.activeElement;
+  if (ae && t.el.contains(ae)) ae.blur();     // the shell stops hearing the keys; the page hears them
+  renderMinimap();
+}
 function focusTile(id, opts) {
   opts = opts || {};
   const t = tiles.get(id);
@@ -3664,11 +3678,13 @@ cvScroll.addEventListener('pointerdown', (ev) => {
     // both ends; now the end moves instead, which is the only way left to reach the slack.
     panTo(b0x - dx / zoom, b0y - dy / zoom);
   };
-  const up = () => {
+  const up = (e2) => {
     cvScroll.classList.remove('panning');
     removeEventListener('pointermove', move);
     removeEventListener('pointerup', up);
     removeEventListener('pointercancel', up);
+    // A press that never became a drag is a click on the floor: the selected window lets go.
+    if (!on && e2 && e2.type === 'pointerup') unfocusTile();
   };
   addEventListener('pointermove', move);
   addEventListener('pointerup', up);
@@ -5649,6 +5665,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   holdStyle: () => holdStyle,
                   palette: () => root.dataset.pal || null, choosePalette, applyTheme, pickTheme, labelOf, renderers,
                   showSearch, commandList, showInbox, inbox: () => inbox.slice(),
+                  focused: () => focused, unfocusTile,
                   baseFont: () => FONT_PX, setBaseFont, termTheme, minimapOn: () => minimapOn,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
