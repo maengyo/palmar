@@ -3799,6 +3799,12 @@ async def ws_events(reader, writer, headers: dict) -> None:
                              # Whether POST /api/notify can reach the OS here — for a window with no
                              # Notification API of its own (palmar's own window on a Mac).
                              "notify": notifier_argv("", "") is not None,
+                             # Which kind of pty is under the panes. xterm.js draws a ConPTY stream
+                             # differently once told (`windowsPty`): ConPTY repaints the screen with
+                             # moves and clears of its own, and without the flag a popup list that
+                             # closed took the lines above it with it — on Windows only, never on a
+                             # POSIX pty (user, 2026-11-02; a completion menu measured clean on macOS).
+                             "pty": "conpty" if sys.platform == "win32" else "posix",
                              # Whether the release check is on, and the newest version if it is
                              # newer than this one. Off by default; the page's switch turns it on.
                              "update": update_state(),

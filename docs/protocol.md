@@ -584,7 +584,11 @@ macOS 의 맨 zsh 는 제목을 안 세워서 이 자리에서 안 보였다).
 
 서버 → 브라우저:
 ```jsonc
-{ "t": "hello", "canvases": [Canvas…], "sessions": [Session…] }
+{ "t": "hello", "canvases": [Canvas…], "sessions": [Session…],
+  "pty": "posix" }                                // 판 밑의 pty 종류: "posix" 또는 "conpty" (2026-11-02).
+                                                  // 브라우저는 conpty 면 xterm 에 windowsPty 를 준다 —
+                                                  // ConPTY 는 프로그램의 바이트를 그대로 넘기지 않고
+                                                  // 제 손으로 화면을 다시 그리기 때문이다
                                                   // 붙자마자 전체. canvases 는 order 순, sessions 는 만든 순
                                                   // 이 한 프레임 안에서 모든 session.canvas 는 이 canvases 안에 있다
 { "t": "session", "s": Session }                  // 생겼거나 바뀌었다 (status·alt·cols·rows·agent·canvas·name)

@@ -4315,6 +4315,32 @@ class TheCanvasToolsWakeUp(unittest.TestCase):
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class AConPtyStreamIsReadAsOne(unittest.TestCase):
+    """On Windows a completion list that closed under the prompt took the lines above it with it;
+    on a POSIX pty the same list (prompt_toolkit's, measured on macOS 2026-11-02) left nothing
+    behind. ConPTY does not pass a program's bytes through — it repaints the screen with moves and
+    clears of its own — and xterm has an option for exactly that (`windowsPty`). hello says which
+    pty the daemon has, and a terminal is built with the option when it is ConPTY's."""
+
+    def test_the_option_follows_what_hello_said(self):
+        with Daemon() as d, Browser() as b:
+            b.open(d.url)
+            time.sleep(1.5)
+            self.assertEqual(b.ev("window.palmar.ptyKind()"), "posix", "a POSIX daemon was not read as one")
+            d.open_pane(name="posix")
+            time.sleep(2)
+            # xterm's own default for the option is `{}`, so it is the backend that must be absent.
+            self.assertFalse(b.ev("(()=>{const t=[...window.palmar.tiles.values()][0]; return !!((t.term.options.windowsPty||{}).backend);})()"),
+                             "a POSIX pane was given the ConPTY option")
+            # What a Windows daemon's hello does to the next terminal built.
+            b.ev("window.palmar.setPtyKind('conpty')")
+            d.open_pane(name="conpty")
+            time.sleep(2)
+            opt = b.ev("(()=>{const t=[...window.palmar.tiles.values()].find(t=>t.s.name==='conpty'); return t.term.options.windowsPty || null;})()")
+            self.assertEqual((opt or {}).get("backend"), "conpty", "a ConPTY pane was not told so: %r" % (opt,))
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
 class APressOnTheFloor(unittest.TestCase):
     """A press on the bare canvas lets go of the selected window; a press that becomes a drag (panning)
     does not (user, 2026-11-02). What hangs on it: with a window selected its shell hears the keys, so

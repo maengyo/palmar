@@ -1382,6 +1382,10 @@ class TheBoardLivesOnTheDaemon(unittest.TestCase):
         hello = w.recv_json()
         self.assertEqual(hello["layout"], self.BOARD)
         self.assertIn("layout_rev", hello)
+        # And which pty the panes run on (2026-11-02): "conpty" on Windows, where xterm has to be
+        # told that the stream is ConPTY's repaint and not the program's bytes; "posix" everywhere
+        # else. This runs on macOS and Linux only until #29 (see .github/workflows/tests.yml).
+        self.assertEqual(hello["pty"], "conpty" if sys.platform == "win32" else "posix")
 
     def test_every_other_browser_hears_about_a_save(self):
         w = WS(self.d, "/events?token=" + self.d.token)

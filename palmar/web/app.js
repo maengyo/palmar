@@ -770,6 +770,12 @@ class Tile {
       //: **This is the browser's copy and it dies with the page.** What comes back after a reload
       //: is the daemon's ring (⑨), which is a separate size for a separate reason.
       scrollback: 10000,
+      // **A ConPTY stream is read as one** (2026-11-02). hello says which pty the daemon has; told
+      // `conpty`, xterm expects ConPTY's own repaints (it redraws the screen with cursor moves and
+      // clears rather than passing the program's bytes through) and stops treating them as the
+      // program's. Without it, on Windows, a completion list that closed under the prompt erased
+      // the lines above the prompt; a POSIX pty never showed it.
+      windowsPty: ptyKind === 'conpty' ? { backend: 'conpty' } : undefined,
       cursorBlink: false,
       allowProposedApi: true,
       // A link in terminal output (OSC 8) is somebody else's text: only http(s), and opened detached
@@ -4665,6 +4671,7 @@ let notifyAt = 0;              // when it actually rang last
 // none), the daemon says it for us: POST /api/notify hands the title and body to the OS. hello says
 // whether the daemon can, on this machine.
 let daemonNotify = false;
+let ptyKind = 'posix';          // what hello said the daemon's panes run on: 'posix' or 'conpty' (see Tile)
 const hasNotificationAPI = () => 'Notification' in window;
 const canRing = () => hasNotificationAPI() ? Notification.permission === 'granted' : daemonNotify;
 // `palmar` typed while palmar is open asks the daemon, and the daemon asks every page, to come to the
@@ -5268,6 +5275,7 @@ function connectEvents() {
       // would overwrite the first in the same strip.
       if (!checkProtocol(m)) checkVersion(m);
       daemonNotify = !!m.notify;
+      ptyKind = m.pty === 'conpty' ? 'conpty' : 'posix';   // before the sessions are placed: the terminals read it
       applyUpdate(m.update);
       if (!hasNotificationAPI() && !daemonNotify && notifyOn) setNotify(false);   // nothing here can ring
       takeLayout(m);                       // before the sessions are placed, so they land where the daemon says
@@ -5666,6 +5674,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   palette: () => root.dataset.pal || null, choosePalette, applyTheme, pickTheme, labelOf, renderers,
                   showSearch, commandList, showInbox, inbox: () => inbox.slice(),
                   focused: () => focused, unfocusTile,
+                  ptyKind: () => ptyKind, setPtyKind: (k) => { ptyKind = k; },
                   baseFont: () => FONT_PX, setBaseFont, termTheme, minimapOn: () => minimapOn,
                   // renderList forces a synchronous rebuild — the test uses it to check the "quiet while
                   // working" note without waiting on the 10s refresh. lastOutAt feeds quietFor.
