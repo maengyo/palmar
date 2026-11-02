@@ -10,7 +10,7 @@ thing** — all three panes recorded idle grey, so the status lights, which are 
 This drives the real daemon and the real page over the DevTools protocol, the way tests/ already
 does, and keeps the frames. Run it again after the UI changes and you get the same shots back.
 
-    python3 dev/record.py                 # writes docs/img/palmar.gif and .mp4
+    python3 dev/record.py                 # writes docs/img/palmar.gif and .mp4, and two stills
     python3 dev/record.py --out /tmp/x    # somewhere else, to look before replacing anything
     python3 dev/record.py --keep-frames   # leave the PNGs behind
 
@@ -284,6 +284,22 @@ def run(out_dir: str, keep: bool) -> int:
         d.raw("POST", "/hook/claude?pane=%s" % a["id"], {"hook_event_name": "PermissionRequest"})
         take.hold(1.8)
 
+        # **Two stills for the README** (2026-11-02), taken here where the picture is at its
+        # clearest: three windows, all three lights, nothing mid-drag. Dark is what the recording
+        # runs in; light is the other half of the product, and the page is told so twice for the same
+        # reason the dark one was (the media query reaches the PDF viewer; the select reaches palmar).
+        still = lambda name: open(os.path.join(out_dir, name), "wb").write(
+            __import__("base64").b64decode(br.ws.call("Page.captureScreenshot", {"format": "png"})["data"]))
+        os.makedirs(out_dir, exist_ok=True)
+        still("palmar-dark.png")
+        br.ev("(()=>{const s=document.getElementById('theme'); s.value='light:paper'; s.dispatchEvent(new Event('change')); return 1;})()")
+        br.ws.call("Emulation.setEmulatedMedia", {"features": [{"name": "prefers-color-scheme", "value": "light"}]})
+        time.sleep(0.6)
+        still("palmar-light.png")
+        br.ev("(()=>{const s=document.getElementById('theme'); s.value='dark:earth'; s.dispatchEvent(new Event('change')); return 1;})()")
+        br.ws.call("Emulation.setEmulatedMedia", {"features": [{"name": "prefers-color-scheme", "value": "dark"}]})
+        time.sleep(0.6)
+
         # ② carry one window onto another and hold: the gauge fills, and letting go joins them
         # Straight across, onto the one beside it. Nothing else is anywhere near the path.
         src = centre(br, "sh · router")
@@ -329,6 +345,18 @@ def run(out_dir: str, keep: bool) -> int:
             take.hold(1.6)
         else:
             take.hold(1.0)
+
+        # ⑥ **a terminal says something, and the bell keeps it** (2026-11-02). What a script that
+        # watches for a review request does: `palmar --message …`. The card at the bottom, then the
+        # list behind the bell with the address already a link — the half of the product that is for
+        # coming back to it.
+        d.raw("PATCH", "/api/sessions/%s" % c["id"],
+              {"message": "review requested  example/infra#48  https://github.com/example/infra/pull/48"})
+        take.hold(2.2)
+        br.ev("(()=>{document.getElementById('bell').click(); return 1;})()")
+        take.hold(2.0)
+        br.ev("(()=>{document.body.click(); return 1;})()")
+        take.hold(0.6)
 
         errs = br.errors()
         if errs:
