@@ -82,6 +82,10 @@ palmar --update
 `--yes` 는 그 질문에 미리 답하는 것이다. **clone 해서 쓰고 있으면 그렇다고 말하고 멈춘다** —
 거기서는 `git pull` 이 업데이트이고, `--update` 는 작업 트리를 버리게 된다.
 
+`palmar --uninstall` 은 그 반대다: 설치 스크립트가 넣은 트리·런처·바로가기·PATH 줄을, 무엇을
+지울지 말하고 물은 뒤에 지운다. `~/.palmar` 는 남는다 — 배치·설정·다시 열기 제안 — `--purge` 를
+붙이면 그것까지 지운다.
+
 트리를 받아 두고, `palmar` 실행기를 놓고(`~/.local/bin`, 윈도우는 `%LOCALAPPDATA%\palmar\bin`),
 PATH 에 한 번 올리고, 아무것도 시작하지 않는다. root 도 빌드도 없다. 먼저 읽어 보고 싶으면
 `git clone https://github.com/maengyo/palmar && sh palmar/install.sh` 가 눈앞의 체크아웃을 설치하고,

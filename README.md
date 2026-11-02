@@ -88,6 +88,10 @@ They come back as an offer, in the same folders; an agent comes back through its
 `--yes` answers the question in advance. **If you installed by cloning, it says so and stops** —
 there `git pull` is the update, and `--update` would throw your working tree away.
 
+`palmar --uninstall` is the other direction: it removes the tree, the launcher, the shortcuts and
+the PATH line the installer added, after saying so and asking. `~/.palmar` stays — your layout,
+settings and the restore offer — unless you add `--purge`.
+
 It downloads the tree, drops a `palmar` launcher (`~/.local/bin`, or `%LOCALAPPDATA%\palmar\bin`),
 puts that on your PATH once, and starts nothing. No root, no build. Prefer to read first?
 `git clone https://github.com/maengyo/palmar && sh palmar/install.sh` installs the checkout you can

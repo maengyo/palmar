@@ -5564,6 +5564,127 @@ def fetch_tree(url: str, into: Path) -> Path:
     return hits[0].parent.parent
 
 
+def installed_pieces(root: Path, platform: str = None, env=None):
+    """What the installer put on this machine besides the tree: (launcher, shortcuts, rc files, prefix).
+    install.sh and install.ps1 are the source of truth for every path here (#32)."""
+    platform = sys.platform if platform is None else platform
+    env = os.environ if env is None else env
+    if platform == "win32":
+        prefix = root.parent                                   # %LOCALAPPDATA%\palmar\src → the prefix
+        launcher = prefix / "bin" / "palmar.cmd"
+        shortcuts = []
+        appdata = env.get("APPDATA")
+        if appdata:
+            shortcuts.append(Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Start palmar.lnk")
+        home = Path(env.get("USERPROFILE") or env.get("HOME") or str(HOME))
+        shortcuts.append(home / "Desktop" / "Start palmar.lnk")
+        return launcher, shortcuts, [], prefix
+    prefix = root.parent.parent if root.parent.name == "share" else root.parent   # $PREFIX/share/palmar
+    launcher = prefix / "bin" / "palmar"
+    data = Path(env.get("XDG_DATA_HOME") or (Path(env.get("HOME") or str(HOME)) / ".local" / "share"))
+    shortcuts = [data / "applications" / "palmar-start.desktop"]
+    home = Path(env.get("HOME") or str(HOME))
+    rcs = [home / n for n in (".zshrc", ".bashrc", ".bash_profile", ".profile")]
+    return launcher, shortcuts, rcs, prefix
+
+
+def uninstall(purge: bool = False, yes: bool = False) -> int:
+    """`palmar --uninstall` — take out what the installer put in, and say so first (#32).
+
+    **`~/.palmar` stays unless `--purge`.** It holds restore.json, the board and the settings — what
+    somebody who reinstalls next week wants back. The tree, the launcher, the shortcuts and the PATH
+    line are the installer's and go. A checkout is refused the way `--update` refuses it: there is
+    nothing of the installer's to remove."""
+    kind, root = install_shape()
+    out = print
+    out("palmar %s" % __version__)
+    out("  tree      %s" % root)
+    if kind == "checkout":
+        out("")
+        out("  That is a git checkout — the installer put nothing here to take out.")
+        out("  Delete the folder if you are done with it; `palmar --stop` first if a daemon is up.")
+        if purge:
+            out("  (--purge would remove %s; it was not, since nothing else is being removed.)" % PALMAR_DIR)
+        return 0
+    launcher, shortcuts, rcs, prefix = installed_pieces(root)
+    marked = [rc for rc in rcs if rc.exists() and any(l.rstrip().endswith("# palmar") for l in rc.read_text("utf-8", "replace").splitlines())]
+    out("")
+    out("This will remove:")
+    out("      the tree       %s" % root)
+    if launcher.exists():
+        out("      the launcher   %s" % launcher)
+    for s in shortcuts:
+        if s.exists():
+            out("      the shortcut   %s" % s)
+    for rc in marked:
+        out("      the PATH line  in %s" % rc)
+    if sys.platform == "win32":
+        out("      the PATH entry %s (your user PATH)" % (prefix / "bin"))
+    out("      %s %s" % ("and the data  " if purge else "and keeps     ", PALMAR_DIR))
+    if not purge:
+        out("  (--purge removes that too: restore.json, the board, the settings)")
+    status, _ = ask_daemon("/api/sessions")
+    if status != 0:
+        out("  A daemon is running — it is stopped first, and the shells in its terminals close.")
+    if not yes:
+        try:
+            if input("Go ahead? [y/N] ").strip().lower() not in ("y", "yes"):
+                out("Nothing was removed.")
+                return 0
+        except EOFError:
+            out("Nothing was removed. (--yes to answer in advance)")
+            return 0
+    if status != 0:
+        stop_daemon()
+    gone = []
+    for s in shortcuts + [launcher]:
+        try:
+            if s.exists():
+                s.unlink()
+                gone.append(str(s))
+        except OSError as e:
+            print("uninstall: could not remove %s — %s" % (s, e), file=sys.stderr)
+    for rc in marked:
+        try:
+            lines = rc.read_text("utf-8", "replace").splitlines(keepends=True)
+            kept = [l for l in lines if not l.rstrip().endswith("# palmar")]
+            rc.write_text("".join(kept), "utf-8")
+            gone.append("the PATH line in %s" % rc)
+        except OSError as e:
+            print("uninstall: could not edit %s — %s" % (rc, e), file=sys.stderr)
+    if sys.platform == "win32":                     # pragma: no cover - the user PATH, in the registry
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE) as k:
+                cur, typ = winreg.QueryValueEx(k, "Path")
+                want = str(prefix / "bin").rstrip("\\").lower()
+                parts = [p for p in cur.split(";") if p.strip().rstrip("\\").lower() != want]
+                if len(parts) != len(cur.split(";")):
+                    winreg.SetValueEx(k, "Path", 0, typ, ";".join(parts))
+                    gone.append("the PATH entry %s" % (prefix / "bin"))
+        except Exception as e:
+            print("uninstall: could not edit the user PATH — %s" % e, file=sys.stderr)
+    try:
+        shutil.rmtree(str(root))
+        gone.append(str(root))
+    except OSError as e:
+        print("uninstall: could not remove the tree %s — %s" % (root, e), file=sys.stderr)
+        return 1
+    if purge:
+        try:
+            shutil.rmtree(str(PALMAR_DIR), ignore_errors=True)
+            gone.append(str(PALMAR_DIR))
+        except OSError:
+            pass
+    out("")
+    for g in gone:
+        out("removed  %s" % g)
+    if not purge:
+        out("kept     %s  (palmar --uninstall --purge removes it)" % PALMAR_DIR)
+    out("Open a new terminal: the `palmar` command is gone from it.")
+    return 0
+
+
 def update(yes: bool = False, url: str = None, start_args=()) -> int:
     """`palmar --update` — a newer tree, and the daemon restarted on it, in that order."""
     kind, root = install_shape()
@@ -6719,8 +6840,12 @@ def cli() -> None:
     # there has to be a way to say stop, and it is this one (asked for 2026-09-11).
     ap.add_argument("--update", action="store_true",
                     help="fetch a newer tree and restart the daemon (not for a git checkout)")
+    ap.add_argument("--uninstall", action="store_true",
+                    help="remove the installed tree, launcher, shortcuts and PATH line; keeps ~/.palmar")
+    ap.add_argument("--purge", action="store_true",
+                    help="with --uninstall: remove ~/.palmar too (restore.json, the board, the settings)")
     ap.add_argument("--yes", action="store_true",
-                    help="answer the question --update asks in advance")
+                    help="answer the question --update or --uninstall asks in advance")
     ap.add_argument("--list", action="store_true", dest="list_",
                     help="list the terminals this HOME's daemon has, and exit")
     ap.add_argument("--close", metavar="ID",
@@ -6737,6 +6862,8 @@ def cli() -> None:
     ap.add_argument("--foreground", action="store_true",
                     help="stay attached to this terminal (Ctrl-C stops it); detaching is the default")
     args = ap.parse_args()
+    if args.uninstall:
+        raise SystemExit(uninstall(purge=args.purge, yes=args.yes))
     if args.update:
         pass_on = [f for f, on in (("--no-browser", args.no_browser), ("--web", args.web),
                                    ("--new", args.new)) if on]

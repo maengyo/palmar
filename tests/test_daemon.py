@@ -2229,6 +2229,76 @@ class AnUpdateInPlace(unittest.TestCase):
             self.assertNotIn("fetching", r.stdout, "it fetched over a checkout")
 
 
+class AnUninstall(unittest.TestCase):
+    """`palmar --uninstall` (#32): takes out what install.sh put in — the tree, the launcher, the
+    desktop entry, the marked PATH line — and keeps ~/.palmar unless `--purge`. Driven the way a
+    person would, from the installed tree's own launch.py, against a fake install in a scratch
+    prefix and a scratch HOME."""
+
+    def fake_install(self):
+        from tests.helpers import REPO
+        prefix = tempfile.mkdtemp(prefix="palmar-unprefix-")
+        self.addCleanup(shutil.rmtree, prefix, ignore_errors=True)
+        home = tempfile.mkdtemp(prefix="palmar-unhome-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        tree = os.path.join(prefix, "share", "palmar")
+        shutil.copytree(REPO, tree, ignore=shutil.ignore_patterns(".git", "app", "__pycache__", "*.pyc"))
+        os.makedirs(os.path.join(prefix, "bin"))
+        launcher = os.path.join(prefix, "bin", "palmar")
+        io.open(launcher, "w").write("#!/bin/sh\nexec python3 %s/launch.py \"$@\"\n" % tree)
+        apps = os.path.join(home, ".local", "share", "applications")
+        os.makedirs(apps)
+        entry = os.path.join(apps, "palmar-start.desktop")
+        io.open(entry, "w").write("[Desktop Entry]\nName=Start palmar\n")
+        rc = os.path.join(home, ".zshrc")
+        io.open(rc, "w").write("alias ll='ls -l'\n\nexport PATH=\"%s/bin:$PATH\"  # palmar\nexport EDITOR=vi\n" % prefix)
+        os.makedirs(os.path.join(home, ".palmar"))
+        io.open(os.path.join(home, ".palmar", "restore.json"), "w").write("{}")
+        return prefix, home, tree, launcher, entry, rc
+
+    def run_it(self, tree, home, *args):
+        from tests.helpers import PYTHON
+        env = dict(os.environ, HOME=home, SHELL="/bin/zsh", PYTHONSAFEPATH="1")
+        env.pop("XDG_DATA_HOME", None)
+        return subprocess.run([PYTHON, os.path.join(tree, "launch.py"), "--uninstall", *args],
+                              capture_output=True, text=True, timeout=120, env=env)
+
+    def test_it_removes_the_installers_pieces_and_keeps_the_data(self):
+        prefix, home, tree, launcher, entry, rc = self.fake_install()
+        r = self.run_it(tree, home, "--yes")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        for gone in (tree, launcher, entry):
+            self.assertFalse(os.path.exists(gone), "%s is still there" % gone)
+        kept = io.open(rc).read()
+        self.assertNotIn("# palmar", kept, "the PATH line stayed")
+        self.assertIn("alias ll", kept)
+        self.assertIn("EDITOR=vi", kept, "a neighbouring line was lost")
+        self.assertTrue(os.path.exists(os.path.join(home, ".palmar", "restore.json")), "~/.palmar went without --purge")
+        self.assertIn("kept", r.stdout)
+
+    def test_purge_takes_the_data_too_and_no_answers_no(self):
+        prefix, home, tree, launcher, entry, rc = self.fake_install()
+        r = self.run_it(tree, home)                      # stdin is not a terminal: EOF, which is "no"
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("Nothing was removed", r.stdout)
+        self.assertTrue(os.path.exists(launcher), "it removed without a yes")
+        r = self.run_it(tree, home, "--purge", "--yes")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(home, ".palmar")), "--purge left ~/.palmar")
+        self.assertFalse(os.path.exists(tree))
+
+    def test_a_checkout_is_refused(self):
+        from tests.helpers import PYTHON, REPO
+        home = tempfile.mkdtemp(prefix="palmar-unhome-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        r = subprocess.run([PYTHON, os.path.join(REPO, "launch.py"), "--uninstall", "--yes"],
+                           capture_output=True, text=True, timeout=60,
+                           env=dict(os.environ, HOME=home, PYTHONSAFEPATH="1"))
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("checkout", r.stdout)
+        self.assertTrue(os.path.exists(os.path.join(REPO, "launch.py")), "it removed the checkout!")
+
+
 class WhatAPaneWasFor(unittest.TestCase):
     """What `restore.json` keeps for a pane that is about to be lost to a restart. The folder was
     already there; what was running in it is the half that makes an agent's `--resume` reachable
