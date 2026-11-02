@@ -490,6 +490,44 @@ CSS transform 아래 xterm.js 6+WebGL 의 글자 측정은 아직 안 쟀다 —
 거절한 것: 포트가 옮겨질 때 키를 새로 만드는 안 — 옛 포트에 앉은 스쿼터가 북마크로 키를 받는 것은 데몬이
 꺼져 있을 때의 포트 스쿼팅 그 자체이고, 그것은 #12(유닉스 소켓)가 답이라고 이미 적혀 있다.
 
+### ②-2 2026년의 취약점 부류에 대 본 것 (2026-11-02)
+
+올해 많이 터진 부류(조사: MCP SDK 의 DNS rebinding CVE-2026-35568·CVE-2026-11624, Tauri 의 CSP 우회
+CVE-2026-95626, Claude HUD 의 OSC 8 삽입 CVE-2026-47090, GitHub Actions 태그 force-push — setup-trivy 3월·
+actions-cool 5월)를 기준으로 데몬에 **직접 찔러 본 것**(임시 HOME 의 시험 데몬, 원시 HTTP):
+
+| 부류 | 찔러 본 것 | 결과 |
+|---|---|---|
+| DNS rebinding | `Host: evil.example`, 토큰 맞음 | 403 |
+| 교차 출처 웹소켓 | `Origin: http://evil.example`, `Origin: null` | 403 |
+| 인증 없는 로컬 API | 토큰·키 없음 / 틀린 키 | 403 |
+| 정적 파일 traversal | `GET /../../etc/passwd` | 404 |
+| 스크립트 삽입 | CSP 에 `data:`·`blob:` 없음, nonce + `object-src 'none'` + `base-uri 'none'` | 해당 없음 |
+| 터미널 escape | xterm 링크는 http(s) 만·`noopener`, OSC 52 핸들러 없음, 메시지는 텍스트 노드 | 해당 없음 |
+
+`/api/dirs?path=/etc`·`/api/file?path=/etc/hosts` 가 200 인 것은 "어디든 둘러보되 쓰기는 root 아래"
+(2026-09-11) 그대로다.
+
+**고친 것 둘** — 둘 다 경계 바깥이 아니라 **공급망**이다.
+
+- **`--update`·install.sh·install.ps1 이 main 의 머리를 받고 있었다.** TLS 뿐, 검증 없음. 커밋 하나가 그
+  시간 안에 모든 `--update` 에 닿았다 — 릴리스하려던 것이 아니어도. 이제 release.yml 이 태그에서
+  `git archive` 로 트리(`palmar.tar.gz`·`palmar.zip`)를 잘라 창 바이너리와 **같은 SHA256SUMS 에 넣고**,
+  셋 다 `releases/latest/download/` 에서 받아 그것과 맞춘다. 옆에 SHA256SUMS 가 없는 주소(브랜치)는
+  거절한다. 로컬 파일(`PALMAR_TARBALL=/a/file`, 시험용)은 옆에 SHA256SUMS 가 있을 때만 본다.
+  **무엇을 사는가는 정확히**: 찢긴 다운로드, 바꿔치기된 자산, 릴리스가 아닌 트리. **못 사는 것**: 뚫린
+  GitHub 계정 — 합계 파일이 같은 곳에서 같은 TLS 로 온다. 그건 GitHub 에 없는 키의 서명이 있어야 하고,
+  한 줄 설치가 지금 그걸 들 수 없다(④ 가 서명과 함께 정한다).
+- **CI 액션 절반이 태그 고정이었다**(`actions/checkout@v4` 류). 전부 그 태그가 가리키는 커밋 SHA 로
+  바꿨다(`# v4` 주석은 사람 몫). release.yml 은 이미 그랬고, 나머지 여섯 파일이 아니었다.
+
+**알고 받아들이는 것** — 서명 없는 맥 `.app`·윈도우 `.exe`(#12 의 signing), `install.sh | sh` 자체의
+신뢰, 상태등이 OSC 타이틀을 읽으므로 pane 안 프로그램이 색을 속일 수 있음(상태등뿐이고 키는 자동으로
+안 보낸다), 3.9 바닥이라 `tarfile` 필터 대신 손 검사.
+
+**아직 정하지 않은 것** — pane 안 에이전트와 데몬 사이의 경계. 위 "panes 는 서로 격리되지 않는다" 의
+연장이고, 사용자가 보고 정한다.
+
 ### ③ 좌표·크기·배치를 어디에 두는가
 **정해졌다 (2026-09-14, 사용자): 데몬 쪽 파일이다.** `~/.palmar/layout.json`(0600), 하나의 객체
 `{session id: {x, y, w, h, z, f?, g?}}` — 자리·크기·z·글자 크기·**그룹 소속**까지 한 곳이다.

@@ -20,8 +20,11 @@ set -eu
 # Run from inside a clone, this installs the checkout you are in. Run any other way — the one-line
 # `curl … | sh` — it downloads the tree from GitHub and keeps it under $PREFIX/share/palmar, which is
 # what the launcher then runs. PALMAR_TARBALL overrides the source: a URL, or a local .tar.gz (tests).
+# The tree is the latest release's — cut from the tag by release.yml — and has to match the SHA256SUMS
+# the same release carries, not whatever main is this hour (2026-11-02). A URL with no SHA256SUMS
+# beside it is refused; a local file is checked only when one sits beside it.
 PALMAR_PYPI="${PALMAR_PYPI:-}"          # "palmar" once it is on PyPI — then pip is used instead
-PALMAR_TARBALL="${PALMAR_TARBALL:-https://codeload.github.com/maengyo/palmar/tar.gz/refs/heads/main}"
+PALMAR_TARBALL="${PALMAR_TARBALL:-https://github.com/maengyo/palmar/releases/latest/download/palmar.tar.gz}"
 PREFIX="${PALMAR_PREFIX:-$HOME/.local}"
 
 say()  { printf '%s\n' "$*"; }
@@ -120,8 +123,17 @@ else
     /*)    [ -f "$PALMAR_TARBALL" ] || die "PALMAR_TARBALL=$PALMAR_TARBALL is not a file" ;;
     *)     die "PALMAR_TARBALL must be a URL or an absolute path" ;;
   esac
+  # sha256 of a file, via the Python already found — there is no one sha256 command across macOS and Linux.
+  sha256_of() { "$PY" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
+  # The digest SHA256SUMS gives for a name (sha256sum's format, a `*` before a binary-mode name), or nothing.
+  sum_for() { awk -v n="$2" '($2 == n || $2 == "*" n) && length($1) == 64 && $1 ~ /^[0-9a-fA-F]+$/ { print tolower($1); exit }' "$1"; }
   if [ -f "$PALMAR_TARBALL" ]; then
     cp "$PALMAR_TARBALL" "$TMP/palmar.tar.gz"
+    SUMS="$(dirname "$PALMAR_TARBALL")/SHA256SUMS"
+    if [ -f "$SUMS" ]; then
+      WANT="$(sum_for "$SUMS" "$(basename "$PALMAR_TARBALL")")"
+      [ -n "$WANT" ] && [ "$WANT" = "$(sha256_of "$TMP/palmar.tar.gz")" ] || die "$PALMAR_TARBALL does not match the SHA256SUMS beside it"
+    fi
   else
     say "downloading palmar"
     command -v curl >/dev/null 2>&1 || die "curl is needed to download palmar (or git clone it and run install.sh from the clone)"
@@ -129,10 +141,20 @@ else
       # The same trap as install.ps1's: a PALMAR_TARBALL exported while trying a branch outlives the
       # branch, and the usual line fails for no visible reason (2026-11-02).
       case "$PALMAR_TARBALL" in
-        *codeload.github.com/maengyo/palmar/tar.gz/refs/heads/main) die "download failed — is the repository public, and is the network up?" ;;
+        *github.com/maengyo/palmar/releases/latest/download/palmar.tar.gz) die "download failed — is the repository public, and is the network up?" ;;
         *) die "download failed for PALMAR_TARBALL=$PALMAR_TARBALL — that variable is set in this shell, so the usual install line is not being used. \`unset PALMAR_TARBALL\` and run it again." ;;
       esac
     fi
+    # **The sums sit beside the archive, and an address with none is refused.** A release has them; a
+    # branch archive does not, and installing a tree nobody cut as a release is not what this line is
+    # for. Same origin as the archive, so this catches a torn download, a swapped asset and a
+    # non-release — not a compromised GitHub, which is the trust this script itself arrived on.
+    NAME="$(basename "$PALMAR_TARBALL")"
+    curl -fsSL "$(dirname "$PALMAR_TARBALL")/SHA256SUMS" -o "$TMP/SHA256SUMS" \
+      || die "no SHA256SUMS beside $PALMAR_TARBALL — a release carries one; a branch does not"
+    WANT="$(sum_for "$TMP/SHA256SUMS" "$NAME")"
+    [ -n "$WANT" ] || die "the release's SHA256SUMS does not list $NAME"
+    [ "$WANT" = "$(sha256_of "$TMP/palmar.tar.gz")" ] || die "$NAME does not match the release's SHA256SUMS — not installed"
   fi
   mkdir -p "$TMP/x" && tar -xzf "$TMP/palmar.tar.gz" -C "$TMP/x" || die "could not unpack the archive"
   GOT="$(find "$TMP/x" -maxdepth 3 -name '__init__.py' -path '*/palmar/*' | head -1)"

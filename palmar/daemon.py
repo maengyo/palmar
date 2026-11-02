@@ -5504,7 +5504,50 @@ def short_home(path: str) -> str:
 #: newer `palmar/` would re-ask about PATH and re-fetch the window for nothing. Placing a tree is the
 #: one part this needs, and it is ten lines — the rest of install.sh is Python discovery and PATH,
 #: which is where its length comes from and none of which is in question here.
-PALMAR_TARBALL = "https://codeload.github.com/maengyo/palmar/tar.gz/refs/heads/main"
+#:
+#: **A release, not main's head** (2026-11-02 security check). Until then this fetched whatever
+#: main was at that moment, so a commit reached every `--update` the hour it landed — including a
+#: commit nobody meant to ship. Now the tree is a release asset, cut by release.yml with
+#: `git archive` from the tag, and it has to match the SHA256SUMS the same release carries.
+#: What the match buys is exact: a torn download, a swapped asset, a tree that is not a release.
+#: What it does not buy is a defence against a compromised GitHub account — the sums come from the
+#: same place over the same TLS. That would take a signature with a key that is not on GitHub,
+#: which is not something a one-line install can carry today (④ decides that along with signing).
+PALMAR_TARBALL = "https://github.com/maengyo/palmar/releases/latest/download/palmar.tar.gz"
+SUMS_NAME = "SHA256SUMS"
+
+
+def sha256_of(path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def expected_sha256(sums: str, name: str) -> str:
+    """The digest SHA256SUMS gives for `name`, or ''. The format is sha256sum's — `<hex>  <name>`,
+    one per line, a `*` before a name read in binary mode — and anything else on the line is not
+    a digest, so a stray line cannot be made to vouch for the archive."""
+    for line in (sums or "").splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        digest, fname = parts
+        if fname.lstrip("*") == name and re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+            return digest.lower()
+    return ""
+
+
+def verify_tree_archive(ball: Path, name: str, sums_text: str) -> None:
+    """Refuse an archive that SHA256SUMS does not vouch for — missing from it as much as wrong."""
+    want = expected_sha256(sums_text, name)
+    if not want:
+        raise ValueError("%s does not list %s — not a release" % (SUMS_NAME, name))
+    got = sha256_of(ball)
+    if not hmac.compare_digest(got, want):
+        raise ValueError("%s does not match %s (got %s…, the release says %s…)"
+                         % (name, SUMS_NAME, got[:12], want[:12]))
 
 
 def tree_root() -> Path:
@@ -5532,8 +5575,25 @@ def fetch_tree(url: str, into: Path) -> Path:
         req = urllib.request.Request(url, headers={"User-Agent": "palmar/" + __version__})
         with urllib.request.urlopen(req, timeout=60) as r, open(ball, "wb") as fh:
             shutil.copyfileobj(r, fh)
+        #: **The sums come from beside the archive, and a URL with none is refused.** A release has
+        #: them; an address somebody typed to try a branch does not, and that is the point — a tree
+        #: nobody signed off on is not what `--update` is for. (`PALMAR_TARBALL=/a/file` stays the
+        #: test hook: a path on disk is this machine's own, and is checked only when a SHA256SUMS
+        #: sits beside it.)
+        base, name = url.rsplit("/", 1)
+        req = urllib.request.Request(base + "/" + SUMS_NAME, headers={"User-Agent": "palmar/" + __version__})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                sums = r.read(1 << 16).decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            raise ValueError("no %s beside %s (HTTP %s) — a release carries one; a branch does not"
+                             % (SUMS_NAME, name, e.code))
+        verify_tree_archive(ball, name, sums)
     else:
         shutil.copyfile(url, ball)
+        beside = Path(url).parent / SUMS_NAME
+        if beside.is_file():
+            verify_tree_archive(ball, Path(url).name, beside.read_text("utf-8", "replace"))
     out = work / "x"
     out.mkdir()
     with tarfile.open(ball) as tf:

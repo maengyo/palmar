@@ -80,8 +80,10 @@ half, then `powershell -ExecutionPolicy Bypass -File .\install.ps1`.
 palmar --update
 ```
 
-It fetches a newer tree, stops the daemon and starts it again — in that order, which is the part
-that is easy to get wrong by hand. It says what it is about to do first, and the shells in your
+It fetches the latest release's tree, checks it against the release's `SHA256SUMS`, stops the
+daemon and starts it again — in that order, which is the part that is easy to get wrong by hand.
+(The installers fetch the same way. A tree that is not a release — a branch, main's head — is
+refused: there is no `SHA256SUMS` beside it.) It says what it is about to do first, and the shells in your
 open terminals close with the daemon, so it lists them and what each was running before it asks.
 They come back as an offer, in the same folders; an agent comes back through its own `--resume`.
 

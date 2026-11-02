@@ -76,7 +76,10 @@ $here = $null
 if ($MyInvocation.MyCommand.Path) { $here = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $src = $null
 if ($here -and (Test-Path (Join-Path $here 'palmar\__init__.py'))) { $src = $here }
-$zip = if ($env:PALMAR_ZIP) { $env:PALMAR_ZIP } else { 'https://github.com/maengyo/palmar/archive/refs/heads/main.zip' }
+# The latest release's tree, matched against the SHA256SUMS the release carries -- not main's head
+# (2026-11-02). A URL with no SHA256SUMS beside it is refused; a local file is checked only when one
+# sits beside it.
+$zip = if ($env:PALMAR_ZIP) { $env:PALMAR_ZIP } else { 'https://github.com/maengyo/palmar/releases/latest/download/palmar.zip' }
 $fetched = $false
 
 # -- 1. what is here ----------------------------------------------------------
@@ -287,8 +290,25 @@ if (-not $src) {
   $tmp = Join-Path ([IO.Path]::GetTempPath()) ('palmar-' + [IO.Path]::GetRandomFileName())
   New-Item -ItemType Directory -Force -Path $tmp | Out-Null
   $zipFile = Join-Path $tmp 'palmar.zip'
+  # The digest SHA256SUMS gives for a name (sha256sum's format, a `*` before a binary-mode name), or $null.
+  function SumFor([string]$sumsFile, [string]$name) {
+    foreach ($line in Get-Content -LiteralPath $sumsFile) {
+      $parts = $line.Trim() -split '\s+', 2
+      if ($parts.Count -ne 2) { continue }
+      if ($parts[1].TrimStart('*') -eq $name -and $parts[0] -match '^[0-9a-fA-F]{64}$') { return $parts[0].ToLower() }
+    }
+    return $null
+  }
+  function CheckSums([string]$file, [string]$sumsFile, [string]$name, [string]$where) {
+    $want = SumFor $sumsFile $name
+    if (-not $want) { Die ("the SHA256SUMS {0} does not list {1}" -f $where, $name) }
+    $got = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLower()
+    if ($got -ne $want) { Die ("{0} does not match the SHA256SUMS {1} -- not installed" -f $name, $where) }
+  }
   if (Test-Path -LiteralPath $zip) {
     Copy-Item -LiteralPath $zip -Destination $zipFile
+    $sums = Join-Path (Split-Path -Parent $zip) 'SHA256SUMS'
+    if (Test-Path -LiteralPath $sums) { CheckSums $zipFile $sums (Split-Path -Leaf $zip) 'beside it' }
   } else {
     Say ("downloading palmar from {0}" -f $zip)
     try { Invoke-WebRequest -UseBasicParsing -Uri $zip -OutFile $zipFile }
@@ -301,6 +321,14 @@ if (-not $src) {
       }
       Die ("download failed -- is the repository public, and is the network up? ({0})" -f $_.Exception.Message)
     }
+    # The sums sit beside the archive, and an address with none is refused: a release has them, a
+    # branch archive does not. Same origin as the archive, so this catches a torn download, a swapped
+    # asset and a non-release -- not a compromised GitHub, which is the trust this script arrived on.
+    $sumsFile = Join-Path $tmp 'SHA256SUMS'
+    $sumsUrl = $zip.Substring(0, $zip.LastIndexOf('/')) + '/SHA256SUMS'
+    try { Invoke-WebRequest -UseBasicParsing -Uri $sumsUrl -OutFile $sumsFile }
+    catch { Die ("no SHA256SUMS beside {0} -- a release carries one; a branch does not ({1})" -f $zip, $_.Exception.Message) }
+    CheckSums $zipFile $sumsFile $zip.Substring($zip.LastIndexOf('/') + 1) "the release carries"
   }
   try { Expand-Archive -LiteralPath $zipFile -DestinationPath (Join-Path $tmp 'x') -Force }
   catch { Die ("could not unpack the archive ({0})" -f $_.Exception.Message) }

@@ -1,6 +1,7 @@
-# A release: the window, built for a Mac (one universal binary) and for Linux x86_64, attached to a
-# GitHub Release — which is what install.sh fetches from `releases/latest/download/…` when the machine
-# has no build of its own. Actions artifacts expire after 90 days; a release asset does not.
+# A release: the Python tree, cut from the tag, and the window built for a Mac (one universal
+# binary), Linux x86_64 and Windows x86_64, attached to a GitHub Release with their SHA256SUMS —
+# which is what install.sh, install.ps1 and `palmar --update` fetch from `releases/latest/download/…`.
+# Actions artifacts expire after 90 days; a release asset does not.
 #
 #   git tag v0.1.0 && git push origin v0.1.0        # or: gh workflow run release.yml -f tag=v0.1.0
 #
@@ -111,8 +112,37 @@ jobs:
           path: app/target/release/palmar-app.exe
           if-no-files-found: error
 
+  # The Python tree itself, cut from the tag (2026-11-02 security check): `palmar --update`,
+  # install.sh and install.ps1 fetch *this* and match it against SHA256SUMS, instead of taking
+  # main's head over TLS and nothing else. Read-only like the builds; the release job only
+  # downloads it.
+  tree:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+      - name: archive the tree
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -eux
+          git archive --format=tar.gz --prefix="palmar-$TAG/" -o palmar.tar.gz HEAD
+          git archive --format=zip    --prefix="palmar-$TAG/" -o palmar.zip    HEAD
+          tar -tzf palmar.tar.gz | grep -q "palmar-$TAG/palmar/__init__.py"
+          ls -l palmar.tar.gz palmar.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
+        with:
+          name: palmar-tree
+          path: |
+            palmar.tar.gz
+            palmar.zip
+          if-no-files-found: error
+
   release:
-    needs: [mac, linux, windows]
+    needs: [mac, linux, windows, tree]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -127,10 +157,12 @@ jobs:
           mv out/palmar-app-macos-universal/palmar-app palmar-app-macos-universal
           mv out/palmar-app-linux-x86_64/palmar-app palmar-app-linux-x86_64
           mv out/palmar-app-windows-x86_64/palmar-app.exe palmar-app-windows-x86_64.exe
+          mv out/palmar-tree/palmar.tar.gz out/palmar-tree/palmar.zip .
           chmod +x palmar-app-macos-universal palmar-app-linux-x86_64
-          sha256sum palmar-app-macos-universal palmar-app-linux-x86_64 palmar-app-windows-x86_64.exe > SHA256SUMS
+          sha256sum palmar-app-macos-universal palmar-app-linux-x86_64 palmar-app-windows-x86_64.exe \
+            palmar.tar.gz palmar.zip > SHA256SUMS
           cat SHA256SUMS
-          ls -l palmar-app-*
+          ls -l palmar-app-* palmar.tar.gz palmar.zip
       - name: the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -138,10 +170,10 @@ jobs:
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -eux
-          NOTES="palmar's own window, built for macOS (universal: Apple Silicon and Intel, 11.0+) and Linux x86_64 (glibc 2.35+, needs libwebkit2gtk-4.1-0). \`curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | sh\` fetches the one for your machine; the daemon itself is the Python tree on main."
+          NOTES="The daemon (palmar.tar.gz / palmar.zip — what install.sh, install.ps1 and \`palmar --update\` fetch, checked against SHA256SUMS) and palmar's own window, built for macOS (universal: Apple Silicon and Intel, 11.0+), Linux x86_64 (glibc 2.35+, needs libwebkit2gtk-4.1-0) and Windows x86_64 (WebView2). \`curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | sh\` fetches the ones for your machine."
+          ASSETS="palmar.tar.gz palmar.zip palmar-app-macos-universal palmar-app-linux-x86_64 palmar-app-windows-x86_64.exe SHA256SUMS"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" palmar-app-macos-universal palmar-app-linux-x86_64 palmar-app-windows-x86_64.exe SHA256SUMS --clobber
+            gh release upload "$TAG" $ASSETS --clobber
           else
-            gh release create "$TAG" palmar-app-macos-universal palmar-app-linux-x86_64 palmar-app-windows-x86_64.exe SHA256SUMS \
-              --title "palmar $TAG" --notes "$NOTES"
+            gh release create "$TAG" $ASSETS --title "palmar $TAG" --notes "$NOTES"
           fi

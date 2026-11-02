@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 15          # the deadline exists to stop a hang from burning minutes
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
 
       # The runner's own Python is used deliberately — actions/setup-python costs another 20-30s
       # and we have no version to pin to yet. What it happens to be is itself a fact worth printing.

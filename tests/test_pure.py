@@ -6,6 +6,7 @@ regression somebody already paid for once; the point of writing it down is that 
 from __future__ import annotations
 
 import contextlib
+import functools
 import io
 import os
 import pathlib
@@ -1273,6 +1274,70 @@ class WhatAnUpdateWouldReplace(unittest.TestCase):
         with self.assertRaises(ValueError) as e:
             D.fetch_tree(ball, D.Path(d))
         self.assertIn("palmar", str(e.exception))
+
+    def _release(self):
+        """A tree archive on disk, the way release.yml cuts one, and the directory it sits in."""
+        import tarfile
+        d = tempfile.mkdtemp(prefix="palmar-tar-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        os.makedirs(os.path.join(d, "src", "palmar"))
+        io.open(os.path.join(d, "src", "palmar", "__init__.py"), "w").write('__version__ = "9.9.9"\n')
+        ball = os.path.join(d, "palmar.tar.gz")
+        with tarfile.open(ball, "w:gz") as tf:
+            tf.add(os.path.join(d, "src"), arcname="palmar-v9.9.9")
+        return d, ball
+
+    def test_sha256sums_is_read_the_way_sha256sum_writes_it(self):
+        sums = ("deadbeef  other.bin\n"
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  palmar.tar.gz\n"
+                "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789 *palmar.zip\n"
+                "not a digest  palmar.tar.gz\n")
+        self.assertEqual(D.expected_sha256(sums, "palmar.tar.gz"), "0123456789abcdef" * 4)
+        self.assertEqual(D.expected_sha256(sums, "palmar.zip"), "abcdef0123456789" * 4,
+                         "the binary-mode `*` and upper-case hex are both sha256sum's")
+        self.assertEqual(D.expected_sha256(sums, "other.bin"), "", "a short digest does not count")
+        self.assertEqual(D.expected_sha256(sums, "missing"), "")
+
+    def test_an_archive_the_sums_do_not_vouch_for_is_refused(self):
+        """**What the 2026-11-02 check changed.** `--update` used to take main's head over TLS and
+        nothing else; now the tree is a release asset and has to match the release's SHA256SUMS.
+        A wrong digest and a missing line are both a refusal — a tree that is not listed is not a
+        release."""
+        d, ball = self._release()
+        sums = os.path.join(d, D.SUMS_NAME)
+        io.open(sums, "w").write("0" * 64 + "  palmar.tar.gz\n")
+        with self.assertRaises(ValueError) as e:
+            D.fetch_tree(ball, D.Path(d))
+        self.assertIn("does not match", str(e.exception))
+        io.open(sums, "w").write("0" * 64 + "  something-else.tar.gz\n")
+        with self.assertRaises(ValueError) as e:
+            D.fetch_tree(ball, D.Path(d))
+        self.assertIn("does not list", str(e.exception))
+
+    def test_an_archive_the_sums_vouch_for_is_taken(self):
+        d, ball = self._release()
+        io.open(os.path.join(d, D.SUMS_NAME), "w").write(D.sha256_of(ball) + "  palmar.tar.gz\n")
+        got = D.fetch_tree(ball, D.Path(d))
+        self.assertTrue((got / "palmar" / "__init__.py").is_file())
+
+    def test_a_url_with_no_sums_beside_it_is_refused(self):
+        """A branch archive has no SHA256SUMS next to it, and that is the reason it is refused:
+        `--update` is for releases. The local-path hook is for tests and is not what this is about."""
+        import http.server
+        import threading
+        d, ball = self._release()
+        handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=d)
+        srv = http.server.HTTPServer(("127.0.0.1", 0), handler)
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        self.addCleanup(srv.shutdown)
+        url = "http://127.0.0.1:%d/palmar.tar.gz" % srv.server_address[1]
+        with self.assertRaises(ValueError) as e:
+            D.fetch_tree(url, D.Path(d))
+        self.assertIn("no SHA256SUMS", str(e.exception))
+        io.open(os.path.join(d, D.SUMS_NAME), "w").write(D.sha256_of(ball) + "  palmar.tar.gz\n")
+        got = D.fetch_tree(url, D.Path(d))
+        self.assertTrue((got / "palmar" / "__init__.py").is_file(), "with the sums beside it, it is taken")
 
 
 URL = "http://127.0.0.1:8801/?k=abc123"
