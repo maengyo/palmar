@@ -449,13 +449,16 @@ kbd {
    not a status light (AGENTS.md: the four light colours are the terminals'). 2.6s a cycle, nothing
    faster: it has to be seen from the corner of the eye without pulling the eye off the work.
    With reduced motion it is a steady tint. Opening the list stops it, as it clears the dot. */
-.bell[data-unread="1"] { animation: bell-breathe 2.6s ease-in-out infinite; }
+.capsule > .bell[data-unread="1"] { animation: bell-breathe 2.6s ease-in-out infinite; }
 @keyframes bell-breathe {
   0%, 100% { background: transparent; }
   50%      { background: color-mix(in srgb, var(--accent) 26%, transparent); }
 }
+/* `.capsule > .bell` is what sets the segment transparent, and it comes later with the same weight,
+   so these say `.capsule > .bell[…]` to outrank it — the animation above did not need to (an
+   animation beats the cascade), which is why only the reduced-motion tint went missing (CI, 2026-11-02). */
 @media (prefers-reduced-motion: reduce) {
-  .bell[data-unread="1"] { animation: none; background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  .capsule > .bell[data-unread="1"] { animation: none; background: color-mix(in srgb, var(--accent) 16%, transparent); }
 }
 /* The list behind the bell (2026-10-30). */
 .inbox { width: 340px; max-width: calc(100vw - 16px); padding: 0; }
