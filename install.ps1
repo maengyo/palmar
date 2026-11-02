@@ -292,7 +292,15 @@ if (-not $src) {
   } else {
     Say ("downloading palmar from {0}" -f $zip)
     try { Invoke-WebRequest -UseBasicParsing -Uri $zip -OutFile $zipFile }
-    catch { Die ("download failed -- is the repository public, and is the network up? ({0})" -f $_.Exception.Message) }
+    catch {
+      # A PALMAR_ZIP left over in the shell from trying a branch points at a zip that is gone once
+      # the branch is merged -- and the usual install line then fails for no visible reason
+      # (user, 2026-11-02). Say which it was, and how to let go of it.
+      if ($env:PALMAR_ZIP) {
+        Die ("download failed for PALMAR_ZIP={0} ({1}). That variable is set in this shell, so the usual install line is not being used -- `Remove-Item Env:PALMAR_ZIP` and run it again." -f $zip, $_.Exception.Message)
+      }
+      Die ("download failed -- is the repository public, and is the network up? ({0})" -f $_.Exception.Message)
+    }
   }
   try { Expand-Archive -LiteralPath $zipFile -DestinationPath (Join-Path $tmp 'x') -Force }
   catch { Die ("could not unpack the archive ({0})" -f $_.Exception.Message) }
