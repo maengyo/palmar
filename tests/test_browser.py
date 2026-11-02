@@ -398,8 +398,17 @@ class AnInboxBehindTheBell(unittest.TestCase):
             self.assertEqual(b.ev("document.getElementById('bell').dataset.unread"), "1", "no dot on the bell")
             # **And it breathes** (2026-11-02): the dot alone was easy to miss, so the whole segment
             # carries a slow tint while something is unread — gone again once the list is opened.
-            self.assertIn("bell-breathe", b.ev("getComputedStyle(document.getElementById('bell')).animationName"),
-                          "the bell does not breathe while something is unread")
+            # **Or, with motion reduced, a steady tint.** The macOS runner asks for reduced motion
+            # (CI, 2026-11-02: animationName was "none" there and nowhere else), and the page honours
+            # that with a tint that does not move — which is the same promise kept the other way.
+            breath = b.ev("""(()=>{const c=getComputedStyle(document.getElementById('bell'));
+              return {anim: c.animationName, bg: c.backgroundColor,
+                      reduced: matchMedia('(prefers-reduced-motion: reduce)').matches};})()""")
+            if breath["reduced"]:
+                self.assertNotIn(breath["bg"], ("rgba(0, 0, 0, 0)", "transparent"),
+                                 "with motion reduced the bell carries no tint while unread: %r" % breath)
+            else:
+                self.assertIn("bell-breathe", breath["anim"], "the bell does not breathe while something is unread: %r" % breath)
             b.ev("document.getElementById('bell').click()")
             time.sleep(0.3)
             self.assertFalse(b.ev("document.getElementById('inbox').hidden"), "the bell did not open the list")
