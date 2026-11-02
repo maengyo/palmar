@@ -15,7 +15,7 @@ name: app (windows)
 on:
   workflow_dispatch:
   push:
-    paths: ["app/**", ".github/workflows/app-windows.yml"]
+    paths: ["app/src/**", "app/Cargo.toml", "app/Cargo.lock", ".github/workflows/app-windows.yml"]
 
 jobs:
   build:
