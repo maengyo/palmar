@@ -18,15 +18,21 @@ does, and keeps the frames. Run it again after the UI changes and you get the sa
 the only safe way to start a daemon here: the real one would rotate the token and log you out of the
 session you are in. The scratch tree it browses is a temporary directory too.
 
-What it cannot do: run a real `claude` in a pane. That needs a clean environment and a person's
-judgement about what the agent is asked to do; the panes here run a shell and the status lights come
-from the hook endpoint, which is the same path a real agent's hooks take.
+**One pane runs a real `claude`** (2026-11-02, user: "클로드 실행하고 대기하는 모습도"). It is
+asked to run `ls` with Bash, which it has to ask permission for, and that permission request is
+what lights the pane amber — through the hook palmar attaches, the real path. The agent's own
+config is used (CLAUDE_CONFIG_DIR, and ~/.claude.json copied into the scratch HOME so there is no
+onboarding), the pane's environment is the clean one every pane gets, and `check_clean` reads the
+screen for the username, the hostname, the home path and any e-mail address before a frame is taken.
+The other two panes run a shell, and their lights come from the hook endpoint directly. The agent is
+stopped at the end, and `pgrep` says whether it really is.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -179,6 +185,10 @@ def check_clean(br: Browser) -> None:
                         ("home's last part", os.path.basename(home.rstrip("/")))):
         if value and len(value) > 2 and value in txt:
             bad.append("%s (%r)" % (name, value))
+    # An address of any kind. The agent's start-up screen is the one place one could appear
+    # (2026-11-02), and nothing on this canvas has a reason to show one.
+    if re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", txt):
+        bad.append("an e-mail address")
     if bad:
         raise SystemExit("record: this would have filmed " + ", ".join(bad) +
                          " — fix that before recording")
@@ -211,8 +221,14 @@ def run(out_dir: str, keep: bool) -> int:
     # prompt is `%n@%m %1~ %#` — the username and the machine's name, on every line of every pane. So
     # the panes here run `sh` with a prompt that says only where it is. `check_clean` below refuses to
     # go on if anything identifying reaches the screen anyway.
+    # **The agent runs with the real HOME; the daemon does not.** The daemon's HOME is the scratch
+    # one (its ~/.palmar must never be the real one). But `claude` keeps its login in the real
+    # home — with a scratch HOME it opened on "Select login method" (measured 2026-11-02) — so the
+    # pane is handed the real path in a variable and the command typed is `HOME=$REAL_HOME claude`:
+    # the path never appears on screen, and the agent's screen is cleared by its own TUI anyway.
     d = Daemon(shell="/bin/sh",
-               env={"PALMAR_UPDATE_CHECK": "0", "PS1": "$ ", "PROMPT": "$ "}).start()
+               env={"PALMAR_UPDATE_CHECK": "0", "PS1": "$ ", "PROMPT": "$ ",
+                    "REAL_HOME": os.path.expanduser("~")}).start()
     # **Inside the daemon's HOME.** A pane may only open somewhere under a root, and the roots are
     # this HOME — which is the temporary one tests/helpers.py made, not the real ~.
     proj = os.path.join(d.home, "work")
@@ -234,7 +250,9 @@ def run(out_dir: str, keep: bool) -> int:
         # **These run a shell.** Naming one of them after an agent would be dressing a shell up as
         # something it is not — and this picture goes on the README. The lights below are real: they
         # come down the hook endpoint, which is the path a real agent's hooks take.
-        a = d.open_pane(cwd=os.path.join(proj, "api"), name="sh · api")
+        # The first pane has no name: it runs the agent, and the row and the title read what is in
+        # front — "claude ~/work/api" — the way they do for anybody.
+        a = d.open_pane(cwd=os.path.join(proj, "api"))
         b = d.open_pane(cwd=os.path.join(proj, "api"), name="sh · router")
         c = d.open_pane(cwd=os.path.join(proj, "infra"), name="sh · infra")
         time.sleep(2.0)
@@ -242,7 +260,6 @@ def run(out_dir: str, keep: bool) -> int:
         for sid, line in (
                 # Short lines that succeed. A long one wraps in the pane and the echoed command
                 # becomes the noisiest thing on screen; one that errors is one nobody meant to show.
-                (a["id"], "cat TASK.md"),
                 (b["id"], "cat router.py"),
                 (c["id"], "ls -1")):
             pty = WS(d, "/pty/%s?token=%s&cols=90&rows=24" % (sid, d.token))
@@ -276,6 +293,42 @@ def run(out_dir: str, keep: bool) -> int:
         time.sleep(1.2)
         check_clean(br)
 
+        # **The real thing — started before a frame is taken.** `claude` in the first pane, up to its
+        # prompt. The request it must ask permission for comes in ① below, on camera; the amber light
+        # that follows comes down the hook palmar attached, not from this script.
+        agent = WS(d, "/pty/%s?token=%s&cols=90&rows=24" % (a["id"], d.token))
+        agent.recv_json()
+        screen = lambda: br.ev("""(()=>{const t=window.palmar.tiles.get(%s); if(!t) return '';
+          const b=t.term.buffer.active, o=[]; for (let i=0;i<b.length;i++){const l=b.getLine(i); if(l) o.push(l.translateToString(true));}
+          return o.join('\\n');})()""" % json.dumps(a["id"]))
+        # `--permission-mode default`, whatever this account's own default is: the point of the beat is
+        # the permission request, and an account set to auto mode would run the command without one
+        # (measured 2026-11-02: "auto mode on", straight to done).
+        # The shim finds its hook settings under $HOME, and with HOME swapped it finds none (measured:
+        # no hook arrived, the light read "done" under a permission prompt). So the file is named
+        # outright — $HOME and $PALMAR_PANE expand in the pane's shell, and nothing personal is typed.
+        agent.send(b'f="$HOME/.palmar/run/$PALMAR_PANE.json"; HOME=$REAL_HOME claude --settings "$f" --permission-mode default',
+                   opcode=0x2)
+        time.sleep(0.3); agent.send(b"\r", opcode=0x2)
+        deadline = time.time() + 40
+        trusted = False
+        while time.time() < deadline:
+            time.sleep(1.0)
+            scr = screen()
+            if "trust" in scr.lower() and not trusted:
+                # A folder it has not seen: the dialog's default is "No, exit" (measured 2026-11-02),
+                # so Down first, then Enter — **once**. Answering again while the dialog was still
+                # being redrawn wrapped the choice back to "No, exit" and the agent was gone (measured).
+                trusted = True
+                agent.send(b"\x1b[B", opcode=0x2); time.sleep(0.3)
+                agent.send(b"\r", opcode=0x2); time.sleep(3.0); continue
+            if "\u203a" in scr or "> " in scr or "Try " in scr:   # its prompt is up
+                break
+        time.sleep(1.5)
+        check_clean(br)
+        # A request it cannot satisfy with a read-only tool: listing a folder it did without asking
+        # (measured — Glob needs no permission). Creating a file does need one, with Bash or Write.
+
         take = Take(br, frames)
 
         # ① the lights. **All three at once**, which is the whole point of them — one working, one
@@ -286,8 +339,24 @@ def run(out_dir: str, keep: bool) -> int:
         take.hold(1.1)
         d.raw("POST", "/hook/claude?pane=%s" % c["id"], {"hook_event_name": "Stop"})
         take.hold(1.1)
-        d.raw("POST", "/hook/claude?pane=%s" % a["id"], {"hook_event_name": "PermissionRequest"})
-        take.hold(1.8)
+        # The agent is asked for something it needs permission for. The typing is on camera; the
+        # thinking is not (a cut, rather than seconds of a still screen); the asking is.
+        agent.send(b"Create an empty file named notes.txt in this folder.", opcode=0x2)
+        time.sleep(0.4)
+        agent.send(b"\r", opcode=0x2)
+        take.hold(0.8)
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            time.sleep(1.0)
+            rows = d.get("/api/sessions")
+            rows = rows["sessions"] if isinstance(rows, dict) else rows
+            if any(r["id"] == a["id"] and r["status"] == "waiting" for r in rows):
+                break
+        else:
+            print("record: the agent never asked — screen was:\n" + screen()[-800:], file=sys.stderr)
+        time.sleep(0.8)
+        check_clean(br)
+        take.hold(2.2)
 
         # **Two stills for the README** (2026-11-02), taken here where the picture is at its
         # clearest: three windows, all three lights, nothing mid-drag. Dark is what the recording
@@ -363,6 +432,14 @@ def run(out_dir: str, keep: bool) -> int:
         br.ev("(()=>{document.body.click(); return 1;})()")
         take.hold(0.6)
 
+        # Stop the agent the way a person does — Ctrl-C twice — then leave its shell. A pane's shell
+        # gets SIGHUP on stop; an agent in alt-screen did not always go with it (measured).
+        agent.send(b"\x1b", opcode=0x2); time.sleep(0.6)        # Esc: out of the permission dialog first
+        agent.send(b"\x03", opcode=0x2); time.sleep(0.6)
+        agent.send(b"\x03", opcode=0x2); time.sleep(2.5)
+        agent.send(b"exit\r", opcode=0x2); time.sleep(0.5)
+        agent.close()
+
         errs = br.errors()
         if errs:
             print("record: the page complained — " + "; ".join(errs[:3]), file=sys.stderr)
@@ -391,6 +468,12 @@ def run(out_dir: str, keep: bool) -> int:
     finally:
         br.stop()
         d.stop()
+        # The agent dies with its pane's shell (SIGHUP on stop). Say so, rather than assume it.
+        left = subprocess.run(["pgrep", "-f", "claude --settings " + d.home], capture_output=True, text=True).stdout.split()
+        if left:
+            for p in left:
+                subprocess.run(["kill", "-9", p], capture_output=True)
+            print("record: the agent was still running and was killed (pid %s)" % ", ".join(left), file=sys.stderr)
         if not keep:
             shutil.rmtree(work, ignore_errors=True)
 
