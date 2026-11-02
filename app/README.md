@@ -63,7 +63,7 @@ The webview is the one the operating system already has, so nothing is shipped t
 |---|---|---|
 | macOS | WKWebView | in the OS; nothing to install |
 | Linux / **WSLg** | WebKitGTK 4.1 | `libwebkit2gtk-4.1-0`, plus `-dev` to build |
-| Windows | WebView2 | the native port is #29 — today, run the daemon in WSL |
+| Windows | WebView2 | in Windows 10/11 with Edge; `app-windows.yml` builds `palmar-app.exe` (2026-11-02), unsigned — SmartScreen asks once |
 
 ## Getting one without building it
 
@@ -90,6 +90,18 @@ gh run download -n palmar-app-linux-x86_64  # gh carries your auth, so a private
 chmod +x palmar-app                         # upload-artifact does not keep the executable bit
 ./palmar-app
 ```
+
+### Windows
+
+```powershell
+gh workflow run app-windows.yml ; gh run watch
+gh run download -n palmar-app-windows-x86_64
+.\palmar-app.exe
+```
+
+It starts the installed `palmar` (through `cmd /c`, since the launcher is `palmar.cmd`) with no
+console behind it, and shows the address it prints. Unsigned: SmartScreen says "unknown publisher"
+the first time; *More info → Run anyway*. Signing is #12.
 
 ### macOS
 
