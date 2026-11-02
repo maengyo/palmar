@@ -5491,6 +5491,299 @@ def short_home(path: str) -> str:
     return path
 
 
+
+#: **The one thing a one-line install never had: a second line** (#20's neighbour). Until now the
+#: way to update was to remember the install URL and type it again, and then to remember `--stop`,
+#: which nothing said — so an updated tree would sit on disk while the old daemon went on serving it
+#: (user, 2026-10-07: "사용자들이 업데이트 하기 위한 방법"). The page does catch that afterwards, by
+#: protocol number and by the daemon's version in the hello frame, but catching it afterwards is not
+#: the same as not walking into it.
+#:
+#: **It replaces the tree and nothing else.** The launcher, the PATH entry and the shortcuts were put
+#: there by the installer and do not change between versions; re-running the whole installer to get a
+#: newer `palmar/` would re-ask about PATH and re-fetch the window for nothing. Placing a tree is the
+#: one part this needs, and it is ten lines — the rest of install.sh is Python discovery and PATH,
+#: which is where its length comes from and none of which is in question here.
+PALMAR_TARBALL = "https://codeload.github.com/maengyo/palmar/tar.gz/refs/heads/main"
+
+
+def tree_root() -> Path:
+    """The tree this code is running out of — what an update would replace."""
+    return Path(__file__).resolve().parent.parent
+
+
+def install_shape():
+    """(kind, root). `kind` is "checkout" for a git working tree and "tree" for one the installer
+    unpacked. They want opposite advice, so they are told apart before anything else happens."""
+    root = tree_root()
+    return ("checkout" if (root / ".git").exists() else "tree"), root
+
+
+def fetch_tree(url: str, into: Path) -> Path:
+    """Download and unpack a palmar into `into`, and return the directory that holds `palmar/`.
+
+    **Nothing is replaced until a whole tree is in hand.** Unpacking over the running one and
+    failing halfway leaves a palmar that is neither version and runs as neither."""
+    import tarfile
+    import tempfile as _t
+    work = Path(_t.mkdtemp(prefix="palmar-update-", dir=str(into)))
+    ball = work / "palmar.tar.gz"
+    if "://" in url:
+        req = urllib.request.Request(url, headers={"User-Agent": "palmar/" + __version__})
+        with urllib.request.urlopen(req, timeout=60) as r, open(ball, "wb") as fh:
+            shutil.copyfileobj(r, fh)
+    else:
+        shutil.copyfile(url, ball)
+    out = work / "x"
+    out.mkdir()
+    with tarfile.open(ball) as tf:
+        #: A member path that climbs out of the directory would write wherever it liked. tarfile
+        #: has a filter for exactly this from 3.12; 3.9 is the floor here, so it is checked.
+        for m in tf.getmembers():
+            q = (out / m.name).resolve()
+            if not str(q).startswith(str(out.resolve()) + os.sep):
+                raise ValueError("the archive wants to write outside the directory: %s" % m.name)
+            if m.issym() or m.islnk():
+                raise ValueError("the archive carries a link: %s" % m.name)
+        tf.extractall(out)
+    hits = sorted(out.glob("*/palmar/__init__.py")) or sorted(out.glob("palmar/__init__.py"))
+    if not hits:
+        raise ValueError("the archive does not contain palmar/")
+    return hits[0].parent.parent
+
+
+def installed_pieces(root: Path, platform: str = None, env=None):
+    """What the installer put on this machine besides the tree: (launcher, shortcuts, rc files, prefix).
+    install.sh and install.ps1 are the source of truth for every path here (#32)."""
+    platform = sys.platform if platform is None else platform
+    env = os.environ if env is None else env
+    if platform == "win32":
+        prefix = root.parent                                   # %LOCALAPPDATA%\palmar\src → the prefix
+        launcher = prefix / "bin" / "palmar.cmd"
+        shortcuts = []
+        appdata = env.get("APPDATA")
+        if appdata:
+            shortcuts.append(Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Start palmar.lnk")
+        home = Path(env.get("USERPROFILE") or env.get("HOME") or str(HOME))
+        shortcuts.append(home / "Desktop" / "Start palmar.lnk")
+        return launcher, shortcuts, [], prefix
+    prefix = root.parent.parent if root.parent.name == "share" else root.parent   # $PREFIX/share/palmar
+    launcher = prefix / "bin" / "palmar"
+    data = Path(env.get("XDG_DATA_HOME") or (Path(env.get("HOME") or str(HOME)) / ".local" / "share"))
+    shortcuts = [data / "applications" / "palmar-start.desktop"]
+    home = Path(env.get("HOME") or str(HOME))
+    rcs = [home / n for n in (".zshrc", ".bashrc", ".bash_profile", ".profile")]
+    return launcher, shortcuts, rcs, prefix
+
+
+def uninstall(purge: bool = False, yes: bool = False) -> int:
+    """`palmar --uninstall` — take out what the installer put in, and say so first (#32).
+
+    **`~/.palmar` stays unless `--purge`.** It holds restore.json, the board and the settings — what
+    somebody who reinstalls next week wants back. The tree, the launcher, the shortcuts and the PATH
+    line are the installer's and go. A checkout is refused the way `--update` refuses it: there is
+    nothing of the installer's to remove."""
+    kind, root = install_shape()
+    out = print
+    out("palmar %s" % __version__)
+    out("  tree      %s" % root)
+    if kind == "checkout":
+        out("")
+        out("  That is a git checkout — the installer put nothing here to take out.")
+        out("  Delete the folder if you are done with it; `palmar --stop` first if a daemon is up.")
+        if purge:
+            out("  (--purge would remove %s; it was not, since nothing else is being removed.)" % PALMAR_DIR)
+        return 0
+    launcher, shortcuts, rcs, prefix = installed_pieces(root)
+    marked = [rc for rc in rcs if rc.exists() and any(l.rstrip().endswith("# palmar") for l in rc.read_text("utf-8", "replace").splitlines())]
+    out("")
+    out("This will remove:")
+    out("      the tree       %s" % root)
+    if launcher.exists():
+        out("      the launcher   %s" % launcher)
+    for s in shortcuts:
+        if s.exists():
+            out("      the shortcut   %s" % s)
+    for rc in marked:
+        out("      the PATH line  in %s" % rc)
+    if sys.platform == "win32":
+        out("      the PATH entry %s (your user PATH)" % (prefix / "bin"))
+    out("      %s %s" % ("and the data  " if purge else "and keeps     ", PALMAR_DIR))
+    if not purge:
+        out("  (--purge removes that too: restore.json, the board, the settings)")
+    status, _ = ask_daemon("/api/sessions")
+    if status != 0:
+        out("  A daemon is running — it is stopped first, and the shells in its terminals close.")
+    if not yes:
+        try:
+            if input("Go ahead? [y/N] ").strip().lower() not in ("y", "yes"):
+                out("Nothing was removed.")
+                return 0
+        except EOFError:
+            out("Nothing was removed. (--yes to answer in advance)")
+            return 0
+    if status != 0:
+        stop_daemon()
+    gone = []
+    for s in shortcuts + [launcher]:
+        try:
+            if s.exists():
+                s.unlink()
+                gone.append(str(s))
+        except OSError as e:
+            print("uninstall: could not remove %s — %s" % (s, e), file=sys.stderr)
+    for rc in marked:
+        try:
+            lines = rc.read_text("utf-8", "replace").splitlines(keepends=True)
+            kept = [l for l in lines if not l.rstrip().endswith("# palmar")]
+            rc.write_text("".join(kept), "utf-8")
+            gone.append("the PATH line in %s" % rc)
+        except OSError as e:
+            print("uninstall: could not edit %s — %s" % (rc, e), file=sys.stderr)
+    if sys.platform == "win32":                     # pragma: no cover - the user PATH, in the registry
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE) as k:
+                cur, typ = winreg.QueryValueEx(k, "Path")
+                want = str(prefix / "bin").rstrip("\\").lower()
+                parts = [p for p in cur.split(";") if p.strip().rstrip("\\").lower() != want]
+                if len(parts) != len(cur.split(";")):
+                    winreg.SetValueEx(k, "Path", 0, typ, ";".join(parts))
+                    gone.append("the PATH entry %s" % (prefix / "bin"))
+        except Exception as e:
+            print("uninstall: could not edit the user PATH — %s" % e, file=sys.stderr)
+    try:
+        shutil.rmtree(str(root))
+        gone.append(str(root))
+    except OSError as e:
+        print("uninstall: could not remove the tree %s — %s" % (root, e), file=sys.stderr)
+        return 1
+    if purge:
+        try:
+            shutil.rmtree(str(PALMAR_DIR), ignore_errors=True)
+            gone.append(str(PALMAR_DIR))
+        except OSError:
+            pass
+    out("")
+    for g in gone:
+        out("removed  %s" % g)
+    if not purge:
+        out("kept     %s  (palmar --uninstall --purge removes it)" % PALMAR_DIR)
+    out("Open a new terminal: the `palmar` command is gone from it.")
+    return 0
+
+
+def update(yes: bool = False, url: str = None, start_args=()) -> int:
+    """`palmar --update` — a newer tree, and the daemon restarted on it, in that order."""
+    kind, root = install_shape()
+    out = print
+    out("palmar %s" % __version__)
+    out("  tree      %s" % root)
+    if kind == "checkout":
+        #: Not an error: it is the right advice for where they are.
+        out("")
+        out("  That is a git checkout, so this is not the way to update it:")
+        out("      git -C %s pull" % root)
+        out("      palmar --stop && palmar")
+        out("  (--update is for a tree the installer unpacked; it would throw a checkout away.)")
+        return 0
+
+    #: **What the restart costs, before it is agreed to and not after.** The daemon owns the shells
+    #: (⑦=b), so they go. What they were — the folder and what was running in each — is in
+    #: restore.json and comes back as an offer, which is exactly what makes an agent's own
+    #: `--resume` reachable; saying so here is what makes this a decision rather than a surprise.
+    status, body = ask_daemon("/api/sessions")
+    rows = []
+    if status == 200:
+        rows = (body or {}).get("sessions") if isinstance(body, dict) else (body or [])
+    if rows:
+        out("")
+        out("  %d terminal%s open. The shells in them close when the daemon restarts:"
+            % (len(rows), "" if len(rows) == 1 else "s"))
+        for r in rows:
+            out("      %-14s %-28s %s" % ((r.get("name") or "")[:14], short_home(r.get("cwd") or ""),
+                                          r.get("fg") or ""))
+        out("  palmar offers to reopen them, in the same folders. An agent comes back through its")
+        out("  own --resume; palmar has never seen its session id and will not pretend to.")
+    elif status == 0:
+        out("  (no daemon is running for this HOME — this will fetch, and start one)")
+
+    out("")
+    out("This will:")
+    out("      replace %s" % root)
+    out("      stop the daemon, and start it again")
+    if not yes:
+        try:
+            if input("Go ahead? [y/N] ").strip().lower() not in ("y", "yes"):
+                out("Nothing was changed.")
+                return 0
+        except EOFError:
+            out("Nothing was changed. (--yes to answer in advance)")
+            return 0
+
+    src = url or os.environ.get("PALMAR_TARBALL") or PALMAR_TARBALL
+    out("fetching %s" % src)
+    staged = None
+    try:
+        staged = fetch_tree(src, root.parent)
+    except Exception as e:
+        print("update: could not fetch a tree — %s" % e, file=sys.stderr)
+        return 1
+    work = staged.parent.parent if staged.parent.name == "x" else staged.parent
+
+    #: **The old tree goes aside, not away, until the new one is in place.** A `rm -rf` followed by
+    #: a failed move is a machine with no palmar on it.
+    old = root.with_name(root.name + ".old")
+    try:
+        shutil.rmtree(old, ignore_errors=True)
+        os.replace(str(root), str(old))
+        os.replace(str(staged), str(root))
+    except OSError as e:
+        print("update: could not put the new tree in place — %s" % e, file=sys.stderr)
+        if not root.exists() and old.exists():
+            os.replace(str(old), str(root))
+            print("update: the old one is back where it was.", file=sys.stderr)
+        return 1
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    shutil.rmtree(old, ignore_errors=True)
+
+    now = "?"
+    try:
+        #: Read out of the new tree rather than this process, which is still the old code.
+        txt = (root / "palmar" / "__init__.py").read_text("utf-8")
+        m = re.search(r'__version__\s*=\s*"([^"]+)"', txt)
+        now = m.group(1) if m else "?"
+    except OSError:
+        pass
+    out("replaced the tree — palmar %s" % now)
+
+    if status != 0:
+        out("stopping the daemon")
+        stop_daemon()
+
+    #: **Started from the new tree, not from here.** This process is the old code — it read its
+    #: modules before the swap — so starting a daemon from inside it would start the old one again
+    #: and leave the person exactly where they began, with a newer tree on disk that nothing is
+    #: running. A fresh interpreter on the new `launch.py` is the same thing typing `palmar` does,
+    #: which is also why the daemon it starts detaches and this returns straight away.
+    out("starting it again")
+    try:
+        #: The window flags come along, so a scripted update can ask for no browser the same way
+        #: `palmar --no-browser` does. Without that this always opens one, which is right for a
+        #: person at a keyboard and wrong for everything else.
+        r = subprocess.run([sys.executable, str(root / "launch.py")] + list(start_args), timeout=120)
+        code = r.returncode
+    except Exception as e:
+        print("update: the new tree is in place but would not start — %s" % e, file=sys.stderr)
+        print("update: run `palmar` yourself; nothing is half-written.", file=sys.stderr)
+        return 1
+    if code != 0:
+        print("update: the new palmar exited %d. The tree is the new one; run `palmar` to see why."
+              % code, file=sys.stderr)
+    return code
+
+
 def ask_focus(url: str) -> int:
     """`POST /api/focus` on the running daemon: it tells every open page to come forward and says how
     many there are. -1 when there is no daemon to ask."""
@@ -6533,6 +6826,14 @@ def cli() -> None:
                     help="open another window even when one is already open")
     # Closing a window does not stop the daemon — it holds live shells, and that is the point. So
     # there has to be a way to say stop, and it is this one (asked for 2026-09-11).
+    ap.add_argument("--update", action="store_true",
+                    help="fetch a newer tree and restart the daemon (not for a git checkout)")
+    ap.add_argument("--uninstall", action="store_true",
+                    help="remove the installed tree, launcher, shortcuts and PATH line; keeps ~/.palmar")
+    ap.add_argument("--purge", action="store_true",
+                    help="with --uninstall: remove ~/.palmar too (restore.json, the board, the settings)")
+    ap.add_argument("--yes", action="store_true",
+                    help="answer the question --update or --uninstall asks in advance")
     ap.add_argument("--list", action="store_true", dest="list_",
                     help="list the terminals this HOME's daemon has, and exit")
     ap.add_argument("--close", metavar="ID",
@@ -6549,6 +6850,12 @@ def cli() -> None:
     ap.add_argument("--foreground", action="store_true",
                     help="stay attached to this terminal (Ctrl-C stops it); detaching is the default")
     args = ap.parse_args()
+    if args.uninstall:
+        raise SystemExit(uninstall(purge=args.purge, yes=args.yes))
+    if args.update:
+        pass_on = [f for f, on in (("--no-browser", args.no_browser), ("--web", args.web),
+                                   ("--new", args.new)) if on]
+        raise SystemExit(update(yes=args.yes, start_args=pass_on))
     if args.list_:
         raise SystemExit(list_sessions())
     if args.close:

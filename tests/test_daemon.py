@@ -7,6 +7,8 @@ again afterwards.
 from __future__ import annotations
 
 import json
+import io
+import re
 import os
 import select
 import shutil
@@ -2151,6 +2153,150 @@ class StopTrustsTheLock(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("no daemon is running", r.stdout)
         self.assertIn("not palmar's", r.stdout)
+
+
+class AnUpdateInPlace(unittest.TestCase):
+    """`palmar --update` against a tarball on disk — the whole thing, including the daemon coming
+    back on the new code. `PALMAR_TARBALL` is the same hook install.sh uses for its own tests."""
+
+    def test_it_swaps_the_tree_and_comes_back_on_it(self):
+        import tarfile
+        from tests.helpers import PYTHON, REPO
+        work = tempfile.mkdtemp(prefix="palmar-upd-")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        skip = shutil.ignore_patterns(".git", "app", "__pycache__", "*.pyc")
+
+        # A "release" of this tree, marked so the swap is visible.
+        stage = os.path.join(work, "palmar-main")
+        shutil.copytree(REPO, stage, ignore=skip)
+        init = os.path.join(stage, "palmar", "__init__.py")
+        body = io.open(init, encoding="utf-8").read()
+        self.assertIn('__version__', body)
+        io.open(init, "w", encoding="utf-8").write(
+            re.sub(r'__version__ = "[^"]+"', '__version__ = "9.9.9-test"', body))
+        ball = os.path.join(work, "palmar.tar.gz")
+        with tarfile.open(ball, "w:gz") as tf:
+            tf.add(stage, arcname="palmar-main")
+
+        # And an "installed" tree: a copy with no .git, which is what the installer leaves.
+        prefix = tempfile.mkdtemp(prefix="palmar-prefix-")
+        self.addCleanup(shutil.rmtree, prefix, ignore_errors=True)
+        tree = os.path.join(prefix, "palmar")
+        shutil.copytree(REPO, tree, ignore=skip)
+        home = tempfile.mkdtemp(prefix="palmar-uhome-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        env = dict(os.environ, HOME=home, PALMAR_TARBALL=ball, PYTHONSAFEPATH="1",
+                   PALMAR_UPDATE_CHECK="0")
+
+        r = subprocess.run([PYTHON, os.path.join(tree, "launch.py"),
+                            "--update", "--yes", "--no-browser"],
+                           capture_output=True, text=True, timeout=300, env=env)
+        self.addCleanup(subprocess.run, [PYTHON, os.path.join(tree, "launch.py"), "--stop"],
+                        **{"env": env, "capture_output": True, "timeout": 60})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+        got = io.open(os.path.join(tree, "palmar", "__init__.py"), encoding="utf-8").read()
+        self.assertIn("9.9.9-test", got, "the tree was not replaced:\n" + r.stdout)
+        # **Whole, and nothing left beside it.** The old tree is moved aside rather than deleted
+        # until the new one is in place, and a half-swapped palmar is neither version.
+        for part in ("launch.py", "palmar/daemon.py", "palmar/web/app.js"):
+            self.assertTrue(os.path.exists(os.path.join(tree, part)), part + " is missing")
+        self.assertEqual([x for x in os.listdir(prefix) if x != "palmar"], [],
+                         "it left something behind in the prefix")
+
+        # And it is running — on the new tree, not the one this process started from.
+        time.sleep(2)
+        url = io.open(os.path.join(home, ".palmar", "run", "url"), encoding="utf-8").read().strip()
+        tok = io.open(os.path.join(home, ".palmar", "run", "token"), encoding="utf-8").read().strip()
+        base = url.split("/?")[0]
+        rq = urllib.request.Request(base + "/api/sessions?token=" + tok, headers={"Origin": base})
+        with urllib.request.urlopen(rq, timeout=10) as f:
+            self.assertIn(f.read()[:1], (b"[", b"{"), "the daemon did not come back")
+
+    def test_it_says_what_the_restart_costs_before_asking(self):
+        """The shells go (⑦=b). Saying so after the fact is not a decision, so the panes and what
+        each was running are printed above the question."""
+        from tests.helpers import PYTHON, REPO
+        with Daemon() as d:
+            d.open_pane(name="api")
+            time.sleep(1.5)
+            r = subprocess.run([PYTHON, os.path.join(REPO, "launch.py"), "--update"],
+                               input="n\n", capture_output=True, text=True, timeout=60,
+                               env=dict(os.environ, HOME=d.home, PYTHONSAFEPATH="1"))
+            # This repository is a checkout, so it stops at the advice — which is the other half of
+            # the same promise: it never silently does the dangerous thing to a working tree.
+            self.assertIn("git -C", r.stdout)
+            self.assertNotIn("fetching", r.stdout, "it fetched over a checkout")
+
+
+class AnUninstall(unittest.TestCase):
+    """`palmar --uninstall` (#32): takes out what install.sh put in — the tree, the launcher, the
+    desktop entry, the marked PATH line — and keeps ~/.palmar unless `--purge`. Driven the way a
+    person would, from the installed tree's own launch.py, against a fake install in a scratch
+    prefix and a scratch HOME."""
+
+    def fake_install(self):
+        from tests.helpers import REPO
+        prefix = tempfile.mkdtemp(prefix="palmar-unprefix-")
+        self.addCleanup(shutil.rmtree, prefix, ignore_errors=True)
+        home = tempfile.mkdtemp(prefix="palmar-unhome-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        tree = os.path.join(prefix, "share", "palmar")
+        shutil.copytree(REPO, tree, ignore=shutil.ignore_patterns(".git", "app", "__pycache__", "*.pyc"))
+        os.makedirs(os.path.join(prefix, "bin"))
+        launcher = os.path.join(prefix, "bin", "palmar")
+        io.open(launcher, "w").write("#!/bin/sh\nexec python3 %s/launch.py \"$@\"\n" % tree)
+        apps = os.path.join(home, ".local", "share", "applications")
+        os.makedirs(apps)
+        entry = os.path.join(apps, "palmar-start.desktop")
+        io.open(entry, "w").write("[Desktop Entry]\nName=Start palmar\n")
+        rc = os.path.join(home, ".zshrc")
+        io.open(rc, "w").write("alias ll='ls -l'\n\nexport PATH=\"%s/bin:$PATH\"  # palmar\nexport EDITOR=vi\n" % prefix)
+        os.makedirs(os.path.join(home, ".palmar"))
+        io.open(os.path.join(home, ".palmar", "restore.json"), "w").write("{}")
+        return prefix, home, tree, launcher, entry, rc
+
+    def run_it(self, tree, home, *args):
+        from tests.helpers import PYTHON
+        env = dict(os.environ, HOME=home, SHELL="/bin/zsh", PYTHONSAFEPATH="1")
+        env.pop("XDG_DATA_HOME", None)
+        return subprocess.run([PYTHON, os.path.join(tree, "launch.py"), "--uninstall", *args],
+                              capture_output=True, text=True, timeout=120, env=env)
+
+    def test_it_removes_the_installers_pieces_and_keeps_the_data(self):
+        prefix, home, tree, launcher, entry, rc = self.fake_install()
+        r = self.run_it(tree, home, "--yes")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        for gone in (tree, launcher, entry):
+            self.assertFalse(os.path.exists(gone), "%s is still there" % gone)
+        kept = io.open(rc).read()
+        self.assertNotIn("# palmar", kept, "the PATH line stayed")
+        self.assertIn("alias ll", kept)
+        self.assertIn("EDITOR=vi", kept, "a neighbouring line was lost")
+        self.assertTrue(os.path.exists(os.path.join(home, ".palmar", "restore.json")), "~/.palmar went without --purge")
+        self.assertIn("kept", r.stdout)
+
+    def test_purge_takes_the_data_too_and_no_answers_no(self):
+        prefix, home, tree, launcher, entry, rc = self.fake_install()
+        r = self.run_it(tree, home)                      # stdin is not a terminal: EOF, which is "no"
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("Nothing was removed", r.stdout)
+        self.assertTrue(os.path.exists(launcher), "it removed without a yes")
+        r = self.run_it(tree, home, "--purge", "--yes")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(home, ".palmar")), "--purge left ~/.palmar")
+        self.assertFalse(os.path.exists(tree))
+
+    def test_a_checkout_is_refused(self):
+        from tests.helpers import PYTHON, REPO
+        home = tempfile.mkdtemp(prefix="palmar-unhome-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        r = subprocess.run([PYTHON, os.path.join(REPO, "launch.py"), "--uninstall", "--yes"],
+                           capture_output=True, text=True, timeout=60,
+                           env=dict(os.environ, HOME=home, PYTHONSAFEPATH="1"))
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("checkout", r.stdout)
+        self.assertTrue(os.path.exists(os.path.join(REPO, "launch.py")), "it removed the checkout!")
 
 
 class WhatAPaneWasFor(unittest.TestCase):
