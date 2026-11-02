@@ -53,11 +53,13 @@ FPS_CAP = 12.0            # the pace the driver aims for; real timing is written
 GREEN_GROUP = "gmfl2k8p0002c"
 
 #: The dark theme, set before the document runs — the page reads these at load time. The palette is
-#: the warm default. The font is bumped one step: at 1280 wide the 13px default is legible but tight,
-#: and text nobody can read is the whole complaint about the old recording.
+#: the warm default. **The font is the product's own 13px** (2026-11-02): it was bumped to 15 for
+#: legibility, and with the windows of the time that made every pane a few big lines — "the terminals
+#: are tiny and the font is huge" (user). Legibility comes from the windows being a working size
+#: (below) and the GIF being scaled less, not from a font nobody runs.
 PRELOAD = ("try{"
            "localStorage.setItem('palmar-theme','dark');"
-           "localStorage.setItem('palmar.font','15');"
+           "localStorage.removeItem('palmar.font');"
            "}catch(e){}")
 
 PDF = (b"%PDF-1.4\n"
@@ -256,10 +258,13 @@ def run(out_dir: str, keep: bool) -> int:
         # close underneath, the carried one straddled both and the hold kept changing its mind about
         # which it was joining ("위쪽에 그룹핑 되다가 아래쪽 되다가", 2026-09-17). The two that join sit
         # side by side at the top; the third is well below, and the minimap owns the bottom-right.
+        # **Working sizes** (2026-11-02): about 58×15 and 50×15 cells at 13px, which is a terminal
+        # somebody would actually type in, instead of the 53×10 of before. The canvas at this width
+        # holds two of them side by side and a third below, with the minimap's corner left free.
         d.raw("PUT", "/api/layout", {"layout": {
-            a["id"]: {"x": 24, "y": 24, "w": 430, "h": 250, "z": 3, "g": GREEN_GROUP, "gn": "api"},
-            b["id"]: {"x": 510, "y": 24, "w": 320, "h": 250, "z": 2},
-            c["id"]: {"x": 24, "y": 350, "w": 430, "h": 210, "z": 1},
+            a["id"]: {"x": 24, "y": 24, "w": 460, "h": 330, "z": 3, "g": GREEN_GROUP, "gn": "api"},
+            b["id"]: {"x": 510, "y": 24, "w": 400, "h": 330, "z": 2},
+            c["id"]: {"x": 24, "y": 390, "w": 460, "h": 250, "z": 1},
         }})
         time.sleep(1.5)
 
@@ -314,7 +319,7 @@ def run(out_dir: str, keep: bool) -> int:
         take.hold(0.9)
         one = centre(br, "sh · router")
         if one:
-            take.drag(one["x"], one["y"], one["x"] + 30, one["y"] + 300, steps=14, alt=True)
+            take.drag(one["x"], one["y"], one["x"] + 30, one["y"] + 260, steps=14, alt=True)
         take.hold(1.4)
 
         # ④ a file opens in a window like any other
@@ -371,9 +376,10 @@ def run(out_dir: str, keep: bool) -> int:
                "-vf", "scale=%d:-2:flags=lanczos,fps=24" % W,
                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23", "-movflags", "+faststart", mp4)
         # GitHub renders a GIF in a README and will not play an .mp4 committed beside it, so the GIF
-        # is the one the page shows. 900px wide and 12fps keeps it under a megabyte.
+        # is the one the page shows. 1000px wide at 10fps lands around 1.3 MB; narrower made the
+        # terminal text unreadable, which was the complaint about the recording before this one.
         run_ff("-f", "concat", "-safe", "0", "-i", lst,
-               "-vf", "fps=10,scale=880:-1:flags=lanczos,split[s0][s1];"
+               "-vf", "fps=10,scale=1000:-1:flags=lanczos,split[s0][s1];"
                       "[s0]palettegen=max_colors=96[p];[s1][p]paletteuse=dither=bayer:bayer_scale=4",
                gif)
         print("frames  %d" % take.n)
