@@ -290,6 +290,41 @@ class Install(unittest.TestCase):
             second = fh.read()
         self.assertEqual(first, second, "a second install wrote the PATH line again")
 
+    def test_a_tree_the_sums_do_not_vouch_for_is_not_installed(self):
+        """**What the 2026-11-02 check changed.** The one-line install used to take main's head over
+        TLS and nothing else; now the tree is a release asset matched against the release's
+        SHA256SUMS. With a local tarball the sums are checked when a SHA256SUMS sits beside it —
+        and a wrong one means no tree, no launcher."""
+        import tarfile
+        elsewhere = tempfile.mkdtemp(prefix="palmar-sh-sums-")
+        self.addCleanup(shutil.rmtree, elsewhere, ignore_errors=True)
+        tgz = os.path.join(elsewhere, "palmar.tar.gz")
+        with tarfile.open(tgz, "w:gz") as tf:
+            tf.add(os.path.join(REPO, "palmar"), arcname="palmar-v9/palmar")
+            tf.add(os.path.join(REPO, "launch.py"), arcname="palmar-v9/launch.py")
+        with open(os.path.join(elsewhere, "SHA256SUMS"), "w") as fh:
+            fh.write("0" * 64 + "  palmar.tar.gz\n")
+        copy = os.path.join(elsewhere, "install.sh")
+        shutil.copy(INSTALL, copy)
+        home = tempfile.mkdtemp(prefix="palmar-sh-home-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        env = dict(os.environ, PALMAR_PREFIX=self.prefix, PALMAR_TARBALL=tgz, HOME=home, SHELL="/bin/zsh",
+                   PATH="/usr/bin:/bin")
+        r = subprocess.run(["/bin/sh", copy], capture_output=True, text=True, timeout=120, env=env, cwd=elsewhere)
+        self.assertNotEqual(r.returncode, 0, "a tree the sums do not match was installed")
+        self.assertIn("does not match the SHA256SUMS", r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.prefix, "share", "palmar", "palmar", "__init__.py")))
+        self.assertFalse(os.path.exists(os.path.join(self.prefix, "bin", "palmar")))
+        # And with the right digest beside it, the same tarball goes in.
+        import hashlib
+        with open(tgz, "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+        with open(os.path.join(elsewhere, "SHA256SUMS"), "w") as fh:
+            fh.write(digest + "  palmar.tar.gz\n")
+        r = subprocess.run(["/bin/sh", copy], capture_output=True, text=True, timeout=120, env=env, cwd=elsewhere)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.prefix, "share", "palmar", "palmar", "__init__.py")))
+
     def test_it_is_valid_sh(self):
         r = subprocess.run(["/bin/sh", "-n", INSTALL], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
