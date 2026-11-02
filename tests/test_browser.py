@@ -396,10 +396,16 @@ class AnInboxBehindTheBell(unittest.TestCase):
             d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "second thing"})
             time.sleep(1)
             self.assertEqual(b.ev("document.getElementById('bell').dataset.unread"), "1", "no dot on the bell")
+            # **And it breathes** (2026-11-02): the dot alone was easy to miss, so the whole segment
+            # carries a slow tint while something is unread — gone again once the list is opened.
+            self.assertIn("bell-breathe", b.ev("getComputedStyle(document.getElementById('bell')).animationName"),
+                          "the bell does not breathe while something is unread")
             b.ev("document.getElementById('bell').click()")
             time.sleep(0.3)
             self.assertFalse(b.ev("document.getElementById('inbox').hidden"), "the bell did not open the list")
             self.assertEqual(b.ev("document.getElementById('bell').dataset.unread"), "0", "opening it did not count as reading")
+            self.assertNotIn("bell-breathe", b.ev("getComputedStyle(document.getElementById('bell')).animationName"),
+                             "the bell kept breathing after the list was read")   # the click's own ring may still be playing
             rows = self.rows(b)
             self.assertEqual([r["text"] for r in rows], ["second thing", "first thing"])
             self.assertEqual(rows[0]["name"], "pr-watch")
