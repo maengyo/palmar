@@ -1321,6 +1321,10 @@ body.fold-l .fab { display: grid; }
 }
 .toast.msg b { display: block; font-size: var(--t-12); font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
 .toast.msg .undo { font-size: var(--t-13); margin-left: 8px; }
+/* A link inside a message, in the toast and in the bell's list. */
+.msg-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px;
+            text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); word-break: break-all; }
+.msg-link:hover { text-decoration-color: var(--accent); }
 .toast b { color: var(--ink); font-weight: 500; }
 .toast .d { color: var(--ink-3); }
 /* The undo beside a push-aside toast. A real <button> so it is reachable by keyboard, stripped back to

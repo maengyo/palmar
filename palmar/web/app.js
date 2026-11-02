@@ -472,6 +472,7 @@ function toast(parts, opts) {
     if (typeof p === 'string') toastEl.appendChild(document.createTextNode(p));
     else if (p.b != null) toastEl.appendChild(el('b', null, p.b));
     else if (p.d != null) toastEl.appendChild(el('span', 'd', p.d));
+    else if (p.link != null) toastEl.appendChild(linkify(p.link));   // a message's text, its links live
     // A ring going round, for a line that is saying "still working" rather than telling you a result.
     else if (p.spin) toastEl.appendChild(el('span', 'spin'));
     else if (p.a != null) {
@@ -4718,6 +4719,30 @@ function clearMessage(id) {
   api('PATCH', '/api/sessions/' + encodeURIComponent(id), { message: null })
     .catch(() => {}).finally(() => clearing.delete(id));
 }
+// **A link in a message is a link** (user, 2026-11-02). http(s) only, the same rule as a link in
+// terminal output (OSC 8): opened detached, so the page it lands on gets no handle on this one.
+// Built as nodes, never as HTML — the text is a terminal's and is not trusted as markup.
+const URL_RE = /https?:\/\/[^\s<>"'`]+/g;
+function linkify(text) {
+  const frag = document.createDocumentFragment();
+  let last = 0;
+  for (const m of String(text).matchAll(URL_RE)) {
+    let url = m[0];
+    const trail = url.match(/[.,;:!?)\]]+$/);     // a full stop after the link is the sentence's
+    if (trail) url = url.slice(0, -trail[0].length);
+    if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+    const link = el('a', 'msg-link', url);
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.title = url;                 // the row cuts a long address short; the title carries it whole
+    link.addEventListener('click', (ev) => ev.stopPropagation());   // the row under it goes to the terminal; the link does not
+    frag.appendChild(link);
+    last = m.index + url.length;
+  }
+  if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+  return frag;
+}
 function messageLabel(e) {
   const s = sessions.get(e.pane);
   return s ? labelOf(s) : (e.name || shortPath(e.cwd || '') || 'a closed terminal');
@@ -4729,7 +4754,7 @@ function goToMessage(e) {
 function sayMessage(e) {
   const who = messageLabel(e);
   if (document.hasFocus()) {
-    toast([{ b: who }, e.text, { a: 'show', on: () => goToMessage(e) }], { msg: true });
+    toast([{ b: who }, { link: e.text }, { a: 'show', on: () => goToMessage(e) }], { msg: true });
     return;
   }
   if (!notifyOn || !canRing()) return;
@@ -4782,7 +4807,9 @@ function renderInbox() {
       api('DELETE', '/api/messages/' + encodeURIComponent(e.id)).catch(() => {});
     });
     row.appendChild(x);
-    row.appendChild(el('span', 'ib-text', e.text));
+    const text = el('span', 'ib-text');
+    text.appendChild(linkify(e.text));
+    row.appendChild(text);
     row.addEventListener('click', () => { showInbox(false); goToMessage(e); });
     list.appendChild(row);
   }

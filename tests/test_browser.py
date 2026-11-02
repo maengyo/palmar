@@ -436,6 +436,37 @@ class AnInboxBehindTheBell(unittest.TestCase):
             self.assertEqual(d.get("/api/messages"), [])
             self.assertIn("Nothing yet", b.ev("document.getElementById('inbox-list').textContent"))
 
+    def test_a_link_in_a_message_is_a_link(self):
+        """A watcher says "review requested" with the PR's address; the address has to be a link, in
+        the toast and in the list (user, 2026-11-02). http(s) only, opened detached, and clicking it
+        does not also fire the row underneath, which would go to the terminal."""
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="pr-watch")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            d.raw("PATCH", "/api/sessions/%s" % s["id"],
+                  {"message": "review requested https://github.com/o/r/pull/12. Also ftp://x and <b>x</b>"})
+            time.sleep(1)
+            toast = b.ev("""(()=>{const a=document.querySelector('#toast a');
+              return {href: a && a.href, target: a && a.target, rel: a && a.rel, text: a && a.textContent,
+                      bold: !!document.querySelector('#toast b b'), raw: document.getElementById('toast').textContent};})()""")
+            self.assertEqual(toast["href"], "https://github.com/o/r/pull/12", "the address is not a link in the toast: %r" % toast)
+            self.assertEqual(toast["text"], "https://github.com/o/r/pull/12", "the full stop was taken into the link")
+            self.assertEqual(toast["target"], "_blank")
+            self.assertIn("noopener", toast["rel"])
+            self.assertIn("<b>x</b>", toast["raw"], "the text was read as markup")
+            self.assertIn("ftp://x", toast["raw"])
+            b.ev("document.getElementById('bell').click()")
+            time.sleep(0.3)
+            r = b.ev("""(()=>{const a=document.querySelector('#inbox-list .ib-row a');
+              a.addEventListener('click', e=>e.preventDefault());   // do not open a tab in the test
+              a.click();
+              return {href: a.href, open: !document.getElementById('inbox').hidden,
+                      front: !!document.querySelector('.tile.focus')};})()""")
+            self.assertEqual(r["href"], "https://github.com/o/r/pull/12")
+            self.assertTrue(r["open"], "clicking the link fired the row and closed the list")
+            self.assertFalse(r["front"], "clicking the link went to the terminal")
+
     def test_the_switch_at_its_head_is_the_notification_switch(self):
         with Daemon() as d, Browser() as b:
             b.open(d.url, script="window.Notification=function(){}; window.Notification.permission='granted';")
