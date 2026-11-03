@@ -4597,9 +4597,13 @@ class MotionFromIssue36(unittest.TestCase):
           return {closing: rail.classList.contains('closing'), folded: document.body.classList.contains('fold-l'),
                   turn: document.getElementById('open-l').classList.contains('turn')};})()""")
         self.assertTrue(got["closing"], "folding did not set the rail off")
-        self.assertFalse(got["folded"], "the column snapped to the strip before the motion")
+        self.assertFalse(got["folded"], "the fold proper came before the motion")
         self.assertFalse(got["turn"], "the chevron turned before the rail had gone")
-        time.sleep(0.5)
+        # The canvas widens over the same frames: mid-motion the column is between the two widths.
+        time.sleep(0.15)
+        mid = self.b.ev("parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--rail-l'))")
+        self.assertTrue(30 < mid < 256, "the column did not move with the rail: %r" % mid)
+        time.sleep(0.35)
         self.assertFalse(self.b.ev("document.querySelector('.rail.left').classList.contains('closing')"))
         self.assertTrue(self.b.ev("document.body.classList.contains('fold-l')"), "the rail never folded after the motion")
         self.assertFalse(self.b.ev("document.getElementById('open-l').hidden"), "the strip did not come")

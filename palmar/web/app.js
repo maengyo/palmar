@@ -3420,13 +3420,28 @@ function setFold(side, folded) {
   if (folded) {
     preFold[side] = railW(side) || RAIL_DEF[side];   // remember the width to come back to
     // **Out the way it came in** (user, 2026-11-03): the contents slide out and the rows leave
-    // one after another, and only then does the column snap to the strip. The column itself is
-    // not animated — a width that changes every frame re-lays the canvas and every terminal in
-    // it out, which is the one kind of motion this page does not do.
-    if (motionRail(side, 'closing', () => foldNow(side, true))) return;
+    // one after another, and the canvas widens over the same frames — the column's width is
+    // transitioned (the @property on --rail-l/-r; see railAnim) while the rail's own contents
+    // stay until the motion ends, and only then does the fold proper (the strip, the hidden
+    // contents) happen. The windows on the canvas are placed in pixels inside the scroller, so
+    // a scroller that changes width each frame moves no terminal and re-lays none out.
+    if (motionRail(side, 'closing', () => foldNow(side, true))) {
+      railAnim(true);
+      document.documentElement.style.setProperty('--rail-' + side, RAIL_STRIP + 'px');
+      return;
+    }
   }
+  if (!folded) railAnim(true);
   foldNow(side, folded);
   if (!folded) motionRail(side, 'opening');
+}
+// The column's transition is on only for a fold or unfold: a hand dragging a rail's edge sets
+// the same variable every move and must not be followed with a lag.
+let railAnimTimer = null;
+function railAnim(on) {
+  clearTimeout(railAnimTimer);
+  document.documentElement.classList.toggle('rail-anim', on);
+  if (on) railAnimTimer = setTimeout(() => document.documentElement.classList.remove('rail-anim'), 600);
 }
 function foldNow(side, folded) {
   railFolded[side] = folded;

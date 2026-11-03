@@ -575,8 +575,16 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .rail.right.opening .row { animation-name: row-in-r; }
 @keyframes row-in   { from { transform: translateX(-10px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes row-in-r { from { transform: translateX(10px);  opacity: 0; } to { transform: none; opacity: 1; } }
-/* And out the same way (user, 2026-11-03): rows first, quickly, then the rail; the column snaps to
-   the strip only when this ends (setFold waits for it). */
+/* The column itself moves with the rail (user, 2026-11-03: "접히는 프레임 동안 동시에 캔버스도
+   확장"): the width variables are registered so they can transition, and html.rail-anim turns
+   the transition on for the fold or unfold only — a rail's edge being dragged sets the same
+   variable every move and must not lag behind the hand. Where @property is not known the
+   column snaps as before. */
+@property --rail-l { syntax: '<length>'; inherits: true; initial-value: 256px; }
+@property --rail-r { syntax: '<length>'; inherits: true; initial-value: 232px; }
+html.rail-anim { transition: --rail-l .4s cubic-bezier(.2,.9,.3,1), --rail-r .4s cubic-bezier(.2,.9,.3,1); }
+/* And out the same way (user, 2026-11-03): rows first, quickly, then the rail; the fold proper —
+   the strip, the hidden contents — only when this ends (setFold waits for it). */
 .rail.closing { animation: rail-out .36s cubic-bezier(.5,0,.75,.2) both; }
 .rail.right.closing { animation-name: rail-out-r; }
 @keyframes rail-out   { to { transform: translateX(-85%); opacity: .3; } }
@@ -809,6 +817,11 @@ body.ui-mono { --ui: var(--mono); }
 .capsule svg { width: 15px; height: 15px; }
 .capsule > :first-child { padding-left: 14px; }
 .capsule > :last-child { padding-right: 14px; margin-right: 0; }
+/* `.tidy:last-child` below keeps an 8px margin for a row of loose buttons, and it outranked the
+   line above by coming later — so the last segment stopped 9px short of the capsule's round end,
+   and hovering or pressing it left that end untouched while undo's end was covered (user,
+   2026-11-03). Named with the class, so this wins on specificity rather than on order. */
+.capsule > .tidy:last-child { margin-right: 0; }
 .capsule > * + * { border-left: 1px solid color-mix(in srgb, var(--line-2) 65%, transparent); }
 /* Not the menus: the bell's list and the options list are children of the capsule too (they hang
    off it), and this painted the whole open list in the hover colour, as if every row were hovered
