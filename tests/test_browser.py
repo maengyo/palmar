@@ -734,7 +734,7 @@ class RailFold(unittest.TestCase):
         time.sleep(0.3)
         wide0 = self.cv()
         self.b.ev("document.getElementById('fold-l').click()")
-        time.sleep(0.3)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         self.assertEqual(self.railvar("l"), self.STRIP, "a folded rail was clamped, not reduced to the strip")
         self.assertGreater(self.cv(), wide0, "the canvas did not widen")
         # reopen restores the width, not the strip
@@ -748,7 +748,7 @@ class RailFold(unittest.TestCase):
         time.sleep(0.2)
         self.b.ev("document.dispatchEvent(new KeyboardEvent('keydown',"
                   "{key:'\\\\',code:'Backslash',metaKey:true,shiftKey:true,bubbles:true}))")
-        time.sleep(0.3)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         self.assertEqual(self.railvar("r"), self.STRIP, "Cmd+Shift+\\ did not fold the right rail")
         self.b.ev("document.dispatchEvent(new KeyboardEvent('keydown',"
                   "{key:'\\\\',code:'Backslash',metaKey:true,shiftKey:true,bubbles:true}))")
@@ -773,7 +773,7 @@ class RailFold(unittest.TestCase):
         self.assertFalse(painted("r"))
 
         self.b.ev("document.getElementById('fold-l').click()")
-        time.sleep(0.3)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         self.assertTrue(painted("l"), "nothing offers to bring a folded rail back")
         self.assertFalse(painted("r"), "folding one rail showed the other one's tab")
 
@@ -796,7 +796,7 @@ class RailFold(unittest.TestCase):
         self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
         time.sleep(0.3)
         self.b.ev("document.getElementById('fold-l').click(); document.getElementById('fold-r').click()")
-        time.sleep(0.4)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         for side, sel in (("left", ".rail.left"), ("right", ".rail.right")):
             w = self.b.ev("document.querySelector('%s').getBoundingClientRect().width" % sel)
             self.assertEqual(w, 30, "the folded %s rail is %spx wide, not the 30px strip" % (side, w))
@@ -821,7 +821,7 @@ class RailFold(unittest.TestCase):
         self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
         time.sleep(0.3)
         self.b.ev("document.getElementById('fold-l').click(); document.getElementById('fold-r').click()")
-        time.sleep(0.4)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         left, right = col(".top .l"), col(".top .r")
         self.assertFalse(left["clipped"], "the logo is cut off when the left rail is folded")
         self.assertFalse(right["offscreen"], "the top-right buttons are off the screen")
@@ -836,10 +836,10 @@ class RailFold(unittest.TestCase):
         time.sleep(0.3)
         wide = scroll_w()
         self.b.ev("document.getElementById('fold-l').click()")
-        time.sleep(0.4)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         one = scroll_w()
         self.b.ev("document.getElementById('fold-r').click()")
-        time.sleep(0.4)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         both = scroll_w()
         self.assertLessEqual(one, wide, "folding a rail made the page wider")
         self.assertLessEqual(both, one, "folding the second rail made the page wider")
@@ -852,7 +852,7 @@ class RailFold(unittest.TestCase):
         self.b.ev("document.getElementById('open-l').click()")
         time.sleep(0.3)
         self.b.ev("document.getElementById('fold-l').click()")
-        time.sleep(0.4)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         self.assertEqual(self.railvar("l"), self.STRIP)
         try:
             self.b.ws.call("Emulation.setDeviceMetricsOverride",
@@ -870,7 +870,7 @@ class RailFold(unittest.TestCase):
         self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
         time.sleep(0.2)
         self.b.ev("document.getElementById('fold-r').click()")
-        time.sleep(0.3)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         self.b.ws.call("Page.reload"); time.sleep(3.5)
         self.assertTrue(self.b.ev("document.body.classList.contains('fold-r')"),
                         "the right rail did not stay folded across a reload")
@@ -4383,7 +4383,7 @@ class TopRow(unittest.TestCase):
         shown = lambda: self.b.ev("getComputedStyle(document.getElementById('fab-new')).display !== 'none'")
         self.assertFalse(shown(), "the button shows while the rail is open")
         self.b.ev("document.getElementById('fold-l').click()")
-        time.sleep(0.3)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         self.assertTrue(shown(), "the button did not appear when the rail folded")
         before = len(self.d.panes())
         self.b.ev("document.getElementById('fab-new').click()")
@@ -4595,13 +4595,25 @@ class MotionFromIssue36(unittest.TestCase):
         got = self.b.ev("""(()=>{window.palmar.setFold('l', true);
           const rail=document.querySelector('.rail.left');
           return {closing: rail.classList.contains('closing'), folded: document.body.classList.contains('fold-l'),
-                  turn: getComputedStyle(rail.querySelector('.rail-fold svg')).transform};})()""")
+                  turn: document.getElementById('open-l').classList.contains('turn')};})()""")
         self.assertTrue(got["closing"], "folding did not set the rail off")
         self.assertFalse(got["folded"], "the column snapped to the strip before the motion")
-        time.sleep(0.9)
+        self.assertFalse(got["turn"], "the chevron turned before the rail had gone")
+        time.sleep(0.5)
         self.assertFalse(self.b.ev("document.querySelector('.rail.left').classList.contains('closing')"))
         self.assertTrue(self.b.ev("document.body.classList.contains('fold-l')"), "the rail never folded after the motion")
         self.assertFalse(self.b.ev("document.getElementById('open-l').hidden"), "the strip did not come")
+        # The chevron turns only now that the rail has gone — and the head's turns once it is back.
+        self.assertTrue(self.b.ev("document.getElementById('open-l').classList.contains('turn')"), "the strip's chevron did not turn after the rail had gone")
+        time.sleep(0.5)
+        self.b.ev("window.palmar.setFold('l', false)")
+        time.sleep(0.2)
+        self.assertFalse(self.b.ev("document.getElementById('fold-l').classList.contains('turn')"), "the head's chevron turned before the rail was back")
+        time.sleep(0.4)
+        self.assertTrue(self.b.ev("document.getElementById('fold-l').classList.contains('turn')"), "the head's chevron did not turn once the rail was back")
+        time.sleep(0.6)
+        self.b.ev("window.palmar.setFold('l', true)")
+        time.sleep(0.8)
         # A second press while it is on its way does nothing — it is not unfolded again by mistake.
         self.b.ev("window.palmar.setFold('l', false)")
         time.sleep(0.2)
@@ -4613,27 +4625,46 @@ class MotionFromIssue36(unittest.TestCase):
         self.b.ev("window.palmar.setFold('l', false)")
         time.sleep(0.8)
 
-    def test_a_pressed_tab_ripples_from_the_press_and_the_old_one_lets_go(self):
+    def test_the_selection_pill_slides_to_the_pressed_tab_stretching_on_the_way(self):
+        """#36's comment (2026-11-03): a sliding pill, not a ripple. One element behind the tabs
+        carries the selection; pressed, it first spans the old tab and the new one, then settles
+        under the new one. Checked mid-slide and at the end."""
         self.b.ev("window.palmar.newCanvas()")
         time.sleep(1)
         ids = self.b.ev("[...document.querySelectorAll('.tab')].map(t=>t.dataset.id)")
         self.assertEqual(len(ids), 2)
         cur = self.b.ev("document.querySelector('.tab.cur').dataset.id")
         other = [i for i in ids if i != cur][0]
-        got = self.b.ev("""(()=>{const t=document.querySelector('.tab[data-id=%s]'); const r=t.getBoundingClientRect();
-          t.dispatchEvent(new MouseEvent('click', {bubbles:true, clientX:r.left+12, clientY:r.top+10}));
-          const rp=t.querySelector('.ripple'); const old=document.querySelector('.tab[data-id=%s]');
-          return {ripple: !!rp, left: rp && rp.style.left, reach: rp && rp.style.getPropertyValue('--reach'),
-                  cur: t.classList.contains('cur'), leaving: old.classList.contains('leaving')};})()"""
-                        % (json.dumps(other), json.dumps(cur)))
-        self.assertTrue(got["ripple"], "no ripple on the pressed tab")
-        self.assertEqual(got["left"], "12px", "the ripple does not start where the press was")
-        self.assertTrue(float(got["reach"]) > 1, "the ripple would not reach the corner: %r" % got["reach"])
-        self.assertTrue(got["cur"])
-        self.assertTrue(got["leaving"], "the tab that was current did not let go")
-        time.sleep(1.0)
-        self.assertEqual(self.b.ev("document.querySelectorAll('.tab .ripple, .tab.leaving').length"), 0,
-                         "the motion did not clean up after itself")
+        box = lambda sel: self.b.ev("(()=>{const e=document.querySelector(%s); return {l: e.offsetLeft, w: e.offsetWidth};})()" % json.dumps(sel))
+        a, b_ = box('.tab[data-id="%s"]' % cur), box('.tab[data-id="%s"]' % other)
+        pill = box('.tabs .pill')
+        self.assertEqual([pill["l"], pill["w"]], [a["l"], a["w"]], "the pill is not under the current tab to begin with")
+        # The stretch is over in a few frames (the curve is springy), so it is watched from inside
+        # the page, every frame, rather than sampled once from here (AGENTS.md: time transient UI
+        # inside the page).
+        self.b.ev("""(()=>{window.__pill=[]; const p=document.querySelector('.tabs .pill'); const t0=performance.now();
+          const tick=()=>{window.__pill.push(p.offsetWidth); if (performance.now()-t0<600) requestAnimationFrame(tick);};
+          document.querySelector('.tab[data-id=%s]').click(); tick(); return 1;})()""" % json.dumps(other))
+        time.sleep(0.9)
+        widest = self.b.ev("Math.max(...window.__pill)")
+        self.assertGreater(widest, max(a["w"], b_["w"]), "on the way the pill never stretched across both tabs")
+        end = box('.tabs .pill')
+        self.assertEqual([end["l"], end["w"]], [b_["l"], b_["w"]], "the pill did not settle under the pressed tab")
+        self.assertTrue(self.b.ev("document.querySelector('.tab[data-id=\"%s\"]').classList.contains('cur')" % other))
+
+    def test_a_pressed_button_sinks_and_springs_back(self):
+        """#37 (2026-11-03): a top-row button sinks into a darker base while pressed and comes back
+        up when let go. Checked on the options button, by the computed transform."""
+        q = self.b.ev("(()=>{const r=document.getElementById('options').getBoundingClientRect(); return {x: r.left + r.width/2, y: r.top + r.height/2};})()")
+        tf = lambda: self.b.ev("getComputedStyle(document.getElementById('options')).transform")
+        self.assertEqual(tf(), "none")
+        self.b.ws.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": q["x"], "y": q["y"], "button": "left", "clickCount": 1})
+        time.sleep(0.15)
+        self.assertNotEqual(tf(), "none", "the button did not sink while pressed")
+        self.b.ws.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": q["x"], "y": q["y"], "button": "left", "clickCount": 1})
+        time.sleep(0.6)
+        self.assertEqual(tf(), "none", "the button did not come back up")
+        self.b.ev("window.palmar.showOptions && window.palmar.showOptions(false); document.body.click()")
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")

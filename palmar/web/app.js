@@ -570,7 +570,7 @@ function flyToBell(from) {
   catch (e) { dot.remove(); return; }
   anim.onfinish = () => {
     dot.remove();
-    bellEl.classList.remove('ping'); void bellEl.offsetWidth; bellEl.classList.add('ping');   // it landed
+    ringBell();   // it landed
   };
 }
 function agoText(id) { return agoFrom(changedAt.get(id) || 0); }
@@ -3453,8 +3453,27 @@ function motionRail(side, cls, then) {
     rail.removeEventListener('animationend', done);
     rail.classList.remove(cls);
     if (then) then();
+    // **The chevron turns after, not during** (user, 2026-11-03): once the rail has gone, the
+    // strip's › turns round from ‹; once it is back, the head's ‹ turns round from ›.
+    turnChevron(cls === 'closing' ? $('#open-' + side) : $('#fold-' + side));
   });
   return true;
+}
+// One ring of the bell. The class comes off when the ring ends: left on, it sat on the bell for
+// good and the next `animation` rule to want the bell (the breathing) had to outrank it.
+function ringBell() {
+  if (!bellEl) return;
+  bellEl.classList.remove('ping'); void bellEl.offsetWidth; bellEl.classList.add('ping');
+  bellEl.addEventListener('animationend', function done(e) {
+    if (e.animationName !== 'bell-ping') return;
+    bellEl.classList.remove('ping'); bellEl.removeEventListener('animationend', done);
+  });
+}
+function turnChevron(btn) {
+  if (!btn) return;
+  btn.classList.remove('turn'); void btn.offsetWidth;
+  btn.classList.add('turn');
+  btn.addEventListener('animationend', () => btn.classList.remove('turn'), { once: true });
 }
 
 function loadFold() {
@@ -3930,35 +3949,59 @@ function applyCanvas() {
 }
 function switchCanvas(id, origin) {
   if (!canvases.has(id) || id === current) return;
-  const was = tabEls.get(current);
+  const from = pillTarget();              // where the pill is, before the tabs are repainted
   current = id;
   applyCanvas();
   paintTidy();      // the button speaks about **the canvas being looked at**
-  rippleTab(tabEls.get(id), origin, was);
+  slidePill(from);
   // The window may have been resized while it was hidden — fit once more after it has been drawn
   requestAnimationFrame(() => { for (const t of tiles.values()) if (t.visible()) t.refit(); });
 }
-// **The tab fills from where it was pressed** (#36): a ripple in the accent spreads from the press
-// (or from the middle, when the switch came from elsewhere — the list, the bell, a key) and fades
-// into the selection colour; the tab that was current fades out. The accent and --sel are the
-// page's own colours — the issue's violet→cyan is not a palmar colour.
-function rippleTab(t, origin, was) {
-  if (!t || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  for (const old of t.querySelectorAll('.ripple')) old.remove();
-  const w = t.clientWidth, h = t.clientHeight;
-  const x = origin ? origin.x : w / 2, y = origin ? origin.y : h / 2;
-  const r = el('span', 'ripple');
-  r.style.left = x + 'px';
-  r.style.top = y + 'px';
-  // The dot is 8px; scaled until it covers the farthest corner.
-  const reach = Math.hypot(Math.max(x, w - x), Math.max(y, h - y));
-  r.style.setProperty('--reach', (reach * 2 / 8 + 1).toFixed(1));
-  t.appendChild(r);
-  r.addEventListener('animationend', () => r.remove());
-  if (was && was !== t) {
-    was.classList.remove('leaving'); void was.offsetWidth; was.classList.add('leaving');
-    was.addEventListener('animationend', () => was.classList.remove('leaving'), { once: true });
-  }
+// **The selection is a pill that slides to the pressed tab, stretching on the way** (#36, the
+// comment of 2026-11-03 — a sliding pill, not a ripple). One element behind the tabs carries the
+// selection colour (--sel, the page's own; the issue's violet→cyan is not a palmar colour) and is
+// moved from the old tab to the new one: it first grows to span both, then settles on the new, on
+// a springy curve. Left and width are animated — on one small element behind the strip, which
+// repaints the strip and nothing else. renderTabs puts it back under the current tab after every
+// repaint, so reordering, renaming and a late tab all keep it where it belongs.
+let pillEl = null;
+function pillOf() {
+  if (!pillEl) { pillEl = el('span', 'pill'); pillEl.setAttribute('aria-hidden', 'true'); }
+  if (pillEl.parentNode !== tabsEl) tabsEl.insertBefore(pillEl, tabsEl.firstChild);
+  return pillEl;
+}
+function pillTarget() {
+  const t = tabEls.get(current);
+  if (!t || tabsEl.hidden || !t.parentNode) return null;
+  return { left: t.offsetLeft, top: t.offsetTop, width: t.offsetWidth, height: t.offsetHeight };
+}
+function placePill() {
+  const p = pillOf(), to = pillTarget();
+  if (!to) { p.hidden = true; return; }
+  p.hidden = false;
+  if (p._anim && p._anim.playState === 'running') return;     // on its way there — let it arrive
+  p.style.left = to.left + 'px'; p.style.top = to.top + 'px';
+  p.style.width = to.width + 'px'; p.style.height = to.height + 'px';
+}
+function slidePill(from) {
+  const p = pillOf(), to = pillTarget();
+  if (!to) { placePill(); return; }
+  if (!from || matchMedia('(prefers-reduced-motion: reduce)').matches) { placePill(); return; }
+  if (p._anim) p._anim.cancel();
+  p.hidden = false;
+  p.style.left = to.left + 'px'; p.style.top = to.top + 'px';
+  p.style.width = to.width + 'px'; p.style.height = to.height + 'px';
+  const l0 = Math.min(from.left, to.left), r1 = Math.max(from.left + from.width, to.left + to.width);
+  try {
+    p._anim = p.animate([
+      { left: from.left + 'px', width: from.width + 'px' },
+      { left: l0 + 'px', width: (r1 - l0) + 'px', offset: 0.45 },
+      { left: to.left + 'px', width: to.width + 'px' },
+    ], { duration: 460, easing: 'cubic-bezier(.2,1,.3,1)' });
+    // A tab that changed width mid-slide (a rename's input, its handle) was skipped while the
+    // slide ran; once it has arrived, take the tab's width as it is now.
+    p._anim.onfinish = () => { p._anim = null; placePill(); };
+  } catch (e) { p._anim = null; }
 }
 
 // **The tab strip is patched, not rebuilt.** Every session frame calls renderTabs (the dot is computed), and the
@@ -3981,19 +4024,17 @@ function makeTab(id) {
   const nm = el('span', 'nm');
   t.appendChild(nm);
   // The canvas object is replaced on every broadcast, so hold only the id and look it up each time
-  t.addEventListener('click', (ev) => {
-    if (tabDragged) return;
-    const r = t.getBoundingClientRect();
-    switchCanvas(id, { x: ev.clientX - r.left, y: ev.clientY - r.top });
-  });
+  t.addEventListener('click', () => { if (!tabDragged) switchCanvas(id); });
   t.addEventListener('dblclick', (ev) => { ev.preventDefault(); const c = canvasById(id); if (c) renameCanvas(c, nm); });
   t.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); switchCanvas(id); }
     else if (ev.key === 'F2') { ev.preventDefault(); const c = canvasById(id); if (c) renameCanvas(c, nm); }
   });
   tabDrag(t);
+  if (tabRO) tabRO.observe(t);      // a tab that changes width (a rename, its handle) moves the pill with it
   return t;
 }
+const tabRO = window.ResizeObserver ? new ResizeObserver(() => placePill()) : null;
 
 function paintTab(id) {
   const c = canvases.get(id), t = tabEls.get(id);
@@ -4076,6 +4117,7 @@ function renderTabs() {
     const t = tabEls.get(current);
     if (t) t.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
+  placePill();
 }
 
 function renameCanvas(c, host) {
@@ -5089,7 +5131,7 @@ async function toggleNotify() {
 if (bellEl) {
   bellEl.addEventListener('click', (e) => {
     e.stopPropagation();
-    bellEl.classList.remove('ping'); void bellEl.offsetWidth; bellEl.classList.add('ping');   // one ring, every press
+    ringBell();   // one ring, every press
     showInbox(inboxEl && inboxEl.hidden);
   });
   bellEl.addEventListener('keydown', (e) => {

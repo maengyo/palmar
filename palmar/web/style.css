@@ -587,16 +587,15 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .rail.right.closing .row { animation-name: row-out-r; }
 @keyframes row-out   { to { transform: translateX(-10px); opacity: 0; } }
 @keyframes row-out-r { to { transform: translateX(10px);  opacity: 0; } }
-/* The chevron on the rail's head turns half a circle as the rail goes: ‹ becomes › on the way out,
-   and comes back round on the way in. */
-.rail-fold svg { transition: transform .4s cubic-bezier(.2,1.1,.3,1); }
-.rail.closing .rail-fold svg { transform: rotate(180deg); }
-.rail.opening .rail-fold svg { animation: fold-turn .46s cubic-bezier(.2,1.1,.3,1) both; }
+/* The chevron turns half a circle **after** the rail has gone or come back (user, 2026-11-03: "다
+   닫히고 바뀌고, 다 열리고 바뀌도록"): the strip's › turns round from ‹ once the rail is out, the
+   head's ‹ turns round from › once it is in. turnChevron puts the class on. */
+.rail-fold.turn svg, .rail-open.turn i { animation: fold-turn .4s cubic-bezier(.2,1.1,.3,1) both; display: inline-block; }
 @keyframes fold-turn { from { transform: rotate(180deg); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .rail.opening, .rail.opening .grp, .rail.opening .ses, .rail.opening .row, .tab .ripple, .tab.leaving,
-  .rail.closing, .rail.closing .grp, .rail.closing .ses, .rail.closing .row, .rail.opening .rail-fold svg { animation: none; }
-  .rail-fold svg { transition: none; }
+  .rail.opening, .rail.opening .grp, .rail.opening .ses, .rail.opening .row,
+  .rail.closing, .rail.closing .grp, .rail.closing .ses, .rail.closing .row, .rail-fold.turn svg, .rail-open.turn i { animation: none; }
+  .capsule > :active, .tabs .ib:active, .rail-fold:active, .rail-open:active { transform: none; }
   .card, .card.shrink { animation: none; transform: none; }
 }
 .rail-fold {
@@ -815,6 +814,16 @@ body.ui-mono { --ui: var(--mono); }
    off it), and this painted the whole open list in the hover colour, as if every row were hovered
    (user, 2026-11-03). */
 .capsule > :hover:not(:disabled):not(.theme-menu) { background: var(--hover); color: var(--ink); }
+/* **Press Down** (#37, 2026-11-03): a pressed button sinks a pixel into a darker base and springs
+   back up when let go — the top row's buttons, the tab strip's +, and the rail chevrons. The
+   sink is quick; the way back overshoots a little (the spring). Transform and background only. */
+.capsule > :not(.theme-menu), .tabs .ib, .rail-fold, .rail-open {
+  transition: transform .32s cubic-bezier(.2,1.6,.4,1), background .15s, color .15s;
+}
+.capsule > :active:not(:disabled):not(.theme-menu), .tabs .ib:active, .rail-fold:active, .rail-open:active {
+  transform: translateY(1px) scale(.94); transition-duration: .06s, .06s, .06s;
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+}
 .capsule > :active:not(:disabled) { background: var(--sel); transform: none; }
 .capsule > :disabled { color: var(--ink-3); opacity: .38; cursor: default; }
 .capsule > [aria-pressed="true"], .capsule > [aria-expanded="true"] { color: var(--ink); background: var(--sel); }
@@ -853,18 +862,16 @@ body.ui-mono { --ui: var(--mono); }
   color: var(--ink-2); font-size: var(--t-13); cursor: pointer; user-select: none;   /* 11.5 → 13 (2026-09-15) */
 }
 .tab:hover { background: var(--hover); }
-/* **Pressed, it fills from the press** (#36): a dot of the accent spreads from where the finger was
-   until it covers the tab, fading into the selection colour as it goes; the tab that was current
-   lets its colour go. --reach is set by rippleTab from the farthest corner. */
-.tab { position: relative; overflow: hidden; }
-.tab .ripple {
-  position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
-  background: var(--accent); opacity: .3; pointer-events: none; transform: scale(0);
-  animation: tab-ripple .5s cubic-bezier(.2,.7,.3,1) forwards;
+/* **The selection is a pill that slides** (#36, the comment of 2026-11-03): one element behind the
+   tabs carries the selection colour and is moved by slidePill from the old tab to the new one,
+   stretching to span both on the way. The tabs sit above it; the current one only changes its
+   ink. --sel and --sel-line are the page's own selection colours. */
+.tabs { position: relative; }
+.tab { position: relative; z-index: 1; }
+.tabs .pill {
+  position: absolute; z-index: 0; box-sizing: border-box; pointer-events: none;
+  background: var(--sel); border: 1px solid var(--sel-line); border-bottom: 0; border-radius: 12px 12px 0 0;
 }
-@keyframes tab-ripple { 0% { transform: scale(0); opacity: .3; } 70% { opacity: .12; } 100% { transform: scale(var(--reach, 40)); opacity: 0; } }
-.tab.leaving { animation: tab-leave .3s ease-out; }
-@keyframes tab-leave { from { background: var(--sel); border-color: var(--sel-line); } to { background: transparent; border-color: transparent; } }
 /* Delete canvas (#18). **It appears only when deleting is possible** — the tab being viewed, with not one
    terminal in it, and not the last canvas. It is exactly the inverse of the two conditions the daemon refuses
    with 409, so the screen never sends a request that will be refused. While absent it takes up no space either.
@@ -882,10 +889,7 @@ body.ui-mono { --ui: var(--mono); }
 .tab .cx:hover, .tab .cx:focus-visible { opacity: 1; color: var(--ink); background: var(--btn); }
 .tab .cx:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 /* Selection is shown as in the list and the tree (.ses.cur / .row.sel) — no new expression is made */
-.tab.cur {
-  background: var(--sel); color: var(--ink);
-  border-color: var(--sel-line);
-}
+.tab.cur { color: var(--ink); }   /* the pill behind it carries the colour */
 .tab .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* One dot on a tab and nothing more (decisions.md ⑪ "그 이상 안 넣는다"). Color --st-wait — not a new color */
 .tab .dot { width: 6px; height: 6px; margin-left: 1px; }
