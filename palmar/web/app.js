@@ -3428,20 +3428,9 @@ function setFold(side, folded) {
     if (motionRail(side, 'closing', () => foldNow(side, true))) {
       railAnim(true);
       document.documentElement.style.setProperty('--rail-' + side, RAIL_STRIP + 'px');
-      // The strip is there from the first frame, over the column's near edge: the column shrinks
-      // down to exactly it, so nothing appears at the end that was not already on screen.
-      const open = $('#open-' + side);
-      if (open) {
-        open.hidden = false;
-        // …but it is not *seen* from the first frame: shown at once, the closed look was there
-        // before the closing had happened (user, 2026-11-03). It fades in over the last part of
-        // the motion while the rail's contents fade out, so the two cross rather than cut.
-        open.classList.remove('coming'); void open.offsetWidth; open.classList.add('coming');
-        open.addEventListener('animationend', function done(e) {
-          if (e.animationName !== 'strip-in') return;
-          open.classList.remove('coming'); open.removeEventListener('animationend', done);
-        });
-      }
+      // The strip stays hidden until the fold proper: the head's chevron rides the shrinking
+      // column down to the strip's spot (CSS, .rail.closing .rail-fold), and the strip takes
+      // over there with the same drawing — one object, as far as the eye goes.
       return;
     }
   }

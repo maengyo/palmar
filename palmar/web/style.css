@@ -239,7 +239,11 @@ body {
   display: grid; align-items: center;
   /* minmax(…, max-content) on the right: the buttons there are wider than the rail below them can be
      dragged, and a column narrower than its content spilled them over undo·tidy (user, 2026-09-15). */
-  grid-template-columns: var(--top-l, var(--rail-l)) minmax(0, 1fr) minmax(var(--top-r, var(--rail-r)), max-content);
+  /* Each outer column is **at least** its rail's width and grows to its content: open, that is the
+     rail's width; folded, the logo's or the buttons' own. One expression for both states, so the
+     width can transition between them — with `auto` for the folded state the left column shrank
+     past the logo during the fold and the tabs slid over it, then jumped (user, 2026-11-03). */
+  grid-template-columns: minmax(var(--rail-l), max-content) minmax(0, 1fr) minmax(var(--rail-r), max-content);
   border-bottom: 1px solid var(--line); background: var(--topbar);
   -webkit-app-region: drag;
 }
@@ -557,8 +561,6 @@ body.rz-drag { cursor: col-resize; user-select: none; }
    floating over the canvas, easy to miss and nowhere near where the fold button had been. The strip keeps
    the column at 30px, puts the button where the header's was, and leaves room for what belongs there
    later. The rail's own contents are hidden; the strip is the .rail-open button laid over the column. */
-body.fold-l { --top-l: auto; }
-body.fold-r { --top-r: auto; }
 body.fold-l .rail.left > *, body.fold-r .rail.right > * { display: none; }
 body.fold-l .rz.l,   body.fold-r .rz.r   { display: none; }
 body.fold-l .rail.left  .rail-fold,
@@ -567,8 +569,21 @@ body.fold-r .rail.right .rail-fold       { display: none; }
    row in order; the stagger is 26ms a row, capped at 14 rows so a long list does not drag on. Only
    transform and opacity move. The rail's grid column has already snapped to its width by then —
    it is the contents that come in, not the layout. */
-.rail.opening { animation: rail-in .46s cubic-bezier(.2,1.2,.35,1) both; }
-.rail.right.opening { animation-name: rail-in-r; }
+/* **The chevron is one object** (user, 2026-11-03: "동일한 객체로는 못 두는 거야?"). The rail itself
+   is never moved: its contents are, and the head's fold button is taken out of the head and
+   pinned to the column's near edge for the length of the motion, so as the column shrinks it
+   rides down to exactly where the strip's chevron will be — and the strip appears, with the same
+   drawing in the same spot, only when the fold proper happens. Opening is the reverse: it starts
+   at the strip's spot and rides out to the head's end. The rail carries a clock animation that
+   does nothing visible; its end is what motionRail waits for. */
+.rail.opening, .rail.closing { position: relative; }
+.rail.opening { animation: rail-clock .46s both; }
+.rail.closing { animation: rail-clock .36s both; }
+@keyframes rail-clock { from { opacity: 1; } to { opacity: 1; } }
+.rail.opening .rail-fold, .rail.closing .rail-fold { position: absolute; top: 12px; right: 2px; z-index: 2; }
+.rail.right.opening .rail-fold, .rail.right.closing .rail-fold { right: auto; left: 2px; }
+.rail.opening > :not(.rh), .rail.opening .rh > :not(.rail-fold) { animation: rail-in .46s cubic-bezier(.2,1.2,.35,1) both; }
+.rail.right.opening > :not(.rh), .rail.right.opening .rh > :not(.rail-fold) { animation-name: rail-in-r; }
 /* From most of the way out, not a nudge — 22px read as nothing (user, 2026-11-03: "적용된 건지"). */
 @keyframes rail-in   { from { transform: translateX(-85%); opacity: .3; } to { transform: none; opacity: 1; } }
 @keyframes rail-in-r { from { transform: translateX(85%);  opacity: .3; } to { transform: none; opacity: 1; } }
@@ -588,19 +603,15 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 html.rail-anim { transition: --rail-l .4s cubic-bezier(.2,.9,.3,1), --rail-r .4s cubic-bezier(.2,.9,.3,1); }
 /* And out the same way (user, 2026-11-03): rows first, quickly, then the rail; the fold proper —
    the strip, the hidden contents — only when this ends (setFold waits for it). */
-.rail.closing { animation: rail-out .36s cubic-bezier(.5,0,.75,.2) both; }
-.rail.right.closing { animation-name: rail-out-r; }
+.rail.closing > :not(.rh), .rail.closing .rh > :not(.rail-fold) { animation: rail-out .36s cubic-bezier(.5,0,.75,.2) both; }
+.rail.right.closing > :not(.rh), .rail.right.closing .rh > :not(.rail-fold) { animation-name: rail-out-r; }
 /* A nudge and a fade, not a slide off the screen: the column is shrinking to the strip over the
    same frames (the @property transition), and that is the closing — the rail sliding 85% away on
    top of it made the whole rail vanish and the strip pop in at the end (user, 2026-11-03). The
    strip is shown from the first frame, over the column's near edge, so what is left at the end
    was there all along. */
 @keyframes rail-out   { to { transform: translateX(-24px); opacity: .25; } }
-/* The strip comes in late and fades, crossing the contents on their way out — on screen from
-   the start so the end state is the strip and nothing else, but not seen before the closing has
-   mostly happened. */
-.rail-open.coming { animation: strip-in .38s linear both; }
-@keyframes strip-in { 0% { opacity: 0; } 45% { opacity: 0; } 100% { opacity: 1; } }
+
 @keyframes rail-out-r { to { transform: translateX(24px);  opacity: .25; } }
 .rail.closing .grp, .rail.closing .ses, .rail.closing .row {
   animation: row-out .22s cubic-bezier(.5,0,.75,.2) both; animation-delay: calc(var(--i, 0) * 14ms);
@@ -616,13 +627,14 @@ html.rail-anim { transition: --rail-l .4s cubic-bezier(.2,.9,.3,1), --rail-r .4s
    sits turned round (the head's ‹) and turns to › once the rail is out. So each turn is half a
    circle that continues the other button's drawing — not a full one from ‹ to ‹ (user,
    2026-11-03: "한 바퀴 돌아서"). */
-.rail.opening .rail-fold svg, .rail-open.coming i svg { transform: rotate(180deg); }
+.rail.opening .rail-fold svg { transform: rotate(180deg); }
 .rail-fold.turn svg, .rail-open.turn i svg { animation: fold-turn .4s cubic-bezier(.2,1.1,.3,1) both; }
 @keyframes fold-turn { from { transform: rotate(180deg); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   .rail.opening, .rail.opening .grp, .rail.opening .ses, .rail.opening .row,
-  .rail.closing, .rail.closing .grp, .rail.closing .ses, .rail.closing .row, .rail-fold.turn svg, .rail-open.turn i svg, .rail-open.coming { animation: none; }
-  .rail.opening .rail-fold svg, .rail-open.coming i svg { transform: none; }
+  .rail.closing, .rail.closing .grp, .rail.closing .ses, .rail.closing .row, .rail-fold.turn svg, .rail-open.turn i svg { animation: none; }
+  .rail.opening .rail-fold svg { transform: none; }
+  .rail.opening > :not(.rh), .rail.opening .rh > :not(.rail-fold), .rail.closing > :not(.rh), .rail.closing .rh > :not(.rail-fold) { animation: none; }
   .capsule > :active, .tabs .ib:active, .rail-fold:active, .rail-open:active i { transform: none; }
   .card, .card.shrink { animation: none; transform: none; }
 }

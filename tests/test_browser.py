@@ -4598,13 +4598,19 @@ class MotionFromIssue36(unittest.TestCase):
                   turn: document.getElementById('open-l').classList.contains('turn'),
                   strip: !document.getElementById('open-l').hidden};})()""")
         self.assertTrue(got["closing"], "folding did not set the rail off")
-        # The strip is on screen from the first frame — the column shrinks down to it, so nothing
-        # pops in at the end (user, 2026-11-03: "완전히 사라졌다가 순식간에 나타나").
-        self.assertTrue(got["strip"], "the strip was not there from the start of the fold")
+        # The strip is not shown before the fold proper: the head's chevron rides the shrinking
+        # column down to the strip's spot and the strip takes over there with the same drawing
+        # (user, 2026-11-03: "동일한 객체로는 못 두는 거야?").
+        self.assertFalse(got["strip"], "the closed look showed before the closing had happened")
         self.assertFalse(got["folded"], "the fold proper came before the motion")
         self.assertFalse(got["turn"], "the chevron turned before the rail had gone")
-        # The canvas widens over the same frames: mid-motion the column is between the two widths.
+        # The canvas widens over the same frames: mid-motion the column is between the two widths,
+        # and the head's chevron is riding the column's near edge.
         time.sleep(0.15)
+        ride = self.b.ev("""(()=>{const b=document.getElementById('fold-l').getBoundingClientRect(), r=document.querySelector('.rail.left').getBoundingClientRect();
+          return {btnRight: b.right, railRight: r.right, visible: b.width > 0};})()""")
+        self.assertTrue(ride["visible"], "the head's chevron is gone during the fold")
+        self.assertLess(abs(ride["railRight"] - ride["btnRight"]), 6, "the head's chevron is not riding the column's edge: %r" % ride)
         mid = self.b.ev("parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--rail-l'))")
         self.assertTrue(30 < mid < 256, "the column did not move with the rail: %r" % mid)
         time.sleep(0.35)
