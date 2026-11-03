@@ -38,7 +38,9 @@
      saying why. 13 is the interface's body (rows, tabs, menus), 12 its second line and small
      controls, 11 the smallest a label goes, 14 the one step up. Glyph-sized things (the ＋, the ×)
      are not text and keep their own numbers. */
-  --t-11: 11px; --t-12: 12px; --t-13: 13px; --t-14: 14px;
+  /* --t-13 is 14px since 2026-11-03 (#34, user): the body — rail rows, menus — moved up one step to the
+     app-screen median taste-skill measured. The token keeps its name; what it means is "the body". */
+  --t-11: 11px; --t-12: 12px; --t-13: 14px; --t-14: 14px;
   /* **One radius family** (2026-11-01). Radii in a product are bimodal — tight, 4-8px, or soft, 16-24px
      with full pills for controls — and a screen that mixes them reads as undecided (taste-skill,
      app-screens §9.4: 23 measured product screens). palmar had 3, 4, 5, 6, 7, 8, 9, 10, 14 and 999 at
@@ -63,9 +65,9 @@
   --ink:      #1f2229;
   --ink-2:    #4f5563;
   --ink-3:    #656a7a;   /* 4.9:1 against the above. The old #858a97 was 3.2:1 and small text went faint */
-  --accent:   #4a58b8;
+  --accent:   #177581;   /* teal, not indigo, since 2026-11-03 (#34, user: "틸 + 14"): 4.8:1 on the ground, and neither green nor amber beside the lights */
   --on-accent:#fcfbf8;
-  --accent-2: rgba(74,88,184,.12);
+  --accent-2: rgba(23,117,129,.12);
   --hover:    rgba(31,34,41,.055);   /* a shade the eye catches on the way past (2026-09-15) */
   --btn:      #fcfbf8;
   --kbd:      #fcfbf8;
@@ -133,9 +135,9 @@
        warmer — so the current tab, the current row, the cursor and a message line were all "slightly
        brighter text". The light side's indigo, lifted for a dark ground: 7.7:1 on the ground, 8.1:1
        on a tile (measured), and the two themes now share one colour that means "yours". */
-    --accent:    #9aa5f0;
+    --accent:    #6cc7d1;
     --on-accent: #191714;
-    --accent-2:  rgba(154,165,240,.14);
+    --accent-2:  rgba(108,199,209,.14);
     --hover:     rgba(255,255,255,.07);
     --btn:       #24211c;
     --kbd:       #24211c;
@@ -172,9 +174,9 @@
      warmer — so the current tab, the current row, the cursor and a message line were all "slightly
      brighter text". The light side's indigo, lifted for a dark ground: 7.7:1 on the ground, 8.1:1
      on a tile (measured), and the two themes now share one colour that means "yours". */
-  --accent:    #9aa5f0;
+  --accent:    #6cc7d1;
   --on-accent: #191714;
-  --accent-2:  rgba(154,165,240,.14);
+  --accent-2:  rgba(108,199,209,.14);
   --hover:     rgba(255,255,255,.07);
   --btn:       #24211c;
   --kbd:       #24211c;

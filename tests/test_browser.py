@@ -4096,11 +4096,11 @@ class Palettes(unittest.TestCase):
         the text colour a shade warmer, so nothing chosen stood out."""
         self.pick("light:paper")
         st = self.state()
-        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["light", None, "#4a58b8"], st)
+        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["light", None, "#177581"], st)
         self.assertEqual(st["on"], ["light:paper"], "the list does not mark what is in effect: %r" % st)
         self.pick("dark:earth")
         st = self.state()
-        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["dark", None, "#9aa5f0"], st)
+        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["dark", None, "#6cc7d1"], st)
         ink = self.b.ev("getComputedStyle(document.documentElement).getPropertyValue('--ink').trim()")
         self.assertNotEqual(st["accent"], ink, "the dark accent is still the text colour")
         self.pick("system")
@@ -4120,7 +4120,7 @@ class Palettes(unittest.TestCase):
             if self.b.ev("!!(window.palmar && window.palmar.palette)"):
                 break
         st = self.state()
-        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["dark", None, "#9aa5f0"], st)
+        self.assertEqual([st["theme"], st["pal"], st["accent"]], ["dark", None, "#6cc7d1"], st)
 
     def test_it_is_a_row_of_the_options_list(self):
         """Theme sat on the top bar as a button of its own while font and text size were rows in the
