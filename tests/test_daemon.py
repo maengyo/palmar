@@ -2444,8 +2444,21 @@ class AMessageFromInsideAPane(unittest.TestCase):
             r = self.cli(d.home, "--message", "review requested:\n  o/r#12", pane=s["id"])
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             m = self.message_of(d, s["id"])
-            self.assertEqual(m["text"], "review requested: o/r#12", "lines are not joined into one")
+            # Lines are kept since 2026-11-03 (before, they were joined into one); each is squeezed.
+            self.assertEqual(m["text"], "review requested:\no/r#12", "the lines were not kept")
             self.assertIsNone(self.message_of(d, other["id"]), "it landed on another pane too")
+
+    def test_a_dash_reads_the_lines_from_stdin(self):
+        """`git log -3 --oneline | palmar --message -` — the way a script says several lines
+        (2026-11-03, with lines being kept)."""
+        from tests.helpers import PYTHON, REPO
+        with Daemon() as d:
+            s = d.open_pane()
+            env = dict(os.environ, HOME=d.home, PYTHONPATH=REPO, PALMAR_PANE=s["id"])
+            r = subprocess.run([PYTHON, "-m", "palmar", "--message", "-"], cwd=REPO, capture_output=True,
+                               text=True, timeout=60, env=env, input="first line\n\nsecond line\n")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(self.message_of(d, s["id"])["text"], "first line\n\nsecond line")
 
     def test_typed_in_a_real_pane_it_finds_its_own_way(self):
         """No id anywhere: the shell's own `PALMAR_PANE` is the only thing that says which pane."""

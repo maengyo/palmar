@@ -239,7 +239,11 @@ body {
   display: grid; align-items: center;
   /* minmax(…, max-content) on the right: the buttons there are wider than the rail below them can be
      dragged, and a column narrower than its content spilled them over undo·tidy (user, 2026-09-15). */
-  grid-template-columns: var(--top-l, var(--rail-l)) minmax(0, 1fr) minmax(var(--top-r, var(--rail-r)), max-content);
+  /* Each outer column is **at least** its rail's width and grows to its content: open, that is the
+     rail's width; folded, the logo's or the buttons' own. One expression for both states, so the
+     width can transition between them — with `auto` for the folded state the left column shrank
+     past the logo during the fold and the tabs slid over it, then jumped (user, 2026-11-03). */
+  grid-template-columns: minmax(var(--rail-l), max-content) minmax(0, 1fr) minmax(var(--rail-r), max-content);
   border-bottom: 1px solid var(--line); background: var(--topbar);
   -webkit-app-region: drag;
 }
@@ -517,7 +521,10 @@ kbd {
 /* ── body grid ──────────────────────────────── */
 /* The rail widths live in **one place only** (--rail-l·--rail-r on :root). Before, .top and .body each wrote
    the same `256px 1fr 232px` separately, so fixing one side left the top bar and the body below misaligned. */
-.body { display: grid; grid-template-columns: var(--rail-l) 1fr var(--rail-r); min-height: 0;
+/* overflow hidden: a rail on its way out is translated past its column's edge, and the right one
+   went past the window's — the page grew a scrollbar for the length of the motion and the canvas's
+   own scrollbar blinked (user, 2026-11-03). The left one goes past 0, which never scrolls. */
+.body { display: grid; grid-template-columns: var(--rail-l) 1fr var(--rail-r); min-height: 0; overflow: hidden;
         position: relative; }
 
 /* The grip that drags the rail boundary. It lies on top of the boundary instead of adding a grid column — one
@@ -554,12 +561,102 @@ body.rz-drag { cursor: col-resize; user-select: none; }
    floating over the canvas, easy to miss and nowhere near where the fold button had been. The strip keeps
    the column at 30px, puts the button where the header's was, and leaves room for what belongs there
    later. The rail's own contents are hidden; the strip is the .rail-open button laid over the column. */
-body.fold-l { --top-l: auto; }
-body.fold-r { --top-r: auto; }
 body.fold-l .rail.left > *, body.fold-r .rail.right > * { display: none; }
 body.fold-l .rz.l,   body.fold-r .rz.r   { display: none; }
 body.fold-l .rail.left  .rail-fold,
 body.fold-r .rail.right .rail-fold       { display: none; }
+/* **Unfolded by a hand, the rail springs in and its rows follow** (#36). springRail sets --i on each
+   row in order; the stagger is 26ms a row, capped at 14 rows so a long list does not drag on. Only
+   transform and opacity move. The rail's grid column has already snapped to its width by then —
+   it is the contents that come in, not the layout. */
+/* **The chevron is one object** (user, 2026-11-03: "동일한 객체로는 못 두는 거야?"). The rail itself
+   is never moved: its contents are, and the head's fold button is taken out of the head and
+   pinned to the column's near edge for the length of the motion, so as the column shrinks it
+   rides down to exactly where the strip's chevron will be — and the strip appears, with the same
+   drawing in the same spot, only when the fold proper happens. Opening is the reverse: it starts
+   at the strip's spot and rides out to the head's end. The rail carries a clock animation that
+   does nothing visible; its end is what motionRail waits for. */
+.rail.opening, .rail.closing { position: relative; }
+.rail.opening { animation: rail-clock .46s both; }
+.rail.closing { animation: rail-clock .36s both; }
+@keyframes rail-clock { from { opacity: 1; } to { opacity: 1; } }
+/* Pinned where the head's row had it (14px down, 12px in from the edge) and moved to the strip's
+   spot (2px in) over the motion, so neither end of the ride is a jump; the strip's glyph sits at
+   the same height. The rest of the head goes out fast and comes in late, so the pinned button
+   never sits over the + or the title while they are there (user, 2026-11-03: "+ 랑 겹치다가"). */
+.rail.opening .rail-fold, .rail.closing .rail-fold { position: absolute; top: 14px; z-index: 2; }
+/* The head keeps the pinned button's slot (26px and the 6px gap) so the + beside it does not
+   slide into the slot the moment the button is taken out of the row. */
+.rail.left.opening .rh,  .rail.left.closing .rh  { padding-right: 44px; }
+.rail.right.opening .rh, .rail.right.closing .rh { padding-left: 44px; }
+.rail.left.closing .rail-fold  { animation: pin-out-l .36s cubic-bezier(.5,0,.75,.2) both; }
+.rail.left.opening .rail-fold  { animation: pin-in-l .46s cubic-bezier(.2,.9,.3,1) both; }
+.rail.right.closing .rail-fold { animation: pin-out-r .36s cubic-bezier(.5,0,.75,.2) both; }
+.rail.right.opening .rail-fold { animation: pin-in-r .46s cubic-bezier(.2,.9,.3,1) both; }
+@keyframes pin-out-l { from { right: 12px; } to { right: 2px; } }
+@keyframes pin-in-l  { from { right: 2px; }  to { right: 12px; } }
+@keyframes pin-out-r { from { left: 12px; }  to { left: 2px; } }
+@keyframes pin-in-r  { from { left: 2px; }   to { left: 12px; } }
+.rail.opening > :not(.rh) { animation: rail-in .46s cubic-bezier(.2,1.2,.35,1) both; }
+.rail.right.opening > :not(.rh) { animation-name: rail-in-r; }
+.rail.opening .rh > :not(.rail-fold) { animation: head-in .22s .24s ease-out both; }
+.rail.closing .rh > :not(.rail-fold) { animation: head-out .09s ease-in both; }   /* gone before the narrowing column carries the far end into the slot */
+@keyframes head-in  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes head-out { from { opacity: 1; } to { opacity: 0; } }
+/* From most of the way out, not a nudge — 22px read as nothing (user, 2026-11-03: "적용된 건지"). */
+@keyframes rail-in   { from { transform: translateX(-85%); opacity: .3; } to { transform: none; opacity: 1; } }
+@keyframes rail-in-r { from { transform: translateX(85%);  opacity: .3; } to { transform: none; opacity: 1; } }
+.rail.opening .grp, .rail.opening .ses, .rail.opening .row {
+  animation: row-in .34s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(120ms + var(--i, 0) * 36ms);
+}
+.rail.right.opening .row { animation-name: row-in-r; }
+@keyframes row-in   { from { transform: translateX(-10px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes row-in-r { from { transform: translateX(10px);  opacity: 0; } to { transform: none; opacity: 1; } }
+/* The column itself moves with the rail (user, 2026-11-03: "접히는 프레임 동안 동시에 캔버스도
+   확장"): the width variables are registered so they can transition, and html.rail-anim turns
+   the transition on for the fold or unfold only — a rail's edge being dragged sets the same
+   variable every move and must not lag behind the hand. Where @property is not known the
+   column snaps as before. */
+@property --rail-l { syntax: '<length>'; inherits: true; initial-value: 256px; }
+@property --rail-r { syntax: '<length>'; inherits: true; initial-value: 232px; }
+html.rail-anim { transition: --rail-l .4s cubic-bezier(.2,.9,.3,1), --rail-r .4s cubic-bezier(.2,.9,.3,1); }
+/* And out the same way (user, 2026-11-03): rows first, quickly, then the rail; the fold proper —
+   the strip, the hidden contents — only when this ends (setFold waits for it). */
+.rail.closing > :not(.rh) { animation: rail-out .36s cubic-bezier(.5,0,.75,.2) both; }
+.rail.right.closing > :not(.rh) { animation-name: rail-out-r; }
+/* A nudge and a fade, not a slide off the screen: the column is shrinking to the strip over the
+   same frames (the @property transition), and that is the closing — the rail sliding 85% away on
+   top of it made the whole rail vanish and the strip pop in at the end (user, 2026-11-03). The
+   strip is shown from the first frame, over the column's near edge, so what is left at the end
+   was there all along. */
+@keyframes rail-out   { to { transform: translateX(-24px); opacity: .25; } }
+
+@keyframes rail-out-r { to { transform: translateX(24px);  opacity: .25; } }
+.rail.closing .grp, .rail.closing .ses, .rail.closing .row {
+  animation: row-out .22s cubic-bezier(.5,0,.75,.2) both; animation-delay: calc(var(--i, 0) * 14ms);
+}
+.rail.right.closing .row { animation-name: row-out-r; }
+@keyframes row-out   { to { transform: translateX(-10px); opacity: 0; } }
+@keyframes row-out-r { to { transform: translateX(10px);  opacity: 0; } }
+/* The chevron turns half a circle **after** the rail has gone or come back (user, 2026-11-03: "다
+   닫히고 바뀌고, 다 열리고 바뀌도록"): the strip's › turns round from ‹ once the rail is out, the
+   head's ‹ turns round from › once it is in. turnChevron puts the class on. */
+/* While the rail is on its way in, the head's chevron sits turned round (it still reads as the
+   strip's ›) and turns to ‹ only once the rail is in; while the strip is fading in, its chevron
+   sits turned round (the head's ‹) and turns to › once the rail is out. So each turn is half a
+   circle that continues the other button's drawing — not a full one from ‹ to ‹ (user,
+   2026-11-03: "한 바퀴 돌아서"). */
+.rail.opening .rail-fold svg { transform: rotate(180deg); }
+.rail-fold.turn svg, .rail-open.turn i svg { animation: fold-turn .4s cubic-bezier(.2,1.1,.3,1) both; }
+@keyframes fold-turn { from { transform: rotate(180deg); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .rail.opening, .rail.opening .grp, .rail.opening .ses, .rail.opening .row,
+  .rail.closing, .rail.closing .grp, .rail.closing .ses, .rail.closing .row, .rail-fold.turn svg, .rail-open.turn i svg { animation: none; }
+  .rail.opening .rail-fold svg { transform: none; }
+  .rail.opening > :not(.rh), .rail.opening .rh > :not(.rail-fold), .rail.closing > :not(.rh), .rail.closing .rh > :not(.rail-fold), .rail.opening .rail-fold, .rail.closing .rail-fold { animation: none; }
+  .capsule > :active, .tabs .ib:active, .rail-fold:active, .rail-open:active i { transform: none; }
+  .card, .card.shrink { animation: none; transform: none; }
+}
 .rail-fold {
   border: 0; background: none; color: var(--ink-3); cursor: pointer; line-height: 1;
   width: 26px; height: 26px; border-radius: var(--r-pill); display: grid; place-items: center;
@@ -570,7 +667,7 @@ body.fold-r .rail.right .rail-fold       { display: none; }
    (user, 2026-09-15: "혼자만 툭 버튼 모양이라"). The mark sits quietly in the strip's own colour and
    the whole strip lifts on hover — the way a sidebar edge behaves on the desktop. */
 .rail-open {
-  position: absolute; top: 0; bottom: 0; z-index: 16; width: 30px; padding: 14px 0 0;
+  position: absolute; top: 0; bottom: 0; z-index: 16; width: 30px; padding: 16px 0 0;   /* 16: the glyph's centre at 27px, where the head's chevron sits */
   border: 0; background: var(--rail); color: var(--ink-3); cursor: pointer;
   display: grid; align-content: start; justify-items: center; -webkit-app-region: no-drag;
   transition: background .15s, color .15s;
@@ -579,8 +676,11 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .rail-open.r { left: auto; right: 0; border-left: 1px solid var(--line); }
 .rail-open i {
   width: 22px; height: 22px; border-radius: var(--r-pill); display: grid; place-items: center;
-  font: 16px/1 var(--mono); font-style: normal; transition: background .15s;
+  font-style: normal; transition: background .15s;
 }
+/* The same drawing as the head's chevron, at the same size — the strip used a text glyph and the
+   two did not match (user, 2026-11-03). */
+.rail-open i svg { width: 14px; height: 14px; display: block; }
 .rail-open:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 4%, var(--rail)); }
 .rail-open:hover i { background: var(--hover); }
 .rail-open:focus-visible { outline: none; }
@@ -771,8 +871,37 @@ body.ui-mono { --ui: var(--mono); }
 .capsule svg { width: 15px; height: 15px; }
 .capsule > :first-child { padding-left: 14px; }
 .capsule > :last-child { padding-right: 14px; margin-right: 0; }
+/* `.tidy:last-child` below keeps an 8px margin for a row of loose buttons, and it outranked the
+   line above by coming later — so the last segment stopped 9px short of the capsule's round end,
+   and hovering or pressing it left that end untouched while undo's end was covered (user,
+   2026-11-03). Named with the class, so this wins on specificity rather than on order. */
+.capsule > .tidy:last-child { margin-right: 0; }
 .capsule > * + * { border-left: 1px solid color-mix(in srgb, var(--line-2) 65%, transparent); }
-.capsule > :hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+/* Not the menus: the bell's list and the options list are children of the capsule too (they hang
+   off it), and this painted the whole open list in the hover colour, as if every row were hovered
+   (user, 2026-11-03). */
+.capsule > :hover:not(:disabled):not(.theme-menu) { background: var(--hover); color: var(--ink); }
+/* **Press Down** (#37, 2026-11-03): a pressed button sinks a pixel into a darker base and springs
+   back up when let go — the top row's buttons, the tab strip's +, and the rail chevrons. The
+   sink is quick; the way back overshoots a little (the spring). Transform and background only. */
+.capsule > :not(.theme-menu), .tabs .ib, .rail-fold, .rail-open i {
+  transition: transform .32s cubic-bezier(.2,1.6,.4,1), background .15s, color .15s;
+}
+.tabs .ib:active, .rail-fold:active, .rail-open:active i {
+  transform: translateY(1px) scale(.94); transition-duration: .06s, .06s, .06s;
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+}
+/* A capsule segment sinks **whole** — it darkens and drops a pixel, and is not scaled: a segment
+   is one part of a shared body, and scaling it left its clipped half-round end behind so inside
+   and outside moved apart (user, 2026-11-03: "전체가 눌리게"). */
+.capsule > :active:not(:disabled):not(.theme-menu) {
+  transform: translateY(1px); transition-duration: .06s, .06s, .06s;
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+}
+/* The strip itself is never scaled: it is the height of the window, and scaling it about its
+   middle carried the glyph some 25px out from under the finger, so the click landed on the rail
+   behind and nothing opened unless the press was low on the strip (user, 2026-11-03). Only the
+   glyph's round sinks. */
 .capsule > :active:not(:disabled) { background: var(--sel); transform: none; }
 .capsule > :disabled { color: var(--ink-3); opacity: .38; cursor: default; }
 .capsule > [aria-pressed="true"], .capsule > [aria-expanded="true"] { color: var(--ink); background: var(--sel); }
@@ -811,6 +940,16 @@ body.ui-mono { --ui: var(--mono); }
   color: var(--ink-2); font-size: var(--t-13); cursor: pointer; user-select: none;   /* 11.5 → 13 (2026-09-15) */
 }
 .tab:hover { background: var(--hover); }
+/* **The selection is a pill that slides** (#36, the comment of 2026-11-03): one element behind the
+   tabs carries the selection colour and is moved by slidePill from the old tab to the new one,
+   stretching to span both on the way. The tabs sit above it; the current one only changes its
+   ink. --sel and --sel-line are the page's own selection colours. */
+.tabs { position: relative; }
+.tab { position: relative; z-index: 1; }
+.tabs .pill {
+  position: absolute; z-index: 0; box-sizing: border-box; pointer-events: none;
+  background: var(--sel); border: 1px solid var(--sel-line); border-bottom: 0; border-radius: 12px 12px 0 0;
+}
 /* Delete canvas (#18). **It appears only when deleting is possible** — the tab being viewed, with not one
    terminal in it, and not the last canvas. It is exactly the inverse of the two conditions the daemon refuses
    with 409, so the screen never sends a request that will be refused. While absent it takes up no space either.
@@ -828,10 +967,7 @@ body.ui-mono { --ui: var(--mono); }
 .tab .cx:hover, .tab .cx:focus-visible { opacity: 1; color: var(--ink); background: var(--btn); }
 .tab .cx:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 /* Selection is shown as in the list and the tree (.ses.cur / .row.sel) — no new expression is made */
-.tab.cur {
-  background: var(--sel); color: var(--ink);
-  border-color: var(--sel-line);
-}
+.tab.cur { color: var(--ink); }   /* the pill behind it carries the colour */
 .tab .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* One dot on a tab and nothing more (decisions.md ⑪ "그 이상 안 넣는다"). Color --st-wait — not a new color */
 .tab .dot { width: 6px; height: 6px; margin-left: 1px; }
@@ -1317,13 +1453,59 @@ body.fold-l .fab { display: grid; }
    its own line, the message under it at 14px, wrapping to three lines before it is cut, an accent
    edge on the left and more room all round. 380px at the least, so a short message still reads as
    a card and not as a chip. */
-.toast.msg {
-  font-size: var(--t-14); line-height: 1.5; padding: 14px 20px 15px 18px; border-left: 4px solid var(--accent);
-  min-width: min(380px, calc(100% - 32px)); max-width: min(760px, calc(100% - 32px));
-  white-space: normal; color: var(--ink); bottom: 22px; text-align: left;
+/* Up by the bell (#36), **stacked** (user, 2026-11-03): a column under the top-right corner, newest at
+   the bottom. A card that goes — its time up, or closed — shrinks where it stands and its height
+   closes over .24s, which is what slides the ones under it up. Only transform/opacity/height move,
+   and height only on the one leaving. */
+.cards {
+  position: absolute; right: 16px; top: 12px; z-index: 20; display: flex; flex-direction: column;
+  align-items: flex-end; gap: 8px; pointer-events: none; max-width: calc(100% - 32px);
 }
-.toast.msg b { display: block; font-size: var(--t-12); font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
-.toast.msg .undo { font-size: var(--t-13); margin-left: 8px; }
+.card {
+  position: relative; pointer-events: auto; box-sizing: border-box; cursor: pointer;
+  background: var(--float); border: 1px solid var(--line-2);
+  border-radius: var(--r-panel); box-shadow: var(--shadow-2);
+  padding: 14px 20px 15px 24px; font-size: var(--t-14); line-height: 1.5; color: var(--ink); text-align: left;
+  width: 400px; max-width: 100%;   /* one width for every card (user, 2026-11-03: "400px 고정") — the stack keeps one edge */
+  animation: card-in .22s cubic-bezier(.2,.8,.2,1) both;
+  transition: transform .2s cubic-bezier(.5,0,.9,.4), opacity .16s, height .24s cubic-bezier(.2,.8,.2,1),
+              padding .24s, border-width .24s, margin .24s;
+}
+@keyframes card-in { from { transform: translateY(-8px); opacity: 0; } to { transform: none; opacity: 1; } }
+/* The accent mark is a short bar inside the card, not a thick left border: on a 16px corner a 4px
+   border wedged into the curve and the blue piled up at the ends (user, 2026-11-03: "왼쪽에
+   파란색이 몰려"). */
+.card::before { content: ""; position: absolute; left: 10px; top: 14px; bottom: 15px; width: 3px; border-radius: 2px; background: var(--accent); }
+.card.gone::before { display: none; }
+.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)); }
+/* Two lines and no more on the card (user, 2026-11-03: "최대 높이는 두 줄"); the bell's list has the whole text. */
+.card-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.card.shrink { transform: scale(.18); opacity: 0; }
+.card.gone { height: 0 !important; padding-top: 0; padding-bottom: 0; border-top-width: 0; border-bottom-width: 0;
+             margin-top: -8px; overflow: hidden; pointer-events: none; }   /* -8: the column's gap */
+.card b { display: block; font-size: var(--t-12); font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
+/* The × sits on the top-right corner, half outside, and shows on hover (or when the keyboard is in
+   the card). Drawn the way every other × here is (.cl, .tab .cx): two strokes, no glyph. */
+.card-x {
+  position: absolute; top: -9px; right: -9px; width: 22px; height: 22px; border-radius: var(--r-pill);
+  border: 1px solid var(--line-2); background: var(--float); box-shadow: var(--shadow); cursor: pointer;
+  display: grid; place-items: center; padding: 0; opacity: 0; transition: opacity .12s, color .12s;
+  color: var(--ink-3); -webkit-appearance: none; appearance: none;
+}
+.card-x::before {
+  content: ""; width: 8px; height: 8px;
+  background: linear-gradient(45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%),
+              linear-gradient(-45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%);
+}
+.card:hover .card-x, .card:focus-within .card-x, .card-x:focus-visible { opacity: 1; }
+.card-x:hover { color: var(--ink); border-color: var(--ink-3); }
+.card.gone .card-x { display: none; }
+/* The dot that carries a message into the bell. Moved by transform only. */
+.fly {
+  position: fixed; left: -5px; top: -5px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--accent); z-index: 1002; pointer-events: none; will-change: transform;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
 /* A link inside a message, in the toast and in the bell's list. */
 .msg-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px;
             text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); word-break: break-all; }

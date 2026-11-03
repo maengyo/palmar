@@ -386,6 +386,40 @@ class AnInboxBehindTheBell(unittest.TestCase):
           name: r.querySelector('.ib-name').textContent, text: r.querySelector('.ib-text').textContent,
           ago: r.querySelector('.ib-ago').textContent, id: r.dataset.id}))""")
 
+    def test_hovering_a_row_tints_that_row_and_not_the_whole_list(self):
+        """The list hangs off the bell's capsule, and the capsule's "hover a child" rule took the open
+        list for a child — so the whole list went to the hover colour, as if every row were under
+        the mouse (user, 2026-11-03; the options list the same way)."""
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="pr-watch")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            for text in ("one", "two", "three"):
+                d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": text})
+            time.sleep(1)
+            b.ev("window.palmar.clearCards(); window.palmar.showInbox(true)")
+            time.sleep(0.4)
+            before = b.ev("getComputedStyle(document.getElementById('inbox')).backgroundColor")
+            rows = b.ev("""[...document.querySelectorAll('#inbox-list .ib-row')].map(r=>{const q=r.getBoundingClientRect();
+              return {x: q.left + q.width/2, y: q.top + q.height/2};})""")
+            b.ws.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": rows[1]["x"], "y": rows[1]["y"]})
+            time.sleep(0.3)
+            got = b.ev("""(()=>({list: getComputedStyle(document.getElementById('inbox')).backgroundColor,
+              rows: [...document.querySelectorAll('#inbox-list .ib-row')].map(r=>getComputedStyle(r).backgroundColor)}))()""")
+            self.assertEqual(got["list"], before, "the whole list took the hover colour")
+            self.assertEqual(got["rows"][0], got["rows"][2], "a row that is not under the mouse changed")
+            self.assertNotEqual(got["rows"][1], got["rows"][0], "the row under the mouse did not change")
+            # The options list hangs off the same capsule.
+            b.ev("window.palmar.showInbox(false); document.getElementById('options').click()")
+            time.sleep(0.3)
+            before = b.ev("getComputedStyle(document.getElementById('options-menu')).backgroundColor")
+            it = b.ev("""(()=>{const q=document.querySelector('#options-menu .tm-i').getBoundingClientRect();
+              return {x: q.left + q.width/2, y: q.top + q.height/2};})()""")
+            b.ws.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": it["x"], "y": it["y"]})
+            time.sleep(0.3)
+            self.assertEqual(b.ev("getComputedStyle(document.getElementById('options-menu')).backgroundColor"), before,
+                             "the whole options list took the hover colour")
+
     def test_it_lists_them_newest_first_and_an_x_or_clear_all_removes_them(self):
         with Daemon() as d, Browser() as b:
             s = d.open_pane(name="pr-watch")
@@ -450,9 +484,9 @@ class AnInboxBehindTheBell(unittest.TestCase):
             d.raw("PATCH", "/api/sessions/%s" % s["id"],
                   {"message": "review requested https://github.com/o/r/pull/12. Also ftp://x and <b>x</b>"})
             time.sleep(1)
-            toast = b.ev("""(()=>{const a=document.querySelector('#toast a');
+            toast = b.ev("""(()=>{const c=document.querySelector('#cards .card'); const a=c && c.querySelector('a');
               return {href: a && a.href, target: a && a.target, rel: a && a.rel, text: a && a.textContent,
-                      bold: !!document.querySelector('#toast b b'), raw: document.getElementById('toast').textContent};})()""")
+                      raw: c ? c.textContent : ''};})()""")
             self.assertEqual(toast["href"], "https://github.com/o/r/pull/12", "the address is not a link in the toast: %r" % toast)
             self.assertEqual(toast["text"], "https://github.com/o/r/pull/12", "the full stop was taken into the link")
             self.assertEqual(toast["target"], "_blank")
@@ -486,6 +520,118 @@ class AMessageOnTheRail(unittest.TestCase):
     """`palmar --message` as the page shows it (2026-10-29): a line on the pane's row that stays until
     a hand goes to the pane, a toast when it arrives, and nothing said again on a reload."""
 
+    def test_lines_are_kept_on_the_card_and_in_the_bell_and_the_row_shows_the_first(self):
+        """Lines are kept since 2026-11-03. The card and the bell's list lay them out as lines
+        (a <br> between — no white-space rule to forget); the row is one line and shows the first."""
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="build")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            st, _ = d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "built ok\n3 warnings"})
+            self.assertEqual(st, 200)
+            time.sleep(1)
+            got = b.ev("""(()=>{const t=document.querySelector('#cards .card');
+              const note=document.querySelector('#list .ses .note');
+              return {brs: t ? t.querySelectorAll('br').length : -1, text: t ? t.textContent : '', note: note && note.textContent,
+                      top: t ? t.getBoundingClientRect().top : -1};})()""")
+            self.assertEqual(got["brs"], 1, "the card did not lay the two lines out as two")
+            self.assertIn("3 warnings", got["text"])
+            self.assertEqual(got["note"], "built ok …", "the row should show the first line and say there is more")
+            # By the bell (#36): the card sits in the top part of the page, not at the bottom.
+            self.assertLess(got["top"], 120, "the message card is not up by the bell: top=%s" % got["top"])
+            b.ev("window.palmar.showInbox(true)")
+            time.sleep(0.3)
+            self.assertEqual(b.ev("document.querySelectorAll('#inbox-list .ib-text br').length"), 1,
+                             "the bell's list did not keep the lines")
+
+    def test_when_its_time_is_up_the_card_flies_into_the_bell(self):
+        """#36: the card shrinks and a dot is drawn into the bell, which rings when it lands. The
+        dot is a Web Animation on transform only; here its presence and its end are what is checked
+        — how it looks is a person's call. The card has 20 seconds; the test calls time on it."""
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="build")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "done"})
+            time.sleep(1)
+            self.assertEqual(b.ev("document.querySelectorAll('#cards .card').length"), 1)
+            got = b.ev("""(()=>{const c=document.querySelector('#cards .card'); window.palmar.dropCard(c, true);
+              return {fly: document.querySelectorAll('.fly').length, shrink: c.classList.contains('shrink')};})()""")
+            self.assertEqual(got["fly"], 1, "no dot set off for the bell")
+            self.assertTrue(got["shrink"], "the card did not shrink")
+            time.sleep(1.2)
+            self.assertEqual(b.ev("document.querySelectorAll('.fly').length"), 0, "the dot never landed")
+            self.assertTrue(b.ev("document.getElementById('bell').classList.contains('ping')"), "the bell did not ring when it landed")
+            self.assertEqual(b.ev("document.querySelectorAll('#cards .card').length"), 0, "the card was not taken down")
+
+    def test_cards_stack_in_order_and_the_ones_under_a_gone_card_move_up(self):
+        """Several messages while one is still up: they stack down from the first (user, 2026-11-03),
+        and when the first goes the rest close up — the leaving card's height goes to 0, which is
+        what moves the others, so the gap is measured before and after."""
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="build")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            for text in ("one", "two", "three"):
+                d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": text})
+                time.sleep(0.4)
+            time.sleep(0.6)
+            got = b.ev("""[...document.querySelectorAll('#cards .card')].map(c=>({t: c.querySelector('.card-text').textContent, y: c.getBoundingClientRect().top}))""")
+            self.assertEqual([g["t"] for g in got], ["one", "two", "three"], "not stacked in the order they came")
+            self.assertTrue(got[0]["y"] < got[1]["y"] < got[2]["y"], "the stack does not go downward: %r" % got)
+            y_two = got[1]["y"]
+            b.ev("window.palmar.dropCard(document.querySelector('#cards .card'), true)")
+            time.sleep(0.8)
+            left = b.ev("""[...document.querySelectorAll('#cards .card')].map(c=>({t: c.querySelector('.card-text').textContent, y: c.getBoundingClientRect().top}))""")
+            self.assertEqual([g["t"] for g in left], ["two", "three"], "the first card did not go, or the wrong one did")
+            self.assertLess(left[0]["y"], y_two - 20, "the second card did not move up into the first one's place")
+
+    def test_a_burst_of_messages_keeps_six_cards_and_the_page_alive(self):
+        """**The page froze on the seventh message of a burst** (user, 2026-11-03). The cap on cards
+        counted the ones without the `gone` class, but a dropped card only gets that class two
+        frames later — so the loop found the same card live, dropped it again (a no-op), and never
+        got out. Ten messages in quick succession: the page still answers, and at most six cards
+        are live, the oldest having gone to the bell."""
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="build")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            for i in range(10):
+                d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "burst %d" % i})
+            time.sleep(1.5)
+            got = b.ev("""(()=>({live: [...document.querySelectorAll('#cards .card')].filter(c=>!c._gone).map(c=>c.querySelector('.card-text').textContent),
+              width: document.querySelector('#cards .card').getBoundingClientRect().width}))()""")
+            self.assertEqual(len(got["live"]), 6, "the cap did not hold: %r" % (got["live"],))
+            self.assertEqual(got["live"][-1], "burst 9", "the newest is not the last on the stack")
+            self.assertEqual(got["width"], 400, "a card is not 400px wide")
+
+    def test_pressing_a_card_opens_the_bell_and_clears_them_all_and_the_x_closes_one_quietly(self):
+        """A card is the announcement; the bell's list is the record. Pressing a card opens the list
+        and takes every card down. The × on a card closes that one — nothing flies, and the message
+        is still in the list (user asked which it should be, 2026-11-03)."""
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="build")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            for text in ("one", "two"):
+                d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": text})
+                time.sleep(0.4)
+            time.sleep(0.6)
+            got = b.ev("""(()=>{const c=document.querySelector('#cards .card'); c.querySelector('.card-x').click();
+              return {fly: document.querySelectorAll('.fly').length, gone: c.classList.contains('shrink'),
+                      left: document.querySelectorAll('#cards .card:not(.shrink)').length};})()""")
+            self.assertEqual(got["fly"], 0, "closing a card by hand sent a dot to the bell")
+            self.assertTrue(got["gone"])
+            self.assertEqual(got["left"], 1, "the × took more than its own card")
+            time.sleep(0.6)
+            got = b.ev("""(()=>{document.querySelector('#cards .card').click();
+              return {inbox: !document.getElementById('inbox').hidden,
+                      left: document.querySelectorAll('#cards .card:not(.shrink)').length,
+                      rows: document.querySelectorAll('#inbox-list .ib-row').length};})()""")
+            self.assertTrue(got["inbox"], "pressing a card did not open the bell's list")
+            self.assertEqual(got["left"], 0, "pressing a card left cards on screen")
+            self.assertEqual(got["rows"], 2, "the closed card's message is not in the list — it should be")
+
     def test_it_is_shown_said_once_and_cleared_by_a_hand(self):
         with Daemon() as d, Browser() as b:
             s = d.open_pane(name="pr-watch")
@@ -495,7 +641,8 @@ class AMessageOnTheRail(unittest.TestCase):
             self.assertEqual(st, 200)
             time.sleep(1)
             got = b.ev("""(()=>{const r=document.querySelector('#list .ses[data-id=%s] .note');
-              return {note: r && r.textContent, toast: document.getElementById('toast').textContent};})()"""
+              const c=document.querySelector('#cards .card');
+              return {note: r && r.textContent, toast: c ? c.textContent : ''};})()"""
                        % json.dumps(s["id"]))
             self.assertEqual(got["note"], "review requested: o/r#12", "the row does not carry it")
             self.assertIn("review requested", got["toast"], "it arrived without being said")
@@ -503,8 +650,7 @@ class AMessageOnTheRail(unittest.TestCase):
             b.open(d.url, script="document.hasFocus=()=>true;")
             time.sleep(3)
             again = b.ev("""(()=>({note: !!document.querySelector('#list .ses .note'),
-              toast: document.getElementById('toast').classList.contains('show') ?
-                     document.getElementById('toast').textContent : ''}))()""")
+              toast: [...document.querySelectorAll('#cards .card')].map(c=>c.textContent).join(' ')}))()""")
             self.assertTrue(again["note"], "a reload lost the message")
             self.assertNotIn("review requested", again["toast"], "a reload said it a second time")
             # **A hand on the pane clears it** — in the daemon, so every page agrees.
@@ -588,7 +734,7 @@ class RailFold(unittest.TestCase):
         time.sleep(0.3)
         wide0 = self.cv()
         self.b.ev("document.getElementById('fold-l').click()")
-        time.sleep(0.3)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         self.assertEqual(self.railvar("l"), self.STRIP, "a folded rail was clamped, not reduced to the strip")
         self.assertGreater(self.cv(), wide0, "the canvas did not widen")
         # reopen restores the width, not the strip
@@ -602,7 +748,7 @@ class RailFold(unittest.TestCase):
         time.sleep(0.2)
         self.b.ev("document.dispatchEvent(new KeyboardEvent('keydown',"
                   "{key:'\\\\',code:'Backslash',metaKey:true,shiftKey:true,bubbles:true}))")
-        time.sleep(0.3)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         self.assertEqual(self.railvar("r"), self.STRIP, "Cmd+Shift+\\ did not fold the right rail")
         self.b.ev("document.dispatchEvent(new KeyboardEvent('keydown',"
                   "{key:'\\\\',code:'Backslash',metaKey:true,shiftKey:true,bubbles:true}))")
@@ -627,7 +773,7 @@ class RailFold(unittest.TestCase):
         self.assertFalse(painted("r"))
 
         self.b.ev("document.getElementById('fold-l').click()")
-        time.sleep(0.3)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         self.assertTrue(painted("l"), "nothing offers to bring a folded rail back")
         self.assertFalse(painted("r"), "folding one rail showed the other one's tab")
 
@@ -650,7 +796,7 @@ class RailFold(unittest.TestCase):
         self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
         time.sleep(0.3)
         self.b.ev("document.getElementById('fold-l').click(); document.getElementById('fold-r').click()")
-        time.sleep(0.4)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         for side, sel in (("left", ".rail.left"), ("right", ".rail.right")):
             w = self.b.ev("document.querySelector('%s').getBoundingClientRect().width" % sel)
             self.assertEqual(w, 30, "the folded %s rail is %spx wide, not the 30px strip" % (side, w))
@@ -675,7 +821,7 @@ class RailFold(unittest.TestCase):
         self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
         time.sleep(0.3)
         self.b.ev("document.getElementById('fold-l').click(); document.getElementById('fold-r').click()")
-        time.sleep(0.4)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         left, right = col(".top .l"), col(".top .r")
         self.assertFalse(left["clipped"], "the logo is cut off when the left rail is folded")
         self.assertFalse(right["offscreen"], "the top-right buttons are off the screen")
@@ -690,10 +836,10 @@ class RailFold(unittest.TestCase):
         time.sleep(0.3)
         wide = scroll_w()
         self.b.ev("document.getElementById('fold-l').click()")
-        time.sleep(0.4)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         one = scroll_w()
         self.b.ev("document.getElementById('fold-r').click()")
-        time.sleep(0.4)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         both = scroll_w()
         self.assertLessEqual(one, wide, "folding a rail made the page wider")
         self.assertLessEqual(both, one, "folding the second rail made the page wider")
@@ -706,7 +852,7 @@ class RailFold(unittest.TestCase):
         self.b.ev("document.getElementById('open-l').click()")
         time.sleep(0.3)
         self.b.ev("document.getElementById('fold-l').click()")
-        time.sleep(0.4)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         self.assertEqual(self.railvar("l"), self.STRIP)
         try:
             self.b.ws.call("Emulation.setDeviceMetricsOverride",
@@ -724,7 +870,7 @@ class RailFold(unittest.TestCase):
         self.b.ev("document.getElementById('open-l').click(); document.getElementById('open-r').click()")
         time.sleep(0.2)
         self.b.ev("document.getElementById('fold-r').click()")
-        time.sleep(0.3)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         self.b.ws.call("Page.reload"); time.sleep(3.5)
         self.assertTrue(self.b.ev("document.body.classList.contains('fold-r')"),
                         "the right rail did not stay folded across a reload")
@@ -4237,7 +4383,7 @@ class TopRow(unittest.TestCase):
         shown = lambda: self.b.ev("getComputedStyle(document.getElementById('fab-new')).display !== 'none'")
         self.assertFalse(shown(), "the button shows while the rail is open")
         self.b.ev("document.getElementById('fold-l').click()")
-        time.sleep(0.3)
+        time.sleep(0.9)   # folding is a motion now; the strip comes when it ends
         self.assertTrue(shown(), "the button did not appear when the rail folded")
         before = len(self.d.panes())
         self.b.ev("document.getElementById('fab-new').click()")
@@ -4404,6 +4550,169 @@ class APressOnTheFloor(unittest.TestCase):
         time.sleep(0.2)
         self.ctrl_k()
         self.assertFalse(self.b.ev("document.getElementById('searchbox').hidden"), "Ctrl+K did not open the commands after the window was let go")
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class MotionFromIssue36(unittest.TestCase):
+    """Two of #36's three motions (the third is the card flying into the bell, with the messages).
+    What is checked is that the motion is set off and cleans up after itself — whether it looks
+    right is a person's call, and reduced-motion turns all of it off."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.d.open_pane(name="api")
+        cls.b.open(cls.d.url)
+        time.sleep(3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def test_an_unfolded_rail_springs_in_and_its_rows_stagger(self):
+        self.b.ev("window.palmar.setFold('l', true)")
+        time.sleep(0.8)          # folding is a motion of its own now; let it end
+        got = self.b.ev("""(()=>{window.palmar.setFold('l', false);
+          const rail=document.querySelector('.rail.left');
+          const rows=[...rail.querySelectorAll('.grp, .ses')];
+          return {opening: rail.classList.contains('opening'),
+                  i: rows.map(r=>r.style.getPropertyValue('--i'))};})()""")
+        self.assertTrue(got["opening"], "unfolding did not set the rail off")
+        self.assertGreaterEqual(len(got["i"]), 2, "no rows to stagger: %r" % (got["i"],))
+        self.assertEqual(got["i"], [str(n) for n in range(len(got["i"]))], "the rows are not staggered in order")
+        time.sleep(1.0)
+        self.assertFalse(self.b.ev("document.querySelector('.rail.left').classList.contains('opening')"),
+                         "the class did not come off when the motion ended")
+
+    def test_a_folded_rail_goes_out_the_same_way_and_only_then_becomes_the_strip(self):
+        """Folding animates too (user, 2026-11-03): the contents slide out, the chevron turns, and
+        the column snaps to the strip only when that ends — not before, or the motion would play on
+        a rail that is already gone."""
+        self.b.ev("window.palmar.setFold('l', false)")
+        time.sleep(0.8)
+        got = self.b.ev("""(()=>{window.palmar.setFold('l', true);
+          const rail=document.querySelector('.rail.left');
+          return {closing: rail.classList.contains('closing'), folded: document.body.classList.contains('fold-l'),
+                  turn: document.getElementById('open-l').classList.contains('turn'),
+                  strip: !document.getElementById('open-l').hidden};})()""")
+        self.assertTrue(got["closing"], "folding did not set the rail off")
+        # The strip is not shown before the fold proper: the head's chevron rides the shrinking
+        # column down to the strip's spot and the strip takes over there with the same drawing
+        # (user, 2026-11-03: "동일한 객체로는 못 두는 거야?").
+        self.assertFalse(got["strip"], "the closed look showed before the closing had happened")
+        self.assertFalse(got["folded"], "the fold proper came before the motion")
+        self.assertFalse(got["turn"], "the chevron turned before the rail had gone")
+        # The canvas widens over the same frames: mid-motion the column is between the two widths,
+        # and the head's chevron is riding the column's near edge.
+        time.sleep(0.15)
+        ride = self.b.ev("""(()=>{const b=document.getElementById('fold-l').getBoundingClientRect(), r=document.querySelector('.rail.left').getBoundingClientRect();
+          return {btnRight: b.right, railRight: r.right, visible: b.width > 0};})()""")
+        self.assertTrue(ride["visible"], "the head's chevron is gone during the fold")
+        self.assertLess(abs(ride["railRight"] - ride["btnRight"]), 14, "the head's chevron is not riding the column's edge: %r" % ride)
+        mid = self.b.ev("parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--rail-l'))")
+        self.assertTrue(30 < mid < 256, "the column did not move with the rail: %r" % mid)
+        time.sleep(0.35)
+        self.assertFalse(self.b.ev("document.querySelector('.rail.left').classList.contains('closing')"))
+        self.assertTrue(self.b.ev("document.body.classList.contains('fold-l')"), "the rail never folded after the motion")
+        self.assertFalse(self.b.ev("document.getElementById('open-l').hidden"), "the strip did not come")
+        # The chevron turns only now that the rail has gone — and the head's turns once it is back.
+        self.assertTrue(self.b.ev("document.getElementById('open-l').classList.contains('turn')"), "the strip's chevron did not turn after the rail had gone")
+        time.sleep(0.5)
+        self.b.ev("window.palmar.setFold('l', false)")
+        time.sleep(0.2)
+        self.assertFalse(self.b.ev("document.getElementById('fold-l').classList.contains('turn')"), "the head's chevron turned before the rail was back")
+        # On the way in the head's chevron sits turned round — it continues the strip's › — and the
+        # two buttons draw the same chevron at the same size (user, 2026-11-03).
+        got = self.b.ev("""(()=>{const h=document.querySelector('#fold-l svg'), s=document.querySelector('#open-l i svg');
+          return {turned: getComputedStyle(h).transform, head: h.getBoundingClientRect().width,
+                  strip: s ? s.getBoundingClientRect().width : -1};})()""")
+        self.assertEqual(got["turned"], "matrix(-1, 0, 0, -1, 0, 0)", "the head's chevron is not turned round while the rail comes in: %r" % got)
+        self.assertEqual(got["head"], 14, "the head's chevron is not 14px: %r" % got)
+        time.sleep(0.4)
+        self.assertTrue(self.b.ev("document.getElementById('fold-l').classList.contains('turn')"), "the head's chevron did not turn once the rail was back")
+        time.sleep(0.6)
+        self.b.ev("window.palmar.setFold('l', true)")
+        time.sleep(0.8)
+        # A second press while it is on its way does nothing — it is not unfolded again by mistake.
+        self.b.ev("window.palmar.setFold('l', false)")
+        time.sleep(0.2)
+        got = self.b.ev("""(()=>{window.palmar.setFold('l', true); window.palmar.setFold('l', false);
+          return document.querySelector('.rail.left').classList.contains('closing');})()""")
+        self.assertTrue(got, "a press during the closing motion interrupted it")
+        time.sleep(0.9)
+        self.assertTrue(self.b.ev("document.body.classList.contains('fold-l')"))
+        self.b.ev("window.palmar.setFold('l', false)")
+        time.sleep(0.8)
+        # The right rail goes out past the window's edge, and the page grew a scrollbar for the
+        # length of the motion (user, 2026-11-03; measured 24px). Watched every frame: the document
+        # never gets wider than the window.
+        self.b.ev("""(()=>{window.__over=0; const t0=performance.now(); const tick=()=>{
+          window.__over=Math.max(window.__over, document.documentElement.scrollWidth-document.documentElement.clientWidth);
+          if (performance.now()-t0<700) requestAnimationFrame(tick);}; window.palmar.setFold('r', true); tick(); return 1})()""")
+        time.sleep(1.0)
+        self.assertEqual(self.b.ev("window.__over"), 0, "the page overflowed sideways while the right rail folded")
+        self.b.ev("window.palmar.setFold('r', false)")
+        time.sleep(0.8)
+
+    def test_the_selection_pill_slides_to_the_pressed_tab_stretching_on_the_way(self):
+        """#36's comment (2026-11-03): a sliding pill, not a ripple. One element behind the tabs
+        carries the selection; pressed, it first spans the old tab and the new one, then settles
+        under the new one. Checked mid-slide and at the end."""
+        self.b.ev("window.palmar.newCanvas()")
+        time.sleep(1)
+        ids = self.b.ev("[...document.querySelectorAll('.tab')].map(t=>t.dataset.id)")
+        self.assertEqual(len(ids), 2)
+        cur = self.b.ev("document.querySelector('.tab.cur').dataset.id")
+        other = [i for i in ids if i != cur][0]
+        box = lambda sel: self.b.ev("(()=>{const e=document.querySelector(%s); return {l: e.offsetLeft, w: e.offsetWidth};})()" % json.dumps(sel))
+        a, b_ = box('.tab[data-id="%s"]' % cur), box('.tab[data-id="%s"]' % other)
+        pill = box('.tabs .pill')
+        self.assertEqual([pill["l"], pill["w"]], [a["l"], a["w"]], "the pill is not under the current tab to begin with")
+        # The stretch is over in a few frames (the curve is springy), so it is watched from inside
+        # the page, every frame, rather than sampled once from here (AGENTS.md: time transient UI
+        # inside the page).
+        self.b.ev("""(()=>{window.__pill=[]; const p=document.querySelector('.tabs .pill'); const t0=performance.now();
+          const tick=()=>{window.__pill.push(p.offsetWidth); if (performance.now()-t0<600) requestAnimationFrame(tick);};
+          document.querySelector('.tab[data-id=%s]').click(); tick(); return 1;})()""" % json.dumps(other))
+        time.sleep(0.9)
+        widest = self.b.ev("Math.max(...window.__pill)")
+        self.assertGreater(widest, max(a["w"], b_["w"]), "on the way the pill never stretched across both tabs")
+        end = box('.tabs .pill')
+        self.assertEqual([end["l"], end["w"]], [b_["l"], b_["w"]], "the pill did not settle under the pressed tab")
+        self.assertTrue(self.b.ev("document.querySelector('.tab[data-id=\"%s\"]').classList.contains('cur')" % other))
+
+    def test_the_strips_glyph_opens_the_rail_when_pressed_on_the_glyph(self):
+        """The press-down scaled the whole strip — the height of the window — about its middle, so
+        the glyph at the top slid ~25px out from under the finger and the release landed on the
+        rail behind: no click, nothing opened, unless the press was low on the strip (user,
+        2026-11-03). A real press on the glyph's centre, with a real release, has to open it."""
+        self.b.ev("window.palmar.setFold('l', true)")
+        time.sleep(0.9)
+        self.assertTrue(self.b.ev("document.body.classList.contains('fold-l')"))
+        q = self.b.ev("(()=>{const r=document.querySelector('#open-l i').getBoundingClientRect(); return {x: r.left + r.width/2, y: r.top + r.height/2};})()")
+        self.b.ws.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": q["x"], "y": q["y"], "button": "left", "clickCount": 1})
+        time.sleep(0.12)
+        under = self.b.ev("(()=>{const e=document.elementFromPoint(%s, %s); return e && (e.id || e.tagName) + '/' + (e.closest('#open-l') ? 'strip' : 'elsewhere');})()" % (q["x"], q["y"]))
+        self.assertTrue(under.endswith("strip"), "while pressed, the strip moved out from under the finger: %s" % under)
+        self.b.ws.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": q["x"], "y": q["y"], "button": "left", "clickCount": 1})
+        time.sleep(0.9)
+        self.assertFalse(self.b.ev("document.body.classList.contains('fold-l')"), "pressing the glyph did not open the rail")
+
+    def test_a_pressed_button_sinks_and_springs_back(self):
+        """#37 (2026-11-03): a top-row button sinks into a darker base while pressed and comes back
+        up when let go. Checked on the options button, by the computed transform."""
+        q = self.b.ev("(()=>{const r=document.getElementById('options').getBoundingClientRect(); return {x: r.left + r.width/2, y: r.top + r.height/2};})()")
+        tf = lambda: self.b.ev("getComputedStyle(document.getElementById('options')).transform")
+        self.assertEqual(tf(), "none")
+        self.b.ws.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": q["x"], "y": q["y"], "button": "left", "clickCount": 1})
+        time.sleep(0.15)
+        self.assertNotEqual(tf(), "none", "the button did not sink while pressed")
+        self.b.ws.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": q["x"], "y": q["y"], "button": "left", "clickCount": 1})
+        time.sleep(0.6)
+        self.assertEqual(tf(), "none", "the button did not come back up")
+        self.b.ev("window.palmar.showOptions && window.palmar.showOptions(false); document.body.click()")
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")

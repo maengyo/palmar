@@ -126,6 +126,26 @@ class HasContent(unittest.TestCase):
     def test_a_newline_is_content(self):
         self.assertTrue(D.Session._has_content(b"\r\n"))
 
+
+class AMessageKeepsItsLines(unittest.TestCase):
+    """clean_message folded everything into one line until 2026-11-03 (user: "줄바꿈을 지원하면").
+    Now each line is squeezed on its own, blank lines at the ends go, a run of blank lines inside
+    is one, and the whole is cut at MESSAGE_MAX."""
+
+    def test_lines_are_kept_and_squeezed(self):
+        m = D.clean_message("  built  ok \r\n\n\n  3 warnings\t here \n\n")
+        self.assertEqual(m["text"], "built ok\n\n3 warnings here")
+
+    def test_only_blank_lines_is_nothing(self):
+        self.assertIsNone(D.clean_message(" \n\n \t\n"))
+
+    def test_one_line_is_as_before(self):
+        self.assertEqual(D.clean_message("build   done")["text"], "build done")
+
+    def test_the_cut_does_not_leave_a_dangling_newline(self):
+        text = ("x" * (D.MESSAGE_MAX - 1)) + "\nmore"
+        self.assertEqual(D.clean_message(text)["text"], "x" * (D.MESSAGE_MAX - 1))
+
     def test_anything_large_is_content_without_looking(self):
         self.assertTrue(D.Session._has_content(b"\x1b[2;5H" * 4000))
 

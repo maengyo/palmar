@@ -144,7 +144,7 @@ const LINE_HEIGHT = 1.15;
 // ── DOM handles ─────────────────────────────────────────
 const cv = $('#cv'), cvScroll = $('#cv-scroll'), listEl = $('#list'), treeEl = $('#tree');
 const tabsEl = $('#tabs'), mmEl = $('#mm'), mmWorldEl = $('#mm-w'), mmVpEl = $('#mm-vp');
-const toastEl = $('#toast'), searchEl = $('#search'), searchBox = $('#searchbox');
+const toastEl = $('#toast'), cardsEl = $('#cards'), searchEl = $('#search'), searchBox = $('#searchbox');
 
 // **Installable as an app.** Edge and Chrome install a page as an app of its own — icon, window, Start
 // Menu entry — from a web app manifest. Its start_url has to carry the key, and index.html never does
@@ -459,7 +459,6 @@ function toast(parts, opts) {
   // what the page just did, because it is news from elsewhere and the eye was not waiting for it
   // (user, 2026-10-30: "너무 작게 뜨고, 너무 단기간").
   opts = opts || {};
-  toastEl.classList.toggle('msg', !!opts.msg);
   // **The toast is one line of prose.** Parts are laid end to end with a space between, and the
   // punctuation is the caller's — a dash before a second clause, a colon before an error. It used to
   // be a flex row with a gap, and two plain strings in a row merged into one item with no gap at all
@@ -487,7 +486,92 @@ function toast(parts, opts) {
   toastEl.classList.add('show');
   clearTimeout(toastTimer);
   // A toast you are meant to press needs longer than one you only read.
-  toastTimer = setTimeout(() => toastEl.classList.remove('show'), opts.msg ? 10000 : act ? 9000 : 4500);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), act ? 9000 : 4500);
+}
+
+// ── message cards ──
+// A terminal's message is a **card by the bell**, not a toast (user, 2026-10-30 "너무 작게 뜨고, 너무
+// 단기간"; 2026-11-02 "더 크면"; 2026-11-03 "줄바꿈·더 오래", then the stack). Cards stack down from
+// the top right in the order they came; each has 20 seconds, and when its time is up it shrinks to a
+// dot that is drawn along a curve into the bell (#36), the ones under it closing up. Pressing a card
+// opens the bell's list — where every message already is, the card was only the announcement — and
+// clears every card on screen. The × that appears on hover closes that one card quietly: the message
+// stays in the list (user asked which; a card is the announcement, the list is the record, and
+// closing an announcement should not delete the record — deleting is the list's ×).
+const CARD_MS = 20000, CARDS_MAX = 6;
+function showCard(e) {
+  if (!cardsEl) return;
+  // Only so many on screen: the oldest gives way (it goes to the bell early) when a seventh comes.
+  // **Counted by the flag, not the class.** dropCard marks a card gone at once and gives it the
+  // class two frames later, so counting the class found the same card still "live", dropped it
+  // again (a no-op), and never got out of the loop — the page froze on the seventh of a burst
+  // (user, 2026-11-03: "연속으로 발생시키니까 멈췄어").
+  const live = () => [...cardsEl.querySelectorAll('.card')].filter((c) => !c._gone);
+  for (const c of live().slice(0, Math.max(0, live().length - CARDS_MAX + 1))) dropCard(c, true);
+  const card = el('div', 'card');
+  card.setAttribute('role', 'status');
+  card.appendChild(el('b', null, messageLabel(e)));
+  const body = el('span', 'card-text');
+  body.appendChild(linkify(e.text));
+  card.appendChild(body);
+  // No "show" button (user, 2026-11-03): the card opens the bell's list, and the list's row goes to
+  // the terminal — one way to the terminal, not two.
+  const x = el('button', 'card-x');
+  x.type = 'button';
+  x.title = 'close — it stays in the bell';
+  x.setAttribute('aria-label', 'close');
+  x.addEventListener('click', (ev) => { ev.stopPropagation(); dropCard(card, false); });
+  card.appendChild(x);
+  // stopPropagation: the window's click closes popups, and this click is what opens one.
+  card.addEventListener('click', (ev) => { ev.stopPropagation(); clearCards(); showInbox(true); });
+  cardsEl.appendChild(card);
+  card._timer = setTimeout(() => dropCard(card, true), CARD_MS);
+  return card;
+}
+// Takes a card down. `fly`: its time ran out, so a dot carries it into the bell; false is a hand
+// closing it. Either way it shrinks where it stands and the cards under it slide up — the height
+// closes with a transition, which is what moves the others (the stack is a flex column).
+function dropCard(card, fly) {
+  if (!card || card._gone) return;
+  card._gone = true;
+  clearTimeout(card._timer);
+  if (fly) flyToBell(card);
+  card.style.height = card.offsetHeight + 'px';
+  card.classList.add('shrink');
+  // The height change has to come a frame after the explicit height, or there is nothing to transition from.
+  requestAnimationFrame(() => requestAnimationFrame(() => card.classList.add('gone')));
+  setTimeout(() => card.remove(), 460);
+}
+function clearCards() {
+  if (!cardsEl) return;
+  for (const c of cardsEl.querySelectorAll('.card')) dropCard(c, false);   // dropCard skips one already gone
+}
+function flyToBell(from) {
+  if (!bellEl || !from || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const a = from.getBoundingClientRect(), b = bellEl.getBoundingClientRect();
+  if (!a.width || !b.width) return;
+  const x0 = a.left + a.width / 2, y0 = a.top + a.height / 2;
+  // It lands on the bell's unread dot — top right of the bell, where .bell[data-unread]::after sits
+  // (top 5px, right 7px, 6px across) — not on the bell's middle (user, 2026-11-03).
+  const x1 = b.right - 10, y1 = b.top + 8;
+  const dot = el('span', 'fly');
+  document.body.appendChild(dot);
+  // One quadratic curve, bowing above the straight line, sampled into keyframes — no offset-path,
+  // which WebKitGTK is not sure to have. Transform and opacity only (AGENTS.md: no jank).
+  const cx = (x0 + x1) / 2, cy = Math.min(y0, y1) - 56;
+  const frames = [];
+  for (let i = 0; i <= 14; i++) {
+    const t = i / 14, u = 1 - t;
+    const x = u * u * x0 + 2 * u * t * cx + t * t * x1, y = u * u * y0 + 2 * u * t * cy + t * t * y1;
+    frames.push({ transform: `translate(${x}px, ${y}px) scale(${(1 - 0.55 * t).toFixed(3)})`, offset: t });
+  }
+  let anim;
+  try { anim = dot.animate(frames, { duration: 640, easing: 'cubic-bezier(.35,0,.45,1)', fill: 'forwards' }); }
+  catch (e) { dot.remove(); return; }
+  anim.onfinish = () => {
+    dot.remove();
+    ringBell();   // it landed
+  };
 }
 function agoText(id) { return agoFrom(changedAt.get(id) || 0); }
 function agoFrom(atMs) {
@@ -3331,10 +3415,88 @@ function applyFold(side) {
 
 function setFold(side, folded) {
   if (railFolded[side] === folded) return;
-  if (folded) preFold[side] = railW(side) || RAIL_DEF[side];   // remember the width to come back to
+  const rail = railEl(side);
+  if (rail && rail.classList.contains('closing')) return;      // already on its way out
+  if (folded) {
+    preFold[side] = railW(side) || RAIL_DEF[side];   // remember the width to come back to
+    // **Out the way it came in** (user, 2026-11-03): the contents slide out and the rows leave
+    // one after another, and the canvas widens over the same frames — the column's width is
+    // transitioned (the @property on --rail-l/-r; see railAnim) while the rail's own contents
+    // stay until the motion ends, and only then does the fold proper (the strip, the hidden
+    // contents) happen. The windows on the canvas are placed in pixels inside the scroller, so
+    // a scroller that changes width each frame moves no terminal and re-lays none out.
+    if (motionRail(side, 'closing', () => foldNow(side, true))) {
+      railAnim(true);
+      document.documentElement.style.setProperty('--rail-' + side, RAIL_STRIP + 'px');
+      // The strip stays hidden until the fold proper: the head's chevron rides the shrinking
+      // column down to the strip's spot (CSS, .rail.closing .rail-fold), and the strip takes
+      // over there with the same drawing — one object, as far as the eye goes.
+      return;
+    }
+  }
+  if (!folded) railAnim(true);
+  foldNow(side, folded);
+  if (!folded) motionRail(side, 'opening');
+}
+// The column's transition is on only for a fold or unfold: a hand dragging a rail's edge sets
+// the same variable every move and must not be followed with a lag.
+let railAnimTimer = null;
+function railAnim(on) {
+  clearTimeout(railAnimTimer);
+  document.documentElement.classList.toggle('rail-anim', on);
+  if (on) railAnimTimer = setTimeout(() => document.documentElement.classList.remove('rail-anim'), 600);
+}
+function foldNow(side, folded) {
   railFolded[side] = folded;
   applyFold(side);
   try { localStorage.setItem(LS_FOLD, JSON.stringify(railFolded)); } catch (e) {}
+}
+function railEl(side) { return $('.rail.' + (side === 'l' ? 'left' : 'right')); }
+// **A rail springs in, and its rows follow one after another** (#36) — and goes out the same way.
+// Only when a hand does it; one that was folded when the page opened just is. The issue's drawer
+// also dims the page behind it, which is left out: a rail is not a sheet over the canvas, and
+// dimming eight terminals to show a list is noise. Transform and opacity only. The chevron on the
+// rail's head turns half a circle with it, ‹ into › and back. Returns true when a motion was set
+// off (`then` runs when it ends); false under reduced motion or with no rail, and `then` is not run.
+function motionRail(side, cls, then) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return false;
+  const rail = railEl(side);
+  if (!rail) return false;
+  rail.classList.remove('opening', 'closing'); void rail.offsetWidth;
+  let i = 0;
+  for (const r of rail.querySelectorAll('.grp, .ses, .row')) r.style.setProperty('--i', String(Math.min(i++, 14)));
+  rail.classList.add(cls);
+  rail.addEventListener('animationend', function done(e) {
+    if (e.target !== rail) return;
+    rail.removeEventListener('animationend', done);
+    rail.classList.remove(cls);
+    if (then) then();
+    // **The chevron turns after, not during** (user, 2026-11-03): once the rail has gone, the
+    // strip's › turns round from ‹; once it is back, the head's ‹ turns round from ›.
+    turnChevron(cls === 'closing' ? $('#open-' + side) : $('#fold-' + side));
+  });
+  return true;
+}
+// One ring of the bell. The class comes off when the ring ends: left on, it sat on the bell for
+// good and the next `animation` rule to want the bell (the breathing) had to outrank it.
+function ringBell() {
+  if (!bellEl) return;
+  bellEl.classList.remove('ping'); void bellEl.offsetWidth; bellEl.classList.add('ping');
+  bellEl.addEventListener('animationend', function done(e) {
+    if (e.animationName !== 'bell-ping') return;
+    bellEl.classList.remove('ping'); bellEl.removeEventListener('animationend', done);
+  });
+}
+function turnChevron(btn) {
+  if (!btn) return;
+  btn.classList.remove('turn'); void btn.offsetWidth;
+  btn.classList.add('turn');
+  // By name: the strip's own fade (strip-in) ends on the same element a moment after the turn
+  // starts, and a listener for "any animation" took the turn down on that.
+  btn.addEventListener('animationend', function done(e) {
+    if (e.animationName !== 'fold-turn') return;
+    btn.classList.remove('turn'); btn.removeEventListener('animationend', done);
+  });
 }
 
 function loadFold() {
@@ -3808,13 +3970,61 @@ function applyCanvas() {
   // call both takes the old canvas's frames away and brings this one's back.
   paintGroups();
 }
-function switchCanvas(id) {
+function switchCanvas(id, origin) {
   if (!canvases.has(id) || id === current) return;
+  const from = pillTarget();              // where the pill is, before the tabs are repainted
   current = id;
   applyCanvas();
   paintTidy();      // the button speaks about **the canvas being looked at**
+  slidePill(from);
   // The window may have been resized while it was hidden — fit once more after it has been drawn
   requestAnimationFrame(() => { for (const t of tiles.values()) if (t.visible()) t.refit(); });
+}
+// **The selection is a pill that slides to the pressed tab, stretching on the way** (#36, the
+// comment of 2026-11-03 — a sliding pill, not a ripple). One element behind the tabs carries the
+// selection colour (--sel, the page's own; the issue's violet→cyan is not a palmar colour) and is
+// moved from the old tab to the new one: it first grows to span both, then settles on the new, on
+// a springy curve. Left and width are animated — on one small element behind the strip, which
+// repaints the strip and nothing else. renderTabs puts it back under the current tab after every
+// repaint, so reordering, renaming and a late tab all keep it where it belongs.
+let pillEl = null;
+function pillOf() {
+  if (!pillEl) { pillEl = el('span', 'pill'); pillEl.setAttribute('aria-hidden', 'true'); }
+  if (pillEl.parentNode !== tabsEl) tabsEl.insertBefore(pillEl, tabsEl.firstChild);
+  return pillEl;
+}
+function pillTarget() {
+  const t = tabEls.get(current);
+  if (!t || tabsEl.hidden || !t.parentNode) return null;
+  return { left: t.offsetLeft, top: t.offsetTop, width: t.offsetWidth, height: t.offsetHeight };
+}
+function placePill() {
+  const p = pillOf(), to = pillTarget();
+  if (!to) { p.hidden = true; return; }
+  p.hidden = false;
+  if (p._anim && p._anim.playState === 'running') return;     // on its way there — let it arrive
+  p.style.left = to.left + 'px'; p.style.top = to.top + 'px';
+  p.style.width = to.width + 'px'; p.style.height = to.height + 'px';
+}
+function slidePill(from) {
+  const p = pillOf(), to = pillTarget();
+  if (!to) { placePill(); return; }
+  if (!from || matchMedia('(prefers-reduced-motion: reduce)').matches) { placePill(); return; }
+  if (p._anim) p._anim.cancel();
+  p.hidden = false;
+  p.style.left = to.left + 'px'; p.style.top = to.top + 'px';
+  p.style.width = to.width + 'px'; p.style.height = to.height + 'px';
+  const l0 = Math.min(from.left, to.left), r1 = Math.max(from.left + from.width, to.left + to.width);
+  try {
+    p._anim = p.animate([
+      { left: from.left + 'px', width: from.width + 'px' },
+      { left: l0 + 'px', width: (r1 - l0) + 'px', offset: 0.45 },
+      { left: to.left + 'px', width: to.width + 'px' },
+    ], { duration: 460, easing: 'cubic-bezier(.2,1,.3,1)' });
+    // A tab that changed width mid-slide (a rename's input, its handle) was skipped while the
+    // slide ran; once it has arrived, take the tab's width as it is now.
+    p._anim.onfinish = () => { p._anim = null; placePill(); };
+  } catch (e) { p._anim = null; }
 }
 
 // **The tab strip is patched, not rebuilt.** Every session frame calls renderTabs (the dot is computed), and the
@@ -3844,8 +4054,10 @@ function makeTab(id) {
     else if (ev.key === 'F2') { ev.preventDefault(); const c = canvasById(id); if (c) renameCanvas(c, nm); }
   });
   tabDrag(t);
+  if (tabRO) tabRO.observe(t);      // a tab that changes width (a rename, its handle) moves the pill with it
   return t;
 }
+const tabRO = window.ResizeObserver ? new ResizeObserver(() => placePill()) : null;
 
 function paintTab(id) {
   const c = canvases.get(id), t = tabEls.get(id);
@@ -3928,6 +4140,7 @@ function renderTabs() {
     const t = tabEls.get(current);
     if (t) t.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
+  placePill();
 }
 
 function renameCanvas(c, host) {
@@ -4189,7 +4402,9 @@ function buildItem(s, pinned) {
   // `palmar --message`: what something in this pane asked to say, on a line of its own under the rest,
   // until a hand goes to the pane. Accent, not a light colour — it is not a status (⑥).
   if (s.message && s.message.text) {
-    const note = el('span', 'note', s.message.text);
+    // The row is one line: the first one, and the whole message in the title (and on the card).
+    const first = s.message.text.split('\n')[0];
+    const note = el('span', 'note', first + (first.length < s.message.text.length ? ' …' : ''));
     note.title = s.message.text + ' — click the terminal to clear it';
     it.appendChild(note);
     it.classList.add('noted');
@@ -4747,6 +4962,17 @@ function clearMessage(id) {
 // Built as nodes, never as HTML — the text is a terminal's and is not trusted as markup.
 const URL_RE = /https?:\/\/[^\s<>"'`]+/g;
 function linkify(text) {
+  // A message keeps its lines now (2026-11-03): each one is laid out as text with a <br> between,
+  // so the card and the bell's list need no white-space rule and the rail can keep its one line.
+  const frag = document.createDocumentFragment();
+  const lines = String(text).split('\n');
+  lines.forEach((line, i) => {
+    if (i) frag.appendChild(el('br'));
+    frag.appendChild(linkifyLine(line));
+  });
+  return frag;
+}
+function linkifyLine(text) {
   const frag = document.createDocumentFragment();
   let last = 0;
   for (const m of String(text).matchAll(URL_RE)) {
@@ -4777,7 +5003,7 @@ function goToMessage(e) {
 function sayMessage(e) {
   const who = messageLabel(e);
   if (document.hasFocus()) {
-    toast([{ b: who }, { link: e.text }, { a: 'show', on: () => goToMessage(e) }], { msg: true });
+    showCard(e);
     return;
   }
   if (!notifyOn || !canRing()) return;
@@ -4928,7 +5154,7 @@ async function toggleNotify() {
 if (bellEl) {
   bellEl.addEventListener('click', (e) => {
     e.stopPropagation();
-    bellEl.classList.remove('ping'); void bellEl.offsetWidth; bellEl.classList.add('ping');   // one ring, every press
+    ringBell();   // one ring, every press
     showInbox(inboxEl && inboxEl.hidden);
   });
   bellEl.addEventListener('keydown', (e) => {
@@ -5673,6 +5899,8 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   holdStyle: () => holdStyle,
                   palette: () => root.dataset.pal || null, choosePalette, applyTheme, pickTheme, labelOf, renderers,
                   showSearch, commandList, showInbox, inbox: () => inbox.slice(),
+                  // #36's motions: a test can call time on a card (it has 20s) and unfold a rail.
+                  dropCard, clearCards, setFold,
                   focused: () => focused, unfocusTile,
                   ptyKind: () => ptyKind, setPtyKind: (k) => { ptyKind = k; },
                   baseFont: () => FONT_PX, setBaseFont, termTheme, minimapOn: () => minimapOn,
