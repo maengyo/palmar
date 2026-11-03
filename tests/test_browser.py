@@ -4610,7 +4610,7 @@ class MotionFromIssue36(unittest.TestCase):
         ride = self.b.ev("""(()=>{const b=document.getElementById('fold-l').getBoundingClientRect(), r=document.querySelector('.rail.left').getBoundingClientRect();
           return {btnRight: b.right, railRight: r.right, visible: b.width > 0};})()""")
         self.assertTrue(ride["visible"], "the head's chevron is gone during the fold")
-        self.assertLess(abs(ride["railRight"] - ride["btnRight"]), 6, "the head's chevron is not riding the column's edge: %r" % ride)
+        self.assertLess(abs(ride["railRight"] - ride["btnRight"]), 14, "the head's chevron is not riding the column's edge: %r" % ride)
         mid = self.b.ev("parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--rail-l'))")
         self.assertTrue(30 < mid < 256, "the column did not move with the rail: %r" % mid)
         time.sleep(0.35)

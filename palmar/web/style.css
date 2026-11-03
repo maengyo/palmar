@@ -580,10 +580,29 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .rail.opening { animation: rail-clock .46s both; }
 .rail.closing { animation: rail-clock .36s both; }
 @keyframes rail-clock { from { opacity: 1; } to { opacity: 1; } }
-.rail.opening .rail-fold, .rail.closing .rail-fold { position: absolute; top: 12px; right: 2px; z-index: 2; }
-.rail.right.opening .rail-fold, .rail.right.closing .rail-fold { right: auto; left: 2px; }
-.rail.opening > :not(.rh), .rail.opening .rh > :not(.rail-fold) { animation: rail-in .46s cubic-bezier(.2,1.2,.35,1) both; }
-.rail.right.opening > :not(.rh), .rail.right.opening .rh > :not(.rail-fold) { animation-name: rail-in-r; }
+/* Pinned where the head's row had it (14px down, 12px in from the edge) and moved to the strip's
+   spot (2px in) over the motion, so neither end of the ride is a jump; the strip's glyph sits at
+   the same height. The rest of the head goes out fast and comes in late, so the pinned button
+   never sits over the + or the title while they are there (user, 2026-11-03: "+ 랑 겹치다가"). */
+.rail.opening .rail-fold, .rail.closing .rail-fold { position: absolute; top: 14px; z-index: 2; }
+/* The head keeps the pinned button's slot (26px and the 6px gap) so the + beside it does not
+   slide into the slot the moment the button is taken out of the row. */
+.rail.left.opening .rh,  .rail.left.closing .rh  { padding-right: 44px; }
+.rail.right.opening .rh, .rail.right.closing .rh { padding-left: 44px; }
+.rail.left.closing .rail-fold  { animation: pin-out-l .36s cubic-bezier(.5,0,.75,.2) both; }
+.rail.left.opening .rail-fold  { animation: pin-in-l .46s cubic-bezier(.2,.9,.3,1) both; }
+.rail.right.closing .rail-fold { animation: pin-out-r .36s cubic-bezier(.5,0,.75,.2) both; }
+.rail.right.opening .rail-fold { animation: pin-in-r .46s cubic-bezier(.2,.9,.3,1) both; }
+@keyframes pin-out-l { from { right: 12px; } to { right: 2px; } }
+@keyframes pin-in-l  { from { right: 2px; }  to { right: 12px; } }
+@keyframes pin-out-r { from { left: 12px; }  to { left: 2px; } }
+@keyframes pin-in-r  { from { left: 2px; }   to { left: 12px; } }
+.rail.opening > :not(.rh) { animation: rail-in .46s cubic-bezier(.2,1.2,.35,1) both; }
+.rail.right.opening > :not(.rh) { animation-name: rail-in-r; }
+.rail.opening .rh > :not(.rail-fold) { animation: head-in .22s .24s ease-out both; }
+.rail.closing .rh > :not(.rail-fold) { animation: head-out .09s ease-in both; }   /* gone before the narrowing column carries the far end into the slot */
+@keyframes head-in  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes head-out { from { opacity: 1; } to { opacity: 0; } }
 /* From most of the way out, not a nudge — 22px read as nothing (user, 2026-11-03: "적용된 건지"). */
 @keyframes rail-in   { from { transform: translateX(-85%); opacity: .3; } to { transform: none; opacity: 1; } }
 @keyframes rail-in-r { from { transform: translateX(85%);  opacity: .3; } to { transform: none; opacity: 1; } }
@@ -603,8 +622,8 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 html.rail-anim { transition: --rail-l .4s cubic-bezier(.2,.9,.3,1), --rail-r .4s cubic-bezier(.2,.9,.3,1); }
 /* And out the same way (user, 2026-11-03): rows first, quickly, then the rail; the fold proper —
    the strip, the hidden contents — only when this ends (setFold waits for it). */
-.rail.closing > :not(.rh), .rail.closing .rh > :not(.rail-fold) { animation: rail-out .36s cubic-bezier(.5,0,.75,.2) both; }
-.rail.right.closing > :not(.rh), .rail.right.closing .rh > :not(.rail-fold) { animation-name: rail-out-r; }
+.rail.closing > :not(.rh) { animation: rail-out .36s cubic-bezier(.5,0,.75,.2) both; }
+.rail.right.closing > :not(.rh) { animation-name: rail-out-r; }
 /* A nudge and a fade, not a slide off the screen: the column is shrinking to the strip over the
    same frames (the @property transition), and that is the closing — the rail sliding 85% away on
    top of it made the whole rail vanish and the strip pop in at the end (user, 2026-11-03). The
@@ -634,7 +653,7 @@ html.rail-anim { transition: --rail-l .4s cubic-bezier(.2,.9,.3,1), --rail-r .4s
   .rail.opening, .rail.opening .grp, .rail.opening .ses, .rail.opening .row,
   .rail.closing, .rail.closing .grp, .rail.closing .ses, .rail.closing .row, .rail-fold.turn svg, .rail-open.turn i svg { animation: none; }
   .rail.opening .rail-fold svg { transform: none; }
-  .rail.opening > :not(.rh), .rail.opening .rh > :not(.rail-fold), .rail.closing > :not(.rh), .rail.closing .rh > :not(.rail-fold) { animation: none; }
+  .rail.opening > :not(.rh), .rail.opening .rh > :not(.rail-fold), .rail.closing > :not(.rh), .rail.closing .rh > :not(.rail-fold), .rail.opening .rail-fold, .rail.closing .rail-fold { animation: none; }
   .capsule > :active, .tabs .ib:active, .rail-fold:active, .rail-open:active i { transform: none; }
   .card, .card.shrink { animation: none; transform: none; }
 }
@@ -648,7 +667,7 @@ html.rail-anim { transition: --rail-l .4s cubic-bezier(.2,.9,.3,1), --rail-r .4s
    (user, 2026-09-15: "혼자만 툭 버튼 모양이라"). The mark sits quietly in the strip's own colour and
    the whole strip lifts on hover — the way a sidebar edge behaves on the desktop. */
 .rail-open {
-  position: absolute; top: 0; bottom: 0; z-index: 16; width: 30px; padding: 14px 0 0;
+  position: absolute; top: 0; bottom: 0; z-index: 16; width: 30px; padding: 16px 0 0;   /* 16: the glyph's centre at 27px, where the head's chevron sits */
   border: 0; background: var(--rail); color: var(--ink-3); cursor: pointer;
   display: grid; align-content: start; justify-items: center; -webkit-app-region: no-drag;
   transition: background .15s, color .15s;
