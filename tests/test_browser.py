@@ -4652,6 +4652,23 @@ class MotionFromIssue36(unittest.TestCase):
         self.assertEqual([end["l"], end["w"]], [b_["l"], b_["w"]], "the pill did not settle under the pressed tab")
         self.assertTrue(self.b.ev("document.querySelector('.tab[data-id=\"%s\"]').classList.contains('cur')" % other))
 
+    def test_the_strips_glyph_opens_the_rail_when_pressed_on_the_glyph(self):
+        """The press-down scaled the whole strip — the height of the window — about its middle, so
+        the glyph at the top slid ~25px out from under the finger and the release landed on the
+        rail behind: no click, nothing opened, unless the press was low on the strip (user,
+        2026-11-03). A real press on the glyph's centre, with a real release, has to open it."""
+        self.b.ev("window.palmar.setFold('l', true)")
+        time.sleep(0.9)
+        self.assertTrue(self.b.ev("document.body.classList.contains('fold-l')"))
+        q = self.b.ev("(()=>{const r=document.querySelector('#open-l i').getBoundingClientRect(); return {x: r.left + r.width/2, y: r.top + r.height/2};})()")
+        self.b.ws.call("Input.dispatchMouseEvent", {"type": "mousePressed", "x": q["x"], "y": q["y"], "button": "left", "clickCount": 1})
+        time.sleep(0.12)
+        under = self.b.ev("(()=>{const e=document.elementFromPoint(%s, %s); return e && (e.id || e.tagName) + '/' + (e.closest('#open-l') ? 'strip' : 'elsewhere');})()" % (q["x"], q["y"]))
+        self.assertTrue(under.endswith("strip"), "while pressed, the strip moved out from under the finger: %s" % under)
+        self.b.ws.call("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": q["x"], "y": q["y"], "button": "left", "clickCount": 1})
+        time.sleep(0.9)
+        self.assertFalse(self.b.ev("document.body.classList.contains('fold-l')"), "pressing the glyph did not open the rail")
+
     def test_a_pressed_button_sinks_and_springs_back(self):
         """#37 (2026-11-03): a top-row button sinks into a darker base while pressed and comes back
         up when let go. Checked on the options button, by the computed transform."""
