@@ -22,6 +22,14 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.cdp import Browser, chrome_path
+
+
+def motion_on(b):
+    """Ask the page for its motions. The macOS runner has reduce-motion on, and every motion here
+    (the card's flight, the rail's spring, the pill's slide) is off by design under
+    prefers-reduced-motion — so a test that is *about* a motion says so, rather than passing on
+    Linux and failing on the Mac (CI, 2026-11-03: four of them did)."""
+    b.ws.call("Emulation.setEmulatedMedia", {"features": [{"name": "prefers-reduced-motion", "value": "no-preference"}]})
 from tests.helpers import Daemon
 
 
@@ -551,6 +559,7 @@ class AMessageOnTheRail(unittest.TestCase):
         with Daemon() as d, Browser() as b:
             s = d.open_pane(name="build")
             b.open(d.url, script="document.hasFocus=()=>true;")
+            motion_on(b)
             time.sleep(3)
             d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "done"})
             time.sleep(1)
@@ -571,6 +580,7 @@ class AMessageOnTheRail(unittest.TestCase):
         with Daemon() as d, Browser() as b:
             s = d.open_pane(name="build")
             b.open(d.url, script="document.hasFocus=()=>true;")
+            motion_on(b)
             time.sleep(3)
             for text in ("one", "two", "three"):
                 d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": text})
@@ -4605,6 +4615,7 @@ class MotionFromIssue36(unittest.TestCase):
         cls.b = Browser().start()
         cls.d.open_pane(name="api")
         cls.b.open(cls.d.url)
+        motion_on(cls.b)
         time.sleep(3)
 
     @classmethod
