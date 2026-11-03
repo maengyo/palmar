@@ -502,22 +502,20 @@ const CARD_MS = 20000, CARDS_MAX = 6;
 function showCard(e) {
   if (!cardsEl) return;
   // Only so many on screen: the oldest gives way (it goes to the bell early) when a seventh comes.
-  while (cardsEl.querySelectorAll('.card:not(.gone)').length >= CARDS_MAX) {
-    const oldest = cardsEl.querySelector('.card:not(.gone)');
-    if (!oldest) break;
-    dropCard(oldest, true);
-  }
+  // **Counted by the flag, not the class.** dropCard marks a card gone at once and gives it the
+  // class two frames later, so counting the class found the same card still "live", dropped it
+  // again (a no-op), and never got out of the loop — the page froze on the seventh of a burst
+  // (user, 2026-11-03: "연속으로 발생시키니까 멈췄어").
+  const live = () => [...cardsEl.querySelectorAll('.card')].filter((c) => !c._gone);
+  for (const c of live().slice(0, Math.max(0, live().length - CARDS_MAX + 1))) dropCard(c, true);
   const card = el('div', 'card');
   card.setAttribute('role', 'status');
   card.appendChild(el('b', null, messageLabel(e)));
   const body = el('span', 'card-text');
   body.appendChild(linkify(e.text));
   card.appendChild(body);
-  const show = el('button', 'undo', 'show');
-  show.type = 'button';
-  show.title = 'go to that terminal';
-  show.addEventListener('click', (ev) => { ev.stopPropagation(); dropCard(card, false); goToMessage(e); });
-  card.appendChild(show);
+  // No "show" button (user, 2026-11-03): the card opens the bell's list, and the list's row goes to
+  // the terminal — one way to the terminal, not two.
   const x = el('button', 'card-x');
   x.type = 'button';
   x.title = 'close — it stays in the bell';
@@ -546,14 +544,16 @@ function dropCard(card, fly) {
 }
 function clearCards() {
   if (!cardsEl) return;
-  for (const c of cardsEl.querySelectorAll('.card:not(.gone)')) dropCard(c, false);
+  for (const c of cardsEl.querySelectorAll('.card')) dropCard(c, false);   // dropCard skips one already gone
 }
 function flyToBell(from) {
   if (!bellEl || !from || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const a = from.getBoundingClientRect(), b = bellEl.getBoundingClientRect();
   if (!a.width || !b.width) return;
   const x0 = a.left + a.width / 2, y0 = a.top + a.height / 2;
-  const x1 = b.left + b.width / 2, y1 = b.top + b.height / 2;
+  // It lands on the bell's unread dot — top right of the bell, where .bell[data-unread]::after sits
+  // (top 5px, right 7px, 6px across) — not on the bell's middle (user, 2026-11-03).
+  const x1 = b.right - 10, y1 = b.top + 8;
   const dot = el('span', 'fly');
   document.body.appendChild(dot);
   // One quadratic curve, bowing above the straight line, sampled into keyframes — no offset-path,
@@ -3415,29 +3415,46 @@ function applyFold(side) {
 
 function setFold(side, folded) {
   if (railFolded[side] === folded) return;
-  if (folded) preFold[side] = railW(side) || RAIL_DEF[side];   // remember the width to come back to
+  const rail = railEl(side);
+  if (rail && rail.classList.contains('closing')) return;      // already on its way out
+  if (folded) {
+    preFold[side] = railW(side) || RAIL_DEF[side];   // remember the width to come back to
+    // **Out the way it came in** (user, 2026-11-03): the contents slide out and the rows leave
+    // one after another, and only then does the column snap to the strip. The column itself is
+    // not animated — a width that changes every frame re-lays the canvas and every terminal in
+    // it out, which is the one kind of motion this page does not do.
+    if (motionRail(side, 'closing', () => foldNow(side, true))) return;
+  }
+  foldNow(side, folded);
+  if (!folded) motionRail(side, 'opening');
+}
+function foldNow(side, folded) {
   railFolded[side] = folded;
   applyFold(side);
-  if (!folded) springRail(side);
   try { localStorage.setItem(LS_FOLD, JSON.stringify(railFolded)); } catch (e) {}
 }
-// **A rail springs back in, and its rows follow one after another** (#36) — only when a hand
-// unfolds it; one that was folded when the page opened just is. The issue's drawer also dims the
-// page behind it, which is left out: a rail is not a sheet over the canvas, and dimming eight
-// terminals to show a list is noise. Transform and opacity only.
-function springRail(side) {
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  const rail = $('.rail.' + (side === 'l' ? 'left' : 'right'));
-  if (!rail) return;
-  rail.classList.remove('opening'); void rail.offsetWidth;
+function railEl(side) { return $('.rail.' + (side === 'l' ? 'left' : 'right')); }
+// **A rail springs in, and its rows follow one after another** (#36) — and goes out the same way.
+// Only when a hand does it; one that was folded when the page opened just is. The issue's drawer
+// also dims the page behind it, which is left out: a rail is not a sheet over the canvas, and
+// dimming eight terminals to show a list is noise. Transform and opacity only. The chevron on the
+// rail's head turns half a circle with it, ‹ into › and back. Returns true when a motion was set
+// off (`then` runs when it ends); false under reduced motion or with no rail, and `then` is not run.
+function motionRail(side, cls, then) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return false;
+  const rail = railEl(side);
+  if (!rail) return false;
+  rail.classList.remove('opening', 'closing'); void rail.offsetWidth;
   let i = 0;
   for (const r of rail.querySelectorAll('.grp, .ses, .row')) r.style.setProperty('--i', String(Math.min(i++, 14)));
-  rail.classList.add('opening');
+  rail.classList.add(cls);
   rail.addEventListener('animationend', function done(e) {
     if (e.target !== rail) return;
-    rail.classList.remove('opening');
     rail.removeEventListener('animationend', done);
+    rail.classList.remove(cls);
+    if (then) then();
   });
+  return true;
 }
 
 function loadFold() {

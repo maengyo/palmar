@@ -586,6 +586,25 @@ class AMessageOnTheRail(unittest.TestCase):
             self.assertEqual([g["t"] for g in left], ["two", "three"], "the first card did not go, or the wrong one did")
             self.assertLess(left[0]["y"], y_two - 20, "the second card did not move up into the first one's place")
 
+    def test_a_burst_of_messages_keeps_six_cards_and_the_page_alive(self):
+        """**The page froze on the seventh message of a burst** (user, 2026-11-03). The cap on cards
+        counted the ones without the `gone` class, but a dropped card only gets that class two
+        frames later — so the loop found the same card live, dropped it again (a no-op), and never
+        got out. Ten messages in quick succession: the page still answers, and at most six cards
+        are live, the oldest having gone to the bell."""
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="build")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            for i in range(10):
+                d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "burst %d" % i})
+            time.sleep(1.5)
+            got = b.ev("""(()=>({live: [...document.querySelectorAll('#cards .card')].filter(c=>!c._gone).map(c=>c.querySelector('.card-text').textContent),
+              width: document.querySelector('#cards .card').getBoundingClientRect().width}))()""")
+            self.assertEqual(len(got["live"]), 6, "the cap did not hold: %r" % (got["live"],))
+            self.assertEqual(got["live"][-1], "burst 9", "the newest is not the last on the stack")
+            self.assertEqual(got["width"], 400, "a card is not 400px wide")
+
     def test_pressing_a_card_opens_the_bell_and_clears_them_all_and_the_x_closes_one_quietly(self):
         """A card is the announcement; the bell's list is the record. Pressing a card opens the list
         and takes every card down. The × on a card closes that one — nothing flies, and the message
@@ -4554,7 +4573,7 @@ class MotionFromIssue36(unittest.TestCase):
 
     def test_an_unfolded_rail_springs_in_and_its_rows_stagger(self):
         self.b.ev("window.palmar.setFold('l', true)")
-        time.sleep(0.2)
+        time.sleep(0.8)          # folding is a motion of its own now; let it end
         got = self.b.ev("""(()=>{window.palmar.setFold('l', false);
           const rail=document.querySelector('.rail.left');
           const rows=[...rail.querySelectorAll('.grp, .ses')];
@@ -4566,6 +4585,33 @@ class MotionFromIssue36(unittest.TestCase):
         time.sleep(1.0)
         self.assertFalse(self.b.ev("document.querySelector('.rail.left').classList.contains('opening')"),
                          "the class did not come off when the motion ended")
+
+    def test_a_folded_rail_goes_out_the_same_way_and_only_then_becomes_the_strip(self):
+        """Folding animates too (user, 2026-11-03): the contents slide out, the chevron turns, and
+        the column snaps to the strip only when that ends — not before, or the motion would play on
+        a rail that is already gone."""
+        self.b.ev("window.palmar.setFold('l', false)")
+        time.sleep(0.8)
+        got = self.b.ev("""(()=>{window.palmar.setFold('l', true);
+          const rail=document.querySelector('.rail.left');
+          return {closing: rail.classList.contains('closing'), folded: document.body.classList.contains('fold-l'),
+                  turn: getComputedStyle(rail.querySelector('.rail-fold svg')).transform};})()""")
+        self.assertTrue(got["closing"], "folding did not set the rail off")
+        self.assertFalse(got["folded"], "the column snapped to the strip before the motion")
+        time.sleep(0.9)
+        self.assertFalse(self.b.ev("document.querySelector('.rail.left').classList.contains('closing')"))
+        self.assertTrue(self.b.ev("document.body.classList.contains('fold-l')"), "the rail never folded after the motion")
+        self.assertFalse(self.b.ev("document.getElementById('open-l').hidden"), "the strip did not come")
+        # A second press while it is on its way does nothing — it is not unfolded again by mistake.
+        self.b.ev("window.palmar.setFold('l', false)")
+        time.sleep(0.2)
+        got = self.b.ev("""(()=>{window.palmar.setFold('l', true); window.palmar.setFold('l', false);
+          return document.querySelector('.rail.left').classList.contains('closing');})()""")
+        self.assertTrue(got, "a press during the closing motion interrupted it")
+        time.sleep(0.9)
+        self.assertTrue(self.b.ev("document.body.classList.contains('fold-l')"))
+        self.b.ev("window.palmar.setFold('l', false)")
+        time.sleep(0.8)
 
     def test_a_pressed_tab_ripples_from_the_press_and_the_old_one_lets_go(self):
         self.b.ev("window.palmar.newCanvas()")

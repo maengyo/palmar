@@ -575,8 +575,28 @@ body.fold-r .rail.right .rail-fold       { display: none; }
 .rail.right.opening .row { animation-name: row-in-r; }
 @keyframes row-in   { from { transform: translateX(-10px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes row-in-r { from { transform: translateX(10px);  opacity: 0; } to { transform: none; opacity: 1; } }
+/* And out the same way (user, 2026-11-03): rows first, quickly, then the rail; the column snaps to
+   the strip only when this ends (setFold waits for it). */
+.rail.closing { animation: rail-out .36s cubic-bezier(.5,0,.75,.2) both; }
+.rail.right.closing { animation-name: rail-out-r; }
+@keyframes rail-out   { to { transform: translateX(-85%); opacity: .3; } }
+@keyframes rail-out-r { to { transform: translateX(85%);  opacity: .3; } }
+.rail.closing .grp, .rail.closing .ses, .rail.closing .row {
+  animation: row-out .22s cubic-bezier(.5,0,.75,.2) both; animation-delay: calc(var(--i, 0) * 14ms);
+}
+.rail.right.closing .row { animation-name: row-out-r; }
+@keyframes row-out   { to { transform: translateX(-10px); opacity: 0; } }
+@keyframes row-out-r { to { transform: translateX(10px);  opacity: 0; } }
+/* The chevron on the rail's head turns half a circle as the rail goes: ‹ becomes › on the way out,
+   and comes back round on the way in. */
+.rail-fold svg { transition: transform .4s cubic-bezier(.2,1.1,.3,1); }
+.rail.closing .rail-fold svg { transform: rotate(180deg); }
+.rail.opening .rail-fold svg { animation: fold-turn .46s cubic-bezier(.2,1.1,.3,1) both; }
+@keyframes fold-turn { from { transform: rotate(180deg); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .rail.opening, .rail.opening .grp, .rail.opening .ses, .rail.opening .row, .tab .ripple, .tab.leaving { animation: none; }
+  .rail.opening, .rail.opening .grp, .rail.opening .ses, .rail.opening .row, .tab .ripple, .tab.leaving,
+  .rail.closing, .rail.closing .grp, .rail.closing .ses, .rail.closing .row, .rail.opening .rail-fold svg { animation: none; }
+  .rail-fold svg { transition: none; }
   .card, .card.shrink { animation: none; transform: none; }
 }
 .rail-fold {
@@ -1361,28 +1381,27 @@ body.fold-l .fab { display: grid; }
 }
 .card {
   position: relative; pointer-events: auto; box-sizing: border-box; cursor: pointer;
-  background: var(--float); border: 1px solid var(--line-2); border-left: 4px solid var(--accent);
+  background: var(--float); border: 1px solid var(--line-2);
   border-radius: var(--r-panel); box-shadow: var(--shadow-2);
-  padding: 14px 20px 15px 18px; font-size: var(--t-14); line-height: 1.5; color: var(--ink); text-align: left;
-  min-width: min(380px, 100%); max-width: min(760px, 100%);
+  padding: 14px 20px 15px 24px; font-size: var(--t-14); line-height: 1.5; color: var(--ink); text-align: left;
+  width: 400px; max-width: 100%;   /* one width for every card (user, 2026-11-03: "400px 고정") — the stack keeps one edge */
   animation: card-in .22s cubic-bezier(.2,.8,.2,1) both;
   transition: transform .2s cubic-bezier(.5,0,.9,.4), opacity .16s, height .24s cubic-bezier(.2,.8,.2,1),
               padding .24s, border-width .24s, margin .24s;
 }
 @keyframes card-in { from { transform: translateY(-8px); opacity: 0; } to { transform: none; opacity: 1; } }
-.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)); border-left-color: var(--accent); }
+/* The accent mark is a short bar inside the card, not a thick left border: on a 16px corner a 4px
+   border wedged into the curve and the blue piled up at the ends (user, 2026-11-03: "왼쪽에
+   파란색이 몰려"). */
+.card::before { content: ""; position: absolute; left: 10px; top: 14px; bottom: 15px; width: 3px; border-radius: 2px; background: var(--accent); }
+.card.gone::before { display: none; }
+.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)); }
+/* Two lines and no more on the card (user, 2026-11-03: "최대 높이는 두 줄"); the bell's list has the whole text. */
+.card-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .card.shrink { transform: scale(.18); opacity: 0; }
 .card.gone { height: 0 !important; padding-top: 0; padding-bottom: 0; border-top-width: 0; border-bottom-width: 0;
              margin-top: -8px; overflow: hidden; pointer-events: none; }   /* -8: the column's gap */
 .card b { display: block; font-size: var(--t-12); font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
-/* "show" is a word, not a boxed button — the same stripped-back link the toast's undo is. */
-.card .undo {
-  font-size: var(--t-13); margin-left: 8px; color: var(--accent); cursor: pointer;
-  background: none; border: 0; padding: 0; font-family: inherit; text-decoration: underline;
-  text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
-}
-.card .undo:hover { text-decoration-color: var(--accent); }
-.card .undo:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 /* The × sits on the top-right corner, half outside, and shows on hover (or when the keyboard is in
    the card). Drawn the way every other × here is (.cl, .tab .cx): two strokes, no glyph. */
 .card-x {
