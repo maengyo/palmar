@@ -4781,6 +4781,16 @@ searchEl.addEventListener('keydown', (e) => {
 });
 const searchX = $('#search-x');
 if (searchX) searchX.addEventListener('click', () => showSearch(false));   // the plain way out (user, 2026-09-15)
+// **A press anywhere else puts it away** — the canvas, a terminal, a rail (user, 2026-11-02: the box
+// stayed up over whatever was clicked next). Capture phase, so a terminal taking the press for its
+// focus is not the one that gets there first. The field and its rows are inside and untouched. The
+// options item that opens it is a switch (below): its press is left alone so its click can be the
+// one that decides, or the press would close and the click reopen.
+document.addEventListener('pointerdown', (e) => {
+  if (!searchBox || searchBox.hidden || searchBox.contains(e.target)) return;
+  if (e.target.closest && e.target.closest('[data-do="search"]')) return;
+  showSearch(false);
+}, true);
 addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); showSearch(true); searchEl.select(); }
