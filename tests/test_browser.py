@@ -2165,6 +2165,17 @@ class TidyWithTheWindowsFarApart(unittest.TestCase):
     def tearDown(self):
         self.assertEqual(self.b.errors(), [], "the page threw while being driven")
 
+    def test_the_scale_goes_up_to_two_and_no_further(self):
+        """The ceiling was 1:1 until 2026-11-03 (user: "확대는 2배까지"). Up to 2 is a view like any
+        other — the PTY never hears of it — and past 2 is clamped, as past 0.2 is."""
+        z = self.js("P.setZoom(2); return P.zoom();")
+        self.assertEqual(z, 2, "2x was not allowed: %r" % (z,))
+        z = self.js("P.setZoom(2.5); return P.zoom();")
+        self.assertEqual(z, 2, "the ceiling did not hold: %r" % (z,))
+        z = self.js("P.setZoom(0.1); return P.zoom();")
+        self.assertEqual(z, 0.2, "the floor did not hold: %r" % (z,))
+        self.assertEqual(self.b.errors(), [])
+
     PUT = TheWorldAroundTheWindows.PUT
 
     def js(self, body):

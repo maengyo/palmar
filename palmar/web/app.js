@@ -3691,7 +3691,11 @@ function panTo(bx, by) {
 //: `.cv-world` is scaled about its top-left and sits at `origin × zoom` inside it. Board
 //: coordinates — what `layout` holds, what the daemon is told — never see the scale at all.
 let zoom = 1;
-const ZOOM_MIN = 0.2, ZOOM_MAX = 1;      // never past 1:1 — bigger is what the text size control is for
+//: 2, not 1, since 2026-11-03 (user: "확대는 2배까지"). Up to then the ceiling was 1:1 — bigger was
+//: what the text size control was for, and cate's lesson (a zoom that resizes the PTY turns 90
+//: columns into 87) is still kept: this is a view, the PTY never hears of it. Past 1:1 the
+//: terminals are drawn scaled, so their text is the renderer's upscaling, not a larger font.
+const ZOOM_MIN = 0.2, ZOOM_MAX = 2;
 //: The part of the board you can see, in board coordinates.
 function viewBoard() {
   return { x: cvScroll.scrollLeft / zoom - originX, y: cvScroll.scrollTop / zoom - originY,
