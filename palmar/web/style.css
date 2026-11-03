@@ -596,6 +596,11 @@ html.rail-anim { transition: --rail-l .4s cubic-bezier(.2,.9,.3,1), --rail-r .4s
    strip is shown from the first frame, over the column's near edge, so what is left at the end
    was there all along. */
 @keyframes rail-out   { to { transform: translateX(-24px); opacity: .25; } }
+/* The strip comes in late and fades, crossing the contents on their way out — on screen from
+   the start so the end state is the strip and nothing else, but not seen before the closing has
+   mostly happened. */
+.rail-open.coming { animation: strip-in .38s linear both; }
+@keyframes strip-in { 0% { opacity: 0; } 45% { opacity: 0; } 100% { opacity: 1; } }
 @keyframes rail-out-r { to { transform: translateX(24px);  opacity: .25; } }
 .rail.closing .grp, .rail.closing .ses, .rail.closing .row {
   animation: row-out .22s cubic-bezier(.5,0,.75,.2) both; animation-delay: calc(var(--i, 0) * 14ms);
@@ -610,7 +615,7 @@ html.rail-anim { transition: --rail-l .4s cubic-bezier(.2,.9,.3,1), --rail-r .4s
 @keyframes fold-turn { from { transform: rotate(180deg); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   .rail.opening, .rail.opening .grp, .rail.opening .ses, .rail.opening .row,
-  .rail.closing, .rail.closing .grp, .rail.closing .ses, .rail.closing .row, .rail-fold.turn svg, .rail-open.turn i { animation: none; }
+  .rail.closing, .rail.closing .grp, .rail.closing .ses, .rail.closing .row, .rail-fold.turn svg, .rail-open.turn i, .rail-open.coming { animation: none; }
   .capsule > :active, .tabs .ib:active, .rail-fold:active, .rail-open:active i { transform: none; }
   .card, .card.shrink { animation: none; transform: none; }
 }

@@ -3431,7 +3431,17 @@ function setFold(side, folded) {
       // The strip is there from the first frame, over the column's near edge: the column shrinks
       // down to exactly it, so nothing appears at the end that was not already on screen.
       const open = $('#open-' + side);
-      if (open) open.hidden = false;
+      if (open) {
+        open.hidden = false;
+        // …but it is not *seen* from the first frame: shown at once, the closed look was there
+        // before the closing had happened (user, 2026-11-03). It fades in over the last part of
+        // the motion while the rail's contents fade out, so the two cross rather than cut.
+        open.classList.remove('coming'); void open.offsetWidth; open.classList.add('coming');
+        open.addEventListener('animationend', function done(e) {
+          if (e.animationName !== 'strip-in') return;
+          open.classList.remove('coming'); open.removeEventListener('animationend', done);
+        });
+      }
       return;
     }
   }
@@ -3492,7 +3502,12 @@ function turnChevron(btn) {
   if (!btn) return;
   btn.classList.remove('turn'); void btn.offsetWidth;
   btn.classList.add('turn');
-  btn.addEventListener('animationend', () => btn.classList.remove('turn'), { once: true });
+  // By name: the strip's own fade (strip-in) ends on the same element a moment after the turn
+  // starts, and a listener for "any animation" took the turn down on that.
+  btn.addEventListener('animationend', function done(e) {
+    if (e.animationName !== 'fold-turn') return;
+    btn.classList.remove('turn'); btn.removeEventListener('animationend', done);
+  });
 }
 
 function loadFold() {
