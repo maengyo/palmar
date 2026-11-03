@@ -486,6 +486,51 @@ class AMessageOnTheRail(unittest.TestCase):
     """`palmar --message` as the page shows it (2026-10-29): a line on the pane's row that stays until
     a hand goes to the pane, a toast when it arrives, and nothing said again on a reload."""
 
+    def test_lines_are_kept_on_the_card_and_in_the_bell_and_the_row_shows_the_first(self):
+        """Lines are kept since 2026-11-03. The card and the bell's list lay them out as lines
+        (a <br> between — no white-space rule to forget); the row is one line and shows the first."""
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="build")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            st, _ = d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "built ok\n3 warnings"})
+            self.assertEqual(st, 200)
+            time.sleep(1)
+            got = b.ev("""(()=>{const t=document.getElementById('toast');
+              const note=document.querySelector('#list .ses .note');
+              return {brs: t.querySelectorAll('br').length, text: t.textContent, note: note && note.textContent,
+                      shown: t.classList.contains('show'), top: t.getBoundingClientRect().top,
+                      bell: document.getElementById('bell').getBoundingClientRect()};})()""")
+            self.assertEqual(got["brs"], 1, "the card did not lay the two lines out as two")
+            self.assertIn("3 warnings", got["text"])
+            self.assertEqual(got["note"], "built ok …", "the row should show the first line and say there is more")
+            self.assertTrue(got["shown"])
+            # By the bell (#36): the card sits in the top part of the page, not at the bottom.
+            self.assertLess(got["top"], 120, "the message card is not up by the bell: top=%s" % got["top"])
+            b.ev("window.palmar.showInbox(true)")
+            time.sleep(0.3)
+            self.assertEqual(b.ev("document.querySelectorAll('#inbox-list .ib-text br').length"), 1,
+                             "the bell's list did not keep the lines")
+
+    def test_when_its_time_is_up_the_card_flies_into_the_bell(self):
+        """#36: the card shrinks and a dot is drawn into the bell, which rings when it lands. The
+        dot is a Web Animation on transform only; here its presence and its end are what is checked
+        — how it looks is a person's call. The card has 20 seconds; the test calls time on it."""
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="build")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "done"})
+            time.sleep(1)
+            self.assertTrue(b.ev("document.getElementById('toast').classList.contains('show')"))
+            got = b.ev("""(()=>{window.palmar.hideToast(); return {fly: document.querySelectorAll('.fly').length,
+              shrink: document.getElementById('toast').classList.contains('shrink')};})()""")
+            self.assertEqual(got["fly"], 1, "no dot set off for the bell")
+            self.assertTrue(got["shrink"], "the card did not shrink")
+            time.sleep(1.2)
+            self.assertEqual(b.ev("document.querySelectorAll('.fly').length"), 0, "the dot never landed")
+            self.assertTrue(b.ev("document.getElementById('bell').classList.contains('ping')"), "the bell did not ring when it landed")
+
     def test_it_is_shown_said_once_and_cleared_by_a_hand(self):
         with Daemon() as d, Browser() as b:
             s = d.open_pane(name="pr-watch")
@@ -4404,6 +4449,63 @@ class APressOnTheFloor(unittest.TestCase):
         time.sleep(0.2)
         self.ctrl_k()
         self.assertFalse(self.b.ev("document.getElementById('searchbox').hidden"), "Ctrl+K did not open the commands after the window was let go")
+
+
+@unittest.skipIf(chrome_path() is None, "no Chrome on this machine")
+class MotionFromIssue36(unittest.TestCase):
+    """Two of #36's three motions (the third is the card flying into the bell, with the messages).
+    What is checked is that the motion is set off and cleans up after itself — whether it looks
+    right is a person's call, and reduced-motion turns all of it off."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = Daemon().start()
+        cls.b = Browser().start()
+        cls.d.open_pane(name="api")
+        cls.b.open(cls.d.url)
+        time.sleep(3)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.b.stop()
+        cls.d.stop()
+
+    def test_an_unfolded_rail_springs_in_and_its_rows_stagger(self):
+        self.b.ev("window.palmar.setFold('l', true)")
+        time.sleep(0.2)
+        got = self.b.ev("""(()=>{window.palmar.setFold('l', false);
+          const rail=document.querySelector('.rail.left');
+          const rows=[...rail.querySelectorAll('.grp, .ses')];
+          return {opening: rail.classList.contains('opening'),
+                  i: rows.map(r=>r.style.getPropertyValue('--i'))};})()""")
+        self.assertTrue(got["opening"], "unfolding did not set the rail off")
+        self.assertGreaterEqual(len(got["i"]), 2, "no rows to stagger: %r" % (got["i"],))
+        self.assertEqual(got["i"], [str(n) for n in range(len(got["i"]))], "the rows are not staggered in order")
+        time.sleep(1.0)
+        self.assertFalse(self.b.ev("document.querySelector('.rail.left').classList.contains('opening')"),
+                         "the class did not come off when the motion ended")
+
+    def test_a_pressed_tab_ripples_from_the_press_and_the_old_one_lets_go(self):
+        self.b.ev("window.palmar.newCanvas()")
+        time.sleep(1)
+        ids = self.b.ev("[...document.querySelectorAll('.tab')].map(t=>t.dataset.id)")
+        self.assertEqual(len(ids), 2)
+        cur = self.b.ev("document.querySelector('.tab.cur').dataset.id")
+        other = [i for i in ids if i != cur][0]
+        got = self.b.ev("""(()=>{const t=document.querySelector('.tab[data-id=%s]'); const r=t.getBoundingClientRect();
+          t.dispatchEvent(new MouseEvent('click', {bubbles:true, clientX:r.left+12, clientY:r.top+10}));
+          const rp=t.querySelector('.ripple'); const old=document.querySelector('.tab[data-id=%s]');
+          return {ripple: !!rp, left: rp && rp.style.left, reach: rp && rp.style.getPropertyValue('--reach'),
+                  cur: t.classList.contains('cur'), leaving: old.classList.contains('leaving')};})()"""
+                        % (json.dumps(other), json.dumps(cur)))
+        self.assertTrue(got["ripple"], "no ripple on the pressed tab")
+        self.assertEqual(got["left"], "12px", "the ripple does not start where the press was")
+        self.assertTrue(float(got["reach"]) > 1, "the ripple would not reach the corner: %r" % got["reach"])
+        self.assertTrue(got["cur"])
+        self.assertTrue(got["leaving"], "the tab that was current did not let go")
+        time.sleep(1.0)
+        self.assertEqual(self.b.ev("document.querySelectorAll('.tab .ripple, .tab.leaving').length"), 0,
+                         "the motion did not clean up after itself")
 
 
 @unittest.skipIf(chrome_path() is None, "no Chrome on this machine")

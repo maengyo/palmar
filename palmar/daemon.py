@@ -647,7 +647,18 @@ def clean_message(v, old=None):
         return None
     if not isinstance(v, str):
         raise ValueError("message must be a string or null")
-    text = " ".join(v.split())[:MESSAGE_MAX]
+    #: **Lines are kept** (user, 2026-11-03: "줄바꿈을 지원하면"). Until then every message was folded
+    #: into one line, which is right for the rail row (it shows the first line) and wrong for the card
+    #: and the bell's list, where a build log's three lines want to be three lines. Each line is
+    #: squeezed the old way, blank lines at the ends go, and a run of blank lines inside is one.
+    lines = [" ".join(l.split()) for l in v.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    kept = []
+    for l in lines:
+        if l or (kept and kept[-1]):
+            kept.append(l)
+    while kept and not kept[-1]:
+        kept.pop()
+    text = "\n".join(kept)[:MESSAGE_MAX].rstrip()
     if not text:
         return None
     at = time.time()
@@ -5453,7 +5464,10 @@ def send_message(text: str, to: str = None) -> int:
 
     **The pane is the one this runs inside** (`$PALMAR_PANE`, which every pane's shell carries), so a
     script that is watching something needs no id: it just says what it found. `--to` is for saying
-    it from outside, by an id from `--list`. An empty TEXT clears the message."""
+    it from outside, by an id from `--list`. An empty TEXT clears the message. TEXT of `-` reads
+    stdin — the way to say several lines from a script (`git log -3 --oneline | palmar --message -`)."""
+    if text == "-":
+        text = sys.stdin.read()
     sid = to or os.environ.get("PALMAR_PANE")
     if not sid:
         print("not inside a palmar terminal — run it in one, or name one with --to <id> "
@@ -6901,7 +6915,8 @@ def cli() -> None:
     ap.add_argument("--stop", action="store_true",
                     help="stop this HOME's daemon (the shells in it die with it)")
     ap.add_argument("--message", metavar="TEXT",
-                    help="show TEXT on this terminal's row in the page, until you click the terminal")
+                    help="show TEXT on this terminal's row in the page, until you click the terminal; "
+                         "lines are kept, and `-` reads them from stdin")
     ap.add_argument("--to", metavar="ID",
                     help="with --message: the terminal to say it on, when not run inside one")
     # **Detached is the default**, because the daemon outliving the terminal is the point of it

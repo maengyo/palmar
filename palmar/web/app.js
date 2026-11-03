@@ -484,10 +484,48 @@ function toast(parts, opts) {
       act = true;
     }
   }
+  toastEl.classList.remove('shrink');
   toastEl.classList.add('show');
   clearTimeout(toastTimer);
-  // A toast you are meant to press needs longer than one you only read.
-  toastTimer = setTimeout(() => toastEl.classList.remove('show'), opts.msg ? 10000 : act ? 9000 : 4500);
+  // A toast you are meant to press needs longer than one you only read. A message longer still —
+  // 10s was "조금 더 오래" short of it (user, 2026-11-03).
+  toastTimer = setTimeout(hideToast, opts.msg ? MSG_TOAST_MS : act ? 9000 : 4500);
+}
+const MSG_TOAST_MS = 20000;
+// A message card does not just fade when its time is up: it shrinks to a dot that is drawn along a
+// curve into the bell (#36), which is where the message now lives. A plain note only fades, and a
+// card the hand dismissed by pressing "show" has been read — nothing flies.
+function hideToast() {
+  if (toastEl.classList.contains('msg') && toastEl.classList.contains('show')) {
+    toastEl.classList.add('shrink');
+    flyToBell();
+  }
+  toastEl.classList.remove('show');
+}
+function flyToBell() {
+  if (!bellEl || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const a = toastEl.getBoundingClientRect(), b = bellEl.getBoundingClientRect();
+  if (!a.width || !b.width) return;
+  const x0 = a.left + a.width / 2, y0 = a.top + a.height / 2;
+  const x1 = b.left + b.width / 2, y1 = b.top + b.height / 2;
+  const dot = el('span', 'fly');
+  document.body.appendChild(dot);
+  // One quadratic curve, bowing above the straight line, sampled into keyframes — no offset-path,
+  // which WebKitGTK is not sure to have. Transform and opacity only (AGENTS.md: no jank).
+  const cx = (x0 + x1) / 2, cy = Math.min(y0, y1) - 56;
+  const frames = [];
+  for (let i = 0; i <= 14; i++) {
+    const t = i / 14, u = 1 - t;
+    const x = u * u * x0 + 2 * u * t * cx + t * t * x1, y = u * u * y0 + 2 * u * t * cy + t * t * y1;
+    frames.push({ transform: `translate(${x}px, ${y}px) scale(${(1 - 0.55 * t).toFixed(3)})`, offset: t });
+  }
+  let anim;
+  try { anim = dot.animate(frames, { duration: 640, easing: 'cubic-bezier(.35,0,.45,1)', fill: 'forwards' }); }
+  catch (e) { dot.remove(); return; }
+  anim.onfinish = () => {
+    dot.remove();
+    bellEl.classList.remove('ping'); void bellEl.offsetWidth; bellEl.classList.add('ping');   // it landed
+  };
 }
 function agoText(id) { return agoFrom(changedAt.get(id) || 0); }
 function agoFrom(atMs) {
@@ -3334,7 +3372,26 @@ function setFold(side, folded) {
   if (folded) preFold[side] = railW(side) || RAIL_DEF[side];   // remember the width to come back to
   railFolded[side] = folded;
   applyFold(side);
+  if (!folded) springRail(side);
   try { localStorage.setItem(LS_FOLD, JSON.stringify(railFolded)); } catch (e) {}
+}
+// **A rail springs back in, and its rows follow one after another** (#36) — only when a hand
+// unfolds it; one that was folded when the page opened just is. The issue's drawer also dims the
+// page behind it, which is left out: a rail is not a sheet over the canvas, and dimming eight
+// terminals to show a list is noise. Transform and opacity only.
+function springRail(side) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const rail = $('.rail.' + (side === 'l' ? 'left' : 'right'));
+  if (!rail) return;
+  rail.classList.remove('opening'); void rail.offsetWidth;
+  let i = 0;
+  for (const r of rail.querySelectorAll('.grp, .ses, .row')) r.style.setProperty('--i', String(Math.min(i++, 14)));
+  rail.classList.add('opening');
+  rail.addEventListener('animationend', function done(e) {
+    if (e.target !== rail) return;
+    rail.classList.remove('opening');
+    rail.removeEventListener('animationend', done);
+  });
 }
 
 function loadFold() {
@@ -3808,13 +3865,37 @@ function applyCanvas() {
   // call both takes the old canvas's frames away and brings this one's back.
   paintGroups();
 }
-function switchCanvas(id) {
+function switchCanvas(id, origin) {
   if (!canvases.has(id) || id === current) return;
+  const was = tabEls.get(current);
   current = id;
   applyCanvas();
   paintTidy();      // the button speaks about **the canvas being looked at**
+  rippleTab(tabEls.get(id), origin, was);
   // The window may have been resized while it was hidden — fit once more after it has been drawn
   requestAnimationFrame(() => { for (const t of tiles.values()) if (t.visible()) t.refit(); });
+}
+// **The tab fills from where it was pressed** (#36): a ripple in the accent spreads from the press
+// (or from the middle, when the switch came from elsewhere — the list, the bell, a key) and fades
+// into the selection colour; the tab that was current fades out. The accent and --sel are the
+// page's own colours — the issue's violet→cyan is not a palmar colour.
+function rippleTab(t, origin, was) {
+  if (!t || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  for (const old of t.querySelectorAll('.ripple')) old.remove();
+  const w = t.clientWidth, h = t.clientHeight;
+  const x = origin ? origin.x : w / 2, y = origin ? origin.y : h / 2;
+  const r = el('span', 'ripple');
+  r.style.left = x + 'px';
+  r.style.top = y + 'px';
+  // The dot is 8px; scaled until it covers the farthest corner.
+  const reach = Math.hypot(Math.max(x, w - x), Math.max(y, h - y));
+  r.style.setProperty('--reach', (reach * 2 / 8 + 1).toFixed(1));
+  t.appendChild(r);
+  r.addEventListener('animationend', () => r.remove());
+  if (was && was !== t) {
+    was.classList.remove('leaving'); void was.offsetWidth; was.classList.add('leaving');
+    was.addEventListener('animationend', () => was.classList.remove('leaving'), { once: true });
+  }
 }
 
 // **The tab strip is patched, not rebuilt.** Every session frame calls renderTabs (the dot is computed), and the
@@ -3837,7 +3918,11 @@ function makeTab(id) {
   const nm = el('span', 'nm');
   t.appendChild(nm);
   // The canvas object is replaced on every broadcast, so hold only the id and look it up each time
-  t.addEventListener('click', () => { if (!tabDragged) switchCanvas(id); });
+  t.addEventListener('click', (ev) => {
+    if (tabDragged) return;
+    const r = t.getBoundingClientRect();
+    switchCanvas(id, { x: ev.clientX - r.left, y: ev.clientY - r.top });
+  });
   t.addEventListener('dblclick', (ev) => { ev.preventDefault(); const c = canvasById(id); if (c) renameCanvas(c, nm); });
   t.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); switchCanvas(id); }
@@ -4189,7 +4274,9 @@ function buildItem(s, pinned) {
   // `palmar --message`: what something in this pane asked to say, on a line of its own under the rest,
   // until a hand goes to the pane. Accent, not a light colour — it is not a status (⑥).
   if (s.message && s.message.text) {
-    const note = el('span', 'note', s.message.text);
+    // The row is one line: the first one, and the whole message in the title (and on the card).
+    const first = s.message.text.split('\n')[0];
+    const note = el('span', 'note', first + (first.length < s.message.text.length ? ' …' : ''));
     note.title = s.message.text + ' — click the terminal to clear it';
     it.appendChild(note);
     it.classList.add('noted');
@@ -4747,6 +4834,17 @@ function clearMessage(id) {
 // Built as nodes, never as HTML — the text is a terminal's and is not trusted as markup.
 const URL_RE = /https?:\/\/[^\s<>"'`]+/g;
 function linkify(text) {
+  // A message keeps its lines now (2026-11-03): each one is laid out as text with a <br> between,
+  // so the card and the bell's list need no white-space rule and the rail can keep its one line.
+  const frag = document.createDocumentFragment();
+  const lines = String(text).split('\n');
+  lines.forEach((line, i) => {
+    if (i) frag.appendChild(el('br'));
+    frag.appendChild(linkifyLine(line));
+  });
+  return frag;
+}
+function linkifyLine(text) {
   const frag = document.createDocumentFragment();
   let last = 0;
   for (const m of String(text).matchAll(URL_RE)) {
@@ -5673,6 +5771,8 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   holdStyle: () => holdStyle,
                   palette: () => root.dataset.pal || null, choosePalette, applyTheme, pickTheme, labelOf, renderers,
                   showSearch, commandList, showInbox, inbox: () => inbox.slice(),
+                  // #36's motions: a test can call time on a card (it has 20s) and unfold a rail.
+                  hideToast, setFold,
                   focused: () => focused, unfocusTile,
                   ptyKind: () => ptyKind, setPtyKind: (k) => { ptyKind = k; },
                   baseFont: () => FONT_PX, setBaseFont, termTheme, minimapOn: () => minimapOn,

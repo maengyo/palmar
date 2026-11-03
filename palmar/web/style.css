@@ -560,6 +560,24 @@ body.fold-l .rail.left > *, body.fold-r .rail.right > * { display: none; }
 body.fold-l .rz.l,   body.fold-r .rz.r   { display: none; }
 body.fold-l .rail.left  .rail-fold,
 body.fold-r .rail.right .rail-fold       { display: none; }
+/* **Unfolded by a hand, the rail springs in and its rows follow** (#36). springRail sets --i on each
+   row in order; the stagger is 26ms a row, capped at 14 rows so a long list does not drag on. Only
+   transform and opacity move. The rail's grid column has already snapped to its width by then —
+   it is the contents that come in, not the layout. */
+.rail.opening { animation: rail-in .38s cubic-bezier(.2,1.15,.35,1) both; }
+.rail.right.opening { animation-name: rail-in-r; }
+@keyframes rail-in   { from { transform: translateX(-22px); opacity: .5; } to { transform: none; opacity: 1; } }
+@keyframes rail-in-r { from { transform: translateX(22px);  opacity: .5; } to { transform: none; opacity: 1; } }
+.rail.opening .grp, .rail.opening .ses, .rail.opening .row {
+  animation: row-in .32s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--i, 0) * 26ms);
+}
+.rail.right.opening .row { animation-name: row-in-r; }
+@keyframes row-in   { from { transform: translateX(-10px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes row-in-r { from { transform: translateX(10px);  opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .rail.opening, .rail.opening .grp, .rail.opening .ses, .rail.opening .row, .tab .ripple, .tab.leaving { animation: none; }
+  .toast.msg.shrink { transform: none; }
+}
 .rail-fold {
   border: 0; background: none; color: var(--ink-3); cursor: pointer; line-height: 1;
   width: 26px; height: 26px; border-radius: var(--r-pill); display: grid; place-items: center;
@@ -811,6 +829,18 @@ body.ui-mono { --ui: var(--mono); }
   color: var(--ink-2); font-size: var(--t-13); cursor: pointer; user-select: none;   /* 11.5 → 13 (2026-09-15) */
 }
 .tab:hover { background: var(--hover); }
+/* **Pressed, it fills from the press** (#36): a dot of the accent spreads from where the finger was
+   until it covers the tab, fading into the selection colour as it goes; the tab that was current
+   lets its colour go. --reach is set by rippleTab from the farthest corner. */
+.tab { position: relative; overflow: hidden; }
+.tab .ripple {
+  position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
+  background: var(--accent); opacity: .3; pointer-events: none; transform: scale(0);
+  animation: tab-ripple .5s cubic-bezier(.2,.7,.3,1) forwards;
+}
+@keyframes tab-ripple { 0% { transform: scale(0); opacity: .3; } 70% { opacity: .12; } 100% { transform: scale(var(--reach, 40)); opacity: 0; } }
+.tab.leaving { animation: tab-leave .3s ease-out; }
+@keyframes tab-leave { from { background: var(--sel); border-color: var(--sel-line); } to { background: transparent; border-color: transparent; } }
 /* Delete canvas (#18). **It appears only when deleting is possible** — the tab being viewed, with not one
    terminal in it, and not the last canvas. It is exactly the inverse of the two conditions the daemon refuses
    with 409, so the screen never sends a request that will be refused. While absent it takes up no space either.
@@ -1320,7 +1350,18 @@ body.fold-l .fab { display: grid; }
 .toast.msg {
   font-size: var(--t-14); line-height: 1.5; padding: 14px 20px 15px 18px; border-left: 4px solid var(--accent);
   min-width: min(380px, calc(100% - 32px)); max-width: min(760px, calc(100% - 32px));
-  white-space: normal; color: var(--ink); bottom: 22px; text-align: left;
+  white-space: normal; color: var(--ink); text-align: left;
+  /* Up by the bell (#36): the card comes in under the top-right corner, where the bell is, and
+     when its time is up it shrinks and flies the rest of the way there. */
+  left: auto; right: 16px; top: 12px; bottom: auto; transform: translateY(-8px); transform-origin: 50% 50%;
+}
+.toast.msg.show { transform: none; }
+.toast.msg.shrink { transform: scale(.18); opacity: 0; transition: transform .2s cubic-bezier(.5,0,.9,.4), opacity .16s; }
+/* The dot that carries a message into the bell. Moved by transform only. */
+.fly {
+  position: fixed; left: -5px; top: -5px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--accent); z-index: 1002; pointer-events: none; will-change: transform;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 .toast.msg b { display: block; font-size: var(--t-12); font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
 .toast.msg .undo { font-size: var(--t-13); margin-left: 8px; }
