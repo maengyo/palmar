@@ -564,19 +564,20 @@ body.fold-r .rail.right .rail-fold       { display: none; }
    row in order; the stagger is 26ms a row, capped at 14 rows so a long list does not drag on. Only
    transform and opacity move. The rail's grid column has already snapped to its width by then —
    it is the contents that come in, not the layout. */
-.rail.opening { animation: rail-in .38s cubic-bezier(.2,1.15,.35,1) both; }
+.rail.opening { animation: rail-in .46s cubic-bezier(.2,1.2,.35,1) both; }
 .rail.right.opening { animation-name: rail-in-r; }
-@keyframes rail-in   { from { transform: translateX(-22px); opacity: .5; } to { transform: none; opacity: 1; } }
-@keyframes rail-in-r { from { transform: translateX(22px);  opacity: .5; } to { transform: none; opacity: 1; } }
+/* From most of the way out, not a nudge — 22px read as nothing (user, 2026-11-03: "적용된 건지"). */
+@keyframes rail-in   { from { transform: translateX(-85%); opacity: .3; } to { transform: none; opacity: 1; } }
+@keyframes rail-in-r { from { transform: translateX(85%);  opacity: .3; } to { transform: none; opacity: 1; } }
 .rail.opening .grp, .rail.opening .ses, .rail.opening .row {
-  animation: row-in .32s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--i, 0) * 26ms);
+  animation: row-in .34s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(120ms + var(--i, 0) * 36ms);
 }
 .rail.right.opening .row { animation-name: row-in-r; }
 @keyframes row-in   { from { transform: translateX(-10px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes row-in-r { from { transform: translateX(10px);  opacity: 0; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .rail.opening, .rail.opening .grp, .rail.opening .ses, .rail.opening .row, .tab .ripple, .tab.leaving { animation: none; }
-  .toast.msg.shrink { transform: none; }
+  .card, .card.shrink { animation: none; transform: none; }
 }
 .rail-fold {
   border: 0; background: none; color: var(--ink-3); cursor: pointer; line-height: 1;
@@ -1347,24 +1348,60 @@ body.fold-l .fab { display: grid; }
    its own line, the message under it at 14px, wrapping to three lines before it is cut, an accent
    edge on the left and more room all round. 380px at the least, so a short message still reads as
    a card and not as a chip. */
-.toast.msg {
-  font-size: var(--t-14); line-height: 1.5; padding: 14px 20px 15px 18px; border-left: 4px solid var(--accent);
-  min-width: min(380px, calc(100% - 32px)); max-width: min(760px, calc(100% - 32px));
-  white-space: normal; color: var(--ink); text-align: left;
-  /* Up by the bell (#36): the card comes in under the top-right corner, where the bell is, and
-     when its time is up it shrinks and flies the rest of the way there. */
-  left: auto; right: 16px; top: 12px; bottom: auto; transform: translateY(-8px); transform-origin: 50% 50%;
+/* Up by the bell (#36), **stacked** (user, 2026-11-03): a column under the top-right corner, newest at
+   the bottom. A card that goes — its time up, or closed — shrinks where it stands and its height
+   closes over .24s, which is what slides the ones under it up. Only transform/opacity/height move,
+   and height only on the one leaving. */
+.cards {
+  position: absolute; right: 16px; top: 12px; z-index: 20; display: flex; flex-direction: column;
+  align-items: flex-end; gap: 8px; pointer-events: none; max-width: calc(100% - 32px);
 }
-.toast.msg.show { transform: none; }
-.toast.msg.shrink { transform: scale(.18); opacity: 0; transition: transform .2s cubic-bezier(.5,0,.9,.4), opacity .16s; }
+.card {
+  position: relative; pointer-events: auto; box-sizing: border-box; cursor: pointer;
+  background: var(--float); border: 1px solid var(--line-2); border-left: 4px solid var(--accent);
+  border-radius: var(--r-panel); box-shadow: var(--shadow-2);
+  padding: 14px 20px 15px 18px; font-size: var(--t-14); line-height: 1.5; color: var(--ink); text-align: left;
+  min-width: min(380px, 100%); max-width: min(760px, 100%);
+  animation: card-in .22s cubic-bezier(.2,.8,.2,1) both;
+  transition: transform .2s cubic-bezier(.5,0,.9,.4), opacity .16s, height .24s cubic-bezier(.2,.8,.2,1),
+              padding .24s, border-width .24s, margin .24s;
+}
+@keyframes card-in { from { transform: translateY(-8px); opacity: 0; } to { transform: none; opacity: 1; } }
+.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)); border-left-color: var(--accent); }
+.card.shrink { transform: scale(.18); opacity: 0; }
+.card.gone { height: 0 !important; padding-top: 0; padding-bottom: 0; border-top-width: 0; border-bottom-width: 0;
+             margin-top: -8px; overflow: hidden; pointer-events: none; }   /* -8: the column's gap */
+.card b { display: block; font-size: var(--t-12); font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
+/* "show" is a word, not a boxed button — the same stripped-back link the toast's undo is. */
+.card .undo {
+  font-size: var(--t-13); margin-left: 8px; color: var(--accent); cursor: pointer;
+  background: none; border: 0; padding: 0; font-family: inherit; text-decoration: underline;
+  text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.card .undo:hover { text-decoration-color: var(--accent); }
+.card .undo:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+/* The × sits on the top-right corner, half outside, and shows on hover (or when the keyboard is in
+   the card). Drawn the way every other × here is (.cl, .tab .cx): two strokes, no glyph. */
+.card-x {
+  position: absolute; top: -9px; right: -9px; width: 22px; height: 22px; border-radius: var(--r-pill);
+  border: 1px solid var(--line-2); background: var(--float); box-shadow: var(--shadow); cursor: pointer;
+  display: grid; place-items: center; padding: 0; opacity: 0; transition: opacity .12s, color .12s;
+  color: var(--ink-3); -webkit-appearance: none; appearance: none;
+}
+.card-x::before {
+  content: ""; width: 8px; height: 8px;
+  background: linear-gradient(45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%),
+              linear-gradient(-45deg, transparent 0 42%, currentColor 42% 58%, transparent 58%);
+}
+.card:hover .card-x, .card:focus-within .card-x, .card-x:focus-visible { opacity: 1; }
+.card-x:hover { color: var(--ink); border-color: var(--ink-3); }
+.card.gone .card-x { display: none; }
 /* The dot that carries a message into the bell. Moved by transform only. */
 .fly {
   position: fixed; left: -5px; top: -5px; width: 10px; height: 10px; border-radius: 50%;
   background: var(--accent); z-index: 1002; pointer-events: none; will-change: transform;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
 }
-.toast.msg b { display: block; font-size: var(--t-12); font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
-.toast.msg .undo { font-size: var(--t-13); margin-left: 8px; }
 /* A link inside a message, in the toast and in the bell's list. */
 .msg-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px;
             text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); word-break: break-all; }

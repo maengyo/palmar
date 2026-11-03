@@ -144,7 +144,7 @@ const LINE_HEIGHT = 1.15;
 // ── DOM handles ─────────────────────────────────────────
 const cv = $('#cv'), cvScroll = $('#cv-scroll'), listEl = $('#list'), treeEl = $('#tree');
 const tabsEl = $('#tabs'), mmEl = $('#mm'), mmWorldEl = $('#mm-w'), mmVpEl = $('#mm-vp');
-const toastEl = $('#toast'), searchEl = $('#search'), searchBox = $('#searchbox');
+const toastEl = $('#toast'), cardsEl = $('#cards'), searchEl = $('#search'), searchBox = $('#searchbox');
 
 // **Installable as an app.** Edge and Chrome install a page as an app of its own — icon, window, Start
 // Menu entry — from a web app manifest. Its start_url has to carry the key, and index.html never does
@@ -459,7 +459,6 @@ function toast(parts, opts) {
   // what the page just did, because it is news from elsewhere and the eye was not waiting for it
   // (user, 2026-10-30: "너무 작게 뜨고, 너무 단기간").
   opts = opts || {};
-  toastEl.classList.toggle('msg', !!opts.msg);
   // **The toast is one line of prose.** Parts are laid end to end with a space between, and the
   // punctuation is the caller's — a dash before a second clause, a colon before an error. It used to
   // be a flex row with a gap, and two plain strings in a row merged into one item with no gap at all
@@ -484,27 +483,74 @@ function toast(parts, opts) {
       act = true;
     }
   }
-  toastEl.classList.remove('shrink');
   toastEl.classList.add('show');
   clearTimeout(toastTimer);
-  // A toast you are meant to press needs longer than one you only read. A message longer still —
-  // 10s was "조금 더 오래" short of it (user, 2026-11-03).
-  toastTimer = setTimeout(hideToast, opts.msg ? MSG_TOAST_MS : act ? 9000 : 4500);
+  // A toast you are meant to press needs longer than one you only read.
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), act ? 9000 : 4500);
 }
-const MSG_TOAST_MS = 20000;
-// A message card does not just fade when its time is up: it shrinks to a dot that is drawn along a
-// curve into the bell (#36), which is where the message now lives. A plain note only fades, and a
-// card the hand dismissed by pressing "show" has been read — nothing flies.
-function hideToast() {
-  if (toastEl.classList.contains('msg') && toastEl.classList.contains('show')) {
-    toastEl.classList.add('shrink');
-    flyToBell();
+
+// ── message cards ──
+// A terminal's message is a **card by the bell**, not a toast (user, 2026-10-30 "너무 작게 뜨고, 너무
+// 단기간"; 2026-11-02 "더 크면"; 2026-11-03 "줄바꿈·더 오래", then the stack). Cards stack down from
+// the top right in the order they came; each has 20 seconds, and when its time is up it shrinks to a
+// dot that is drawn along a curve into the bell (#36), the ones under it closing up. Pressing a card
+// opens the bell's list — where every message already is, the card was only the announcement — and
+// clears every card on screen. The × that appears on hover closes that one card quietly: the message
+// stays in the list (user asked which; a card is the announcement, the list is the record, and
+// closing an announcement should not delete the record — deleting is the list's ×).
+const CARD_MS = 20000, CARDS_MAX = 6;
+function showCard(e) {
+  if (!cardsEl) return;
+  // Only so many on screen: the oldest gives way (it goes to the bell early) when a seventh comes.
+  while (cardsEl.querySelectorAll('.card:not(.gone)').length >= CARDS_MAX) {
+    const oldest = cardsEl.querySelector('.card:not(.gone)');
+    if (!oldest) break;
+    dropCard(oldest, true);
   }
-  toastEl.classList.remove('show');
+  const card = el('div', 'card');
+  card.setAttribute('role', 'status');
+  card.appendChild(el('b', null, messageLabel(e)));
+  const body = el('span', 'card-text');
+  body.appendChild(linkify(e.text));
+  card.appendChild(body);
+  const show = el('button', 'undo', 'show');
+  show.type = 'button';
+  show.title = 'go to that terminal';
+  show.addEventListener('click', (ev) => { ev.stopPropagation(); dropCard(card, false); goToMessage(e); });
+  card.appendChild(show);
+  const x = el('button', 'card-x');
+  x.type = 'button';
+  x.title = 'close — it stays in the bell';
+  x.setAttribute('aria-label', 'close');
+  x.addEventListener('click', (ev) => { ev.stopPropagation(); dropCard(card, false); });
+  card.appendChild(x);
+  // stopPropagation: the window's click closes popups, and this click is what opens one.
+  card.addEventListener('click', (ev) => { ev.stopPropagation(); clearCards(); showInbox(true); });
+  cardsEl.appendChild(card);
+  card._timer = setTimeout(() => dropCard(card, true), CARD_MS);
+  return card;
 }
-function flyToBell() {
-  if (!bellEl || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  const a = toastEl.getBoundingClientRect(), b = bellEl.getBoundingClientRect();
+// Takes a card down. `fly`: its time ran out, so a dot carries it into the bell; false is a hand
+// closing it. Either way it shrinks where it stands and the cards under it slide up — the height
+// closes with a transition, which is what moves the others (the stack is a flex column).
+function dropCard(card, fly) {
+  if (!card || card._gone) return;
+  card._gone = true;
+  clearTimeout(card._timer);
+  if (fly) flyToBell(card);
+  card.style.height = card.offsetHeight + 'px';
+  card.classList.add('shrink');
+  // The height change has to come a frame after the explicit height, or there is nothing to transition from.
+  requestAnimationFrame(() => requestAnimationFrame(() => card.classList.add('gone')));
+  setTimeout(() => card.remove(), 460);
+}
+function clearCards() {
+  if (!cardsEl) return;
+  for (const c of cardsEl.querySelectorAll('.card:not(.gone)')) dropCard(c, false);
+}
+function flyToBell(from) {
+  if (!bellEl || !from || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const a = from.getBoundingClientRect(), b = bellEl.getBoundingClientRect();
   if (!a.width || !b.width) return;
   const x0 = a.left + a.width / 2, y0 = a.top + a.height / 2;
   const x1 = b.left + b.width / 2, y1 = b.top + b.height / 2;
@@ -4875,7 +4921,7 @@ function goToMessage(e) {
 function sayMessage(e) {
   const who = messageLabel(e);
   if (document.hasFocus()) {
-    toast([{ b: who }, { link: e.text }, { a: 'show', on: () => goToMessage(e) }], { msg: true });
+    showCard(e);
     return;
   }
   if (!notifyOn || !canRing()) return;
@@ -5772,7 +5818,7 @@ window.palmar = { sessions, tiles, canvases, layout: () => layout,
                   palette: () => root.dataset.pal || null, choosePalette, applyTheme, pickTheme, labelOf, renderers,
                   showSearch, commandList, showInbox, inbox: () => inbox.slice(),
                   // #36's motions: a test can call time on a card (it has 20s) and unfold a rail.
-                  hideToast, setFold,
+                  dropCard, clearCards, setFold,
                   focused: () => focused, unfocusTile,
                   ptyKind: () => ptyKind, setPtyKind: (k) => { ptyKind = k; },
                   baseFont: () => FONT_PX, setBaseFont, termTheme, minimapOn: () => minimapOn,

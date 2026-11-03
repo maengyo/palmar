@@ -496,15 +496,13 @@ class AMessageOnTheRail(unittest.TestCase):
             st, _ = d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "built ok\n3 warnings"})
             self.assertEqual(st, 200)
             time.sleep(1)
-            got = b.ev("""(()=>{const t=document.getElementById('toast');
+            got = b.ev("""(()=>{const t=document.querySelector('#cards .card');
               const note=document.querySelector('#list .ses .note');
-              return {brs: t.querySelectorAll('br').length, text: t.textContent, note: note && note.textContent,
-                      shown: t.classList.contains('show'), top: t.getBoundingClientRect().top,
-                      bell: document.getElementById('bell').getBoundingClientRect()};})()""")
+              return {brs: t ? t.querySelectorAll('br').length : -1, text: t ? t.textContent : '', note: note && note.textContent,
+                      top: t ? t.getBoundingClientRect().top : -1};})()""")
             self.assertEqual(got["brs"], 1, "the card did not lay the two lines out as two")
             self.assertIn("3 warnings", got["text"])
             self.assertEqual(got["note"], "built ok …", "the row should show the first line and say there is more")
-            self.assertTrue(got["shown"])
             # By the bell (#36): the card sits in the top part of the page, not at the bottom.
             self.assertLess(got["top"], 120, "the message card is not up by the bell: top=%s" % got["top"])
             b.ev("window.palmar.showInbox(true)")
@@ -522,14 +520,64 @@ class AMessageOnTheRail(unittest.TestCase):
             time.sleep(3)
             d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": "done"})
             time.sleep(1)
-            self.assertTrue(b.ev("document.getElementById('toast').classList.contains('show')"))
-            got = b.ev("""(()=>{window.palmar.hideToast(); return {fly: document.querySelectorAll('.fly').length,
-              shrink: document.getElementById('toast').classList.contains('shrink')};})()""")
+            self.assertEqual(b.ev("document.querySelectorAll('#cards .card').length"), 1)
+            got = b.ev("""(()=>{const c=document.querySelector('#cards .card'); window.palmar.dropCard(c, true);
+              return {fly: document.querySelectorAll('.fly').length, shrink: c.classList.contains('shrink')};})()""")
             self.assertEqual(got["fly"], 1, "no dot set off for the bell")
             self.assertTrue(got["shrink"], "the card did not shrink")
             time.sleep(1.2)
             self.assertEqual(b.ev("document.querySelectorAll('.fly').length"), 0, "the dot never landed")
             self.assertTrue(b.ev("document.getElementById('bell').classList.contains('ping')"), "the bell did not ring when it landed")
+            self.assertEqual(b.ev("document.querySelectorAll('#cards .card').length"), 0, "the card was not taken down")
+
+    def test_cards_stack_in_order_and_the_ones_under_a_gone_card_move_up(self):
+        """Several messages while one is still up: they stack down from the first (user, 2026-11-03),
+        and when the first goes the rest close up — the leaving card's height goes to 0, which is
+        what moves the others, so the gap is measured before and after."""
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="build")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            for text in ("one", "two", "three"):
+                d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": text})
+                time.sleep(0.4)
+            time.sleep(0.6)
+            got = b.ev("""[...document.querySelectorAll('#cards .card')].map(c=>({t: c.querySelector('.card-text').textContent, y: c.getBoundingClientRect().top}))""")
+            self.assertEqual([g["t"] for g in got], ["one", "two", "three"], "not stacked in the order they came")
+            self.assertTrue(got[0]["y"] < got[1]["y"] < got[2]["y"], "the stack does not go downward: %r" % got)
+            y_two = got[1]["y"]
+            b.ev("window.palmar.dropCard(document.querySelector('#cards .card'), true)")
+            time.sleep(0.8)
+            left = b.ev("""[...document.querySelectorAll('#cards .card')].map(c=>({t: c.querySelector('.card-text').textContent, y: c.getBoundingClientRect().top}))""")
+            self.assertEqual([g["t"] for g in left], ["two", "three"], "the first card did not go, or the wrong one did")
+            self.assertLess(left[0]["y"], y_two - 20, "the second card did not move up into the first one's place")
+
+    def test_pressing_a_card_opens_the_bell_and_clears_them_all_and_the_x_closes_one_quietly(self):
+        """A card is the announcement; the bell's list is the record. Pressing a card opens the list
+        and takes every card down. The × on a card closes that one — nothing flies, and the message
+        is still in the list (user asked which it should be, 2026-11-03)."""
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="build")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            for text in ("one", "two"):
+                d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": text})
+                time.sleep(0.4)
+            time.sleep(0.6)
+            got = b.ev("""(()=>{const c=document.querySelector('#cards .card'); c.querySelector('.card-x').click();
+              return {fly: document.querySelectorAll('.fly').length, gone: c.classList.contains('shrink'),
+                      left: document.querySelectorAll('#cards .card:not(.shrink)').length};})()""")
+            self.assertEqual(got["fly"], 0, "closing a card by hand sent a dot to the bell")
+            self.assertTrue(got["gone"])
+            self.assertEqual(got["left"], 1, "the × took more than its own card")
+            time.sleep(0.6)
+            got = b.ev("""(()=>{document.querySelector('#cards .card').click();
+              return {inbox: !document.getElementById('inbox').hidden,
+                      left: document.querySelectorAll('#cards .card:not(.shrink)').length,
+                      rows: document.querySelectorAll('#inbox-list .ib-row').length};})()""")
+            self.assertTrue(got["inbox"], "pressing a card did not open the bell's list")
+            self.assertEqual(got["left"], 0, "pressing a card left cards on screen")
+            self.assertEqual(got["rows"], 2, "the closed card's message is not in the list — it should be")
 
     def test_it_is_shown_said_once_and_cleared_by_a_hand(self):
         with Daemon() as d, Browser() as b:
@@ -540,7 +588,8 @@ class AMessageOnTheRail(unittest.TestCase):
             self.assertEqual(st, 200)
             time.sleep(1)
             got = b.ev("""(()=>{const r=document.querySelector('#list .ses[data-id=%s] .note');
-              return {note: r && r.textContent, toast: document.getElementById('toast').textContent};})()"""
+              const c=document.querySelector('#cards .card');
+              return {note: r && r.textContent, toast: c ? c.textContent : ''};})()"""
                        % json.dumps(s["id"]))
             self.assertEqual(got["note"], "review requested: o/r#12", "the row does not carry it")
             self.assertIn("review requested", got["toast"], "it arrived without being said")
@@ -548,8 +597,7 @@ class AMessageOnTheRail(unittest.TestCase):
             b.open(d.url, script="document.hasFocus=()=>true;")
             time.sleep(3)
             again = b.ev("""(()=>({note: !!document.querySelector('#list .ses .note'),
-              toast: document.getElementById('toast').classList.contains('show') ?
-                     document.getElementById('toast').textContent : ''}))()""")
+              toast: [...document.querySelectorAll('#cards .card')].map(c=>c.textContent).join(' ')}))()""")
             self.assertTrue(again["note"], "a reload lost the message")
             self.assertNotIn("review requested", again["toast"], "a reload said it a second time")
             # **A hand on the pane clears it** — in the daemon, so every page agrees.
