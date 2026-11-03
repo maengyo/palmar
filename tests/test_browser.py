@@ -4617,6 +4617,13 @@ class MotionFromIssue36(unittest.TestCase):
         self.b.ev("window.palmar.setFold('l', false)")
         time.sleep(0.2)
         self.assertFalse(self.b.ev("document.getElementById('fold-l').classList.contains('turn')"), "the head's chevron turned before the rail was back")
+        # On the way in the head's chevron sits turned round — it continues the strip's › — and the
+        # two buttons draw the same chevron at the same size (user, 2026-11-03).
+        got = self.b.ev("""(()=>{const h=document.querySelector('#fold-l svg'), s=document.querySelector('#open-l i svg');
+          return {turned: getComputedStyle(h).transform, head: h.getBoundingClientRect().width,
+                  strip: s ? s.getBoundingClientRect().width : -1};})()""")
+        self.assertEqual(got["turned"], "matrix(-1, 0, 0, -1, 0, 0)", "the head's chevron is not turned round while the rail comes in: %r" % got)
+        self.assertEqual(got["head"], 14, "the head's chevron is not 14px: %r" % got)
         time.sleep(0.4)
         self.assertTrue(self.b.ev("document.getElementById('fold-l').classList.contains('turn')"), "the head's chevron did not turn once the rail was back")
         time.sleep(0.6)
