@@ -386,6 +386,40 @@ class AnInboxBehindTheBell(unittest.TestCase):
           name: r.querySelector('.ib-name').textContent, text: r.querySelector('.ib-text').textContent,
           ago: r.querySelector('.ib-ago').textContent, id: r.dataset.id}))""")
 
+    def test_hovering_a_row_tints_that_row_and_not_the_whole_list(self):
+        """The list hangs off the bell's capsule, and the capsule's "hover a child" rule took the open
+        list for a child — so the whole list went to the hover colour, as if every row were under
+        the mouse (user, 2026-11-03; the options list the same way)."""
+        with Daemon() as d, Browser() as b:
+            s = d.open_pane(name="pr-watch")
+            b.open(d.url, script="document.hasFocus=()=>true;")
+            time.sleep(3)
+            for text in ("one", "two", "three"):
+                d.raw("PATCH", "/api/sessions/%s" % s["id"], {"message": text})
+            time.sleep(1)
+            b.ev("window.palmar.clearCards(); window.palmar.showInbox(true)")
+            time.sleep(0.4)
+            before = b.ev("getComputedStyle(document.getElementById('inbox')).backgroundColor")
+            rows = b.ev("""[...document.querySelectorAll('#inbox-list .ib-row')].map(r=>{const q=r.getBoundingClientRect();
+              return {x: q.left + q.width/2, y: q.top + q.height/2};})""")
+            b.ws.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": rows[1]["x"], "y": rows[1]["y"]})
+            time.sleep(0.3)
+            got = b.ev("""(()=>({list: getComputedStyle(document.getElementById('inbox')).backgroundColor,
+              rows: [...document.querySelectorAll('#inbox-list .ib-row')].map(r=>getComputedStyle(r).backgroundColor)}))()""")
+            self.assertEqual(got["list"], before, "the whole list took the hover colour")
+            self.assertEqual(got["rows"][0], got["rows"][2], "a row that is not under the mouse changed")
+            self.assertNotEqual(got["rows"][1], got["rows"][0], "the row under the mouse did not change")
+            # The options list hangs off the same capsule.
+            b.ev("window.palmar.showInbox(false); document.getElementById('options').click()")
+            time.sleep(0.3)
+            before = b.ev("getComputedStyle(document.getElementById('options-menu')).backgroundColor")
+            it = b.ev("""(()=>{const q=document.querySelector('#options-menu .tm-i').getBoundingClientRect();
+              return {x: q.left + q.width/2, y: q.top + q.height/2};})()""")
+            b.ws.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": it["x"], "y": it["y"]})
+            time.sleep(0.3)
+            self.assertEqual(b.ev("getComputedStyle(document.getElementById('options-menu')).backgroundColor"), before,
+                             "the whole options list took the hover colour")
+
     def test_it_lists_them_newest_first_and_an_x_or_clear_all_removes_them(self):
         with Daemon() as d, Browser() as b:
             s = d.open_pane(name="pr-watch")
@@ -450,9 +484,9 @@ class AnInboxBehindTheBell(unittest.TestCase):
             d.raw("PATCH", "/api/sessions/%s" % s["id"],
                   {"message": "review requested https://github.com/o/r/pull/12. Also ftp://x and <b>x</b>"})
             time.sleep(1)
-            toast = b.ev("""(()=>{const a=document.querySelector('#toast a');
+            toast = b.ev("""(()=>{const c=document.querySelector('#cards .card'); const a=c && c.querySelector('a');
               return {href: a && a.href, target: a && a.target, rel: a && a.rel, text: a && a.textContent,
-                      bold: !!document.querySelector('#toast b b'), raw: document.getElementById('toast').textContent};})()""")
+                      raw: c ? c.textContent : ''};})()""")
             self.assertEqual(toast["href"], "https://github.com/o/r/pull/12", "the address is not a link in the toast: %r" % toast)
             self.assertEqual(toast["text"], "https://github.com/o/r/pull/12", "the full stop was taken into the link")
             self.assertEqual(toast["target"], "_blank")

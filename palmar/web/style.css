@@ -791,7 +791,10 @@ body.ui-mono { --ui: var(--mono); }
 .capsule > :first-child { padding-left: 14px; }
 .capsule > :last-child { padding-right: 14px; margin-right: 0; }
 .capsule > * + * { border-left: 1px solid color-mix(in srgb, var(--line-2) 65%, transparent); }
-.capsule > :hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+/* Not the menus: the bell's list and the options list are children of the capsule too (they hang
+   off it), and this painted the whole open list in the hover colour, as if every row were hovered
+   (user, 2026-11-03). */
+.capsule > :hover:not(:disabled):not(.theme-menu) { background: var(--hover); color: var(--ink); }
 .capsule > :active:not(:disabled) { background: var(--sel); transform: none; }
 .capsule > :disabled { color: var(--ink-3); opacity: .38; cursor: default; }
 .capsule > [aria-pressed="true"], .capsule > [aria-expanded="true"] { color: var(--ink); background: var(--sel); }
