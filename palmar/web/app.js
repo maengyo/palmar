@@ -3428,6 +3428,10 @@ function setFold(side, folded) {
     if (motionRail(side, 'closing', () => foldNow(side, true))) {
       railAnim(true);
       document.documentElement.style.setProperty('--rail-' + side, RAIL_STRIP + 'px');
+      // The strip is there from the first frame, over the column's near edge: the column shrinks
+      // down to exactly it, so nothing appears at the end that was not already on screen.
+      const open = $('#open-' + side);
+      if (open) open.hidden = false;
       return;
     }
   }

@@ -4595,8 +4595,12 @@ class MotionFromIssue36(unittest.TestCase):
         got = self.b.ev("""(()=>{window.palmar.setFold('l', true);
           const rail=document.querySelector('.rail.left');
           return {closing: rail.classList.contains('closing'), folded: document.body.classList.contains('fold-l'),
-                  turn: document.getElementById('open-l').classList.contains('turn')};})()""")
+                  turn: document.getElementById('open-l').classList.contains('turn'),
+                  strip: !document.getElementById('open-l').hidden};})()""")
         self.assertTrue(got["closing"], "folding did not set the rail off")
+        # The strip is on screen from the first frame — the column shrinks down to it, so nothing
+        # pops in at the end (user, 2026-11-03: "완전히 사라졌다가 순식간에 나타나").
+        self.assertTrue(got["strip"], "the strip was not there from the start of the fold")
         self.assertFalse(got["folded"], "the fold proper came before the motion")
         self.assertFalse(got["turn"], "the chevron turned before the rail had gone")
         # The canvas widens over the same frames: mid-motion the column is between the two widths.
@@ -4627,6 +4631,16 @@ class MotionFromIssue36(unittest.TestCase):
         time.sleep(0.9)
         self.assertTrue(self.b.ev("document.body.classList.contains('fold-l')"))
         self.b.ev("window.palmar.setFold('l', false)")
+        time.sleep(0.8)
+        # The right rail goes out past the window's edge, and the page grew a scrollbar for the
+        # length of the motion (user, 2026-11-03; measured 24px). Watched every frame: the document
+        # never gets wider than the window.
+        self.b.ev("""(()=>{window.__over=0; const t0=performance.now(); const tick=()=>{
+          window.__over=Math.max(window.__over, document.documentElement.scrollWidth-document.documentElement.clientWidth);
+          if (performance.now()-t0<700) requestAnimationFrame(tick);}; window.palmar.setFold('r', true); tick(); return 1})()""")
+        time.sleep(1.0)
+        self.assertEqual(self.b.ev("window.__over"), 0, "the page overflowed sideways while the right rail folded")
+        self.b.ev("window.palmar.setFold('r', false)")
         time.sleep(0.8)
 
     def test_the_selection_pill_slides_to_the_pressed_tab_stretching_on_the_way(self):

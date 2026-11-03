@@ -517,7 +517,10 @@ kbd {
 /* ── body grid ──────────────────────────────── */
 /* The rail widths live in **one place only** (--rail-l·--rail-r on :root). Before, .top and .body each wrote
    the same `256px 1fr 232px` separately, so fixing one side left the top bar and the body below misaligned. */
-.body { display: grid; grid-template-columns: var(--rail-l) 1fr var(--rail-r); min-height: 0;
+/* overflow hidden: a rail on its way out is translated past its column's edge, and the right one
+   went past the window's — the page grew a scrollbar for the length of the motion and the canvas's
+   own scrollbar blinked (user, 2026-11-03). The left one goes past 0, which never scrolls. */
+.body { display: grid; grid-template-columns: var(--rail-l) 1fr var(--rail-r); min-height: 0; overflow: hidden;
         position: relative; }
 
 /* The grip that drags the rail boundary. It lies on top of the boundary instead of adding a grid column — one
@@ -587,8 +590,13 @@ html.rail-anim { transition: --rail-l .4s cubic-bezier(.2,.9,.3,1), --rail-r .4s
    the strip, the hidden contents — only when this ends (setFold waits for it). */
 .rail.closing { animation: rail-out .36s cubic-bezier(.5,0,.75,.2) both; }
 .rail.right.closing { animation-name: rail-out-r; }
-@keyframes rail-out   { to { transform: translateX(-85%); opacity: .3; } }
-@keyframes rail-out-r { to { transform: translateX(85%);  opacity: .3; } }
+/* A nudge and a fade, not a slide off the screen: the column is shrinking to the strip over the
+   same frames (the @property transition), and that is the closing — the rail sliding 85% away on
+   top of it made the whole rail vanish and the strip pop in at the end (user, 2026-11-03). The
+   strip is shown from the first frame, over the column's near edge, so what is left at the end
+   was there all along. */
+@keyframes rail-out   { to { transform: translateX(-24px); opacity: .25; } }
+@keyframes rail-out-r { to { transform: translateX(24px);  opacity: .25; } }
 .rail.closing .grp, .rail.closing .ses, .rail.closing .row {
   animation: row-out .22s cubic-bezier(.5,0,.75,.2) both; animation-delay: calc(var(--i, 0) * 14ms);
 }
