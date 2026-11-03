@@ -4,54 +4,43 @@
 
 **Many terminals, one place, and each one keeps where you put it.**
 
-<p align="center"><img src="docs/img/palmar-light.png" alt="palmar in the light theme: three terminals on the canvas, the list on the left with one waiting at the top, the folder rail on the right" width="49%"> <img src="docs/img/palmar-dark.png" alt="the same screen in the dark theme" width="49%"></p>
-
-![palmar: three terminals on a canvas. Each carries a light — one working, one waiting for you, one finished. Two are dragged together into a named group and travel as one until a held Alt takes one back out, a PDF opens in a window of its own, Ctrl with the wheel stands back far enough to see all of it, and a terminal says something — a card at the bottom, then the bell's list with the address already a link](docs/img/palmar.gif)
+![palmar: three terminals on a canvas. Each carries a light — one working, one waiting for you, one finished. Two are dragged together into a named group and travel as one until a held Alt takes one back out, a PDF opens in a window of its own, Ctrl with the wheel stands back far enough to see all of it, a second canvas opens and the tabs switch between them, the left rail folds to a strip and comes back, and a terminal says something — a card by the bell, then the bell's list with the address already a link](docs/img/palmar.gif)
 
 > palmar runs no model, calls no API, and sends your work nowhere. It opens shells and shows you
 > where they are. The agents are the ones you already run.
 
-## Why
+## What it does
 
-**You can see which one wants you.** Every terminal carries a light — working, waiting on you,
-done, idle. There is nothing to install and nothing to configure: palmar attaches the agent's own
-hooks itself — a shim in front of the shell on macOS and Linux, a preamble in PowerShell on Windows
-— and where an agent offers none it reads the window title, and where there is no title either,
-what the shell is actually printing. Your settings files are not touched. The one that has been
-waiting longest sits at the top of the list, even if its window is off-screen.
+- **A light on every terminal** — working, waiting on you, done, idle. The one that has waited
+  longest sits at the top of the list, even if its window is off-screen.
+- **Windows stay where you put them.** Drag, resize, and the shell's rows and columns follow.
+  Nothing is tiled. Drop one on another and the other slides aside by exactly the overlap.
+- **Groups.** Hold one window over another and they travel together; give the group a name;
+  `Alt`-drag takes one back out. `Ctrl`/`⌘`+`Z` undoes any of it.
+- **A canvas bigger than the screen**, with canvases side by side as tabs. Two buttons tidy it;
+  `Ctrl` with the wheel stands back to see all of it, or in to 2×, without resizing a terminal.
+- **The shells outlive the tab.** A daemon owns them: close the browser, close the lid, come back
+  to the same address and everything is where you left it.
+- **Files beside the terminals.** The folder rail opens text (editable, saved in place), CSV as a
+  table, pages, PDFs — in windows like any other. Drag a file in from Finder or Explorer.
+- **Messages from terminals.** `palmar --message "review requested …"` from a script shows a card
+  by the bell; the bell keeps the last hundred, with addresses already links. Notifications when
+  the window is not in front, if you turn them on.
+- **Every command has a key**, and `Ctrl`/`⌘`+`K` lists them all with the terminals that match.
 
-**A window stays where you put it.** Drag it, size it, and the shell's rows and columns follow;
-nothing is tiled and nothing is resized behind your back. Windows never overlap — drop one on
-another and the other slides aside by exactly the overlap. Hold one over another and they become a
-group that travels together, and a group can be given a name. One `Ctrl`/`⌘`+`Z` undoes any of it.
+## Why palmar
 
-**And the canvas is bigger than the screen.** Two buttons put it back in order — one pulls the
-windows to the corner, the other only closes the gaps and leaves the arrangement alone — and `Ctrl`
-with the wheel over the bare canvas stands back far enough to see all of it. Standing back draws the
-windows smaller; it never resizes a terminal, so nothing is told anything and nothing is measured
-again.
-
-**They keep running without you.** The daemon owns the shells, so closing the tab, or the laptop
-lid, changes nothing. Come back to the same address and everything is where you left it — same
-places, same sizes, same groups, because the arrangement lives with the daemon and not in one
-browser.
-
-**Your files are right there.** The rail beside the canvas is the folder you are working in. A
-file opens in a window like any other — text with line numbers, a table for CSV, a page, a PDF —
-and text can be edited and saved in place. If something else wrote the file meanwhile, palmar says
-so instead of winning. Drag one in from Finder or Explorer and it opens where you let go; a button
-on its title bar hands it to the program your machine would have opened it with.
-
-**It says what happened while you were away.** A terminal can say something — `palmar --message
-"review requested …"` from a script that watches for it — and the bell keeps the last hundred: who
-said it, how long ago, with an address in it already a link. A dot on the bell, and a slow pulse,
-until you look. Notifications, if you turn them on, reach you when the window is not in front.
-Every command has a key and `Ctrl`/`⌘`+`K` lists them all, with the terminals that match what you
-type.
-
-**Nothing to install but Python.** The standard library and a vendored copy of xterm.js. No build
-step, no packages, and no network at runtime — palmar opens no connection of its own unless you turn
-on **Tell me about new versions** in the options list, which is off to begin with.
+- **Nothing to install but Python**, and no configuration. The standard library and a vendored
+  xterm.js; no build step, no packages, no network at runtime (the new-version check is off by
+  default).
+- **It attaches to the agents you already run** — Claude Code, Codex, whatever comes next. palmar
+  has no tool list: it opens a shell, and you decide what runs in it. Hooks are attached by a shim
+  in front of the shell (a PowerShell preamble on Windows); your settings files are never touched.
+- **Light.** No Electron. The page is one HTML file; the daemon is one Python process that owns the
+  PTYs and moves bytes. Terminal emulation stays in the browser.
+- **Local only.** Bound to `127.0.0.1`, a token on every request, Origin and Host checked.
+  Nothing leaves the machine.
+- **macOS, Linux, Windows** — the same page everywhere, and a window of its own on each.
 
 ## Install
 

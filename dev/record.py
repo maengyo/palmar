@@ -315,12 +315,29 @@ def run(out_dir: str, keep: bool) -> int:
         while time.time() < deadline:
             time.sleep(1.0)
             scr = screen()
-            if "trust" in scr.lower() and not trusted:
+            if "trust this folder" in scr.lower() and not trusted:
                 # A folder it has not seen: the dialog's default is "No, exit" (measured 2026-11-02),
-                # so Down first, then Enter — **once**. Answering again while the dialog was still
-                # being redrawn wrapped the choice back to "No, exit" and the agent was gone (measured).
+                # so Down first, then Enter. **Look before the Enter.** A Down sent while the dialog
+                # was still being drawn was lost, the Enter took "No, exit", and the request typed
+                # next went to the shell (measured 2026-11-03, one run in three). So: Down, then read
+                # the screen until the marker sits on "Yes", and only then Enter — never twice.
+                # And not one spelling of Down: the TUI may have turned application cursor keys on
+                # (then Down is ESC O B, not ESC [ B), and one run in two the CSI form did nothing
+                # four times over (measured 2026-11-03). Each form is tried and the screen read after.
+                time.sleep(1.0)
+                moved = False
+                for key in (b"\x1b[B", b"\x1bOB", b"j", b"\x1b[B"):
+                    agent.send(key, opcode=0x2); time.sleep(0.8)
+                    # The dialog's marker is ❯ (U+276F); the prompt's is › (U+203A). Reading only
+                    # the second sent every key in the list and the choice wrapped back to "No, exit"
+                    # (measured 2026-11-03 — that was the one run in three).
+                    marked = [l for l in screen().splitlines() if "\u276f" in l or "\u203a" in l]
+                    if any("yes" in l.lower() for l in marked):
+                        moved = True
+                        break
+                if not moved:
+                    print("record: the trust dialog did not move to Yes — screen was:\n" + screen(), file=sys.stderr)
                 trusted = True
-                agent.send(b"\x1b[B", opcode=0x2); time.sleep(0.3)
                 agent.send(b"\r", opcode=0x2); time.sleep(3.0); continue
             if "\u203a" in scr or "> " in scr or "Try " in scr:   # its prompt is up
                 break
@@ -353,7 +370,7 @@ def run(out_dir: str, keep: bool) -> int:
             if any(r["id"] == a["id"] and r["status"] == "waiting" for r in rows):
                 break
         else:
-            print("record: the agent never asked — screen was:\n" + screen()[-800:], file=sys.stderr)
+            print("record: the agent never asked — screen was:\n" + screen(), file=sys.stderr)
         time.sleep(0.8)
         check_clean(br)
         take.hold(2.2)
@@ -420,8 +437,39 @@ def run(out_dir: str, keep: bool) -> int:
         else:
             take.hold(1.0)
 
-        # ⑥ **a terminal says something, and the bell keeps it** (2026-11-02). What a script that
-        # watches for a review request does: `palmar --message …`. The card at the bottom, then the
+        # ⑥ **a second canvas, and the tabs between them** (user, 2026-11-03). Made through the
+        # daemon rather than the + button, which opens an inline rename nobody wants to watch. The
+        # infra window moves over so both canvases have something in them, then the tabs are
+        # pressed — the pill slides to the pressed one — there and back.
+        cv = d.post("/api/canvases", {"name": "infra"})
+        if isinstance(cv, dict) and cv.get("id"):
+            d.raw("PATCH", "/api/sessions/%s" % c["id"], {"canvas": cv["id"]})
+            # A window keeps its board position across canvases, and the group drag above had carried
+            # this one to the right edge — on the new canvas it sat mostly off-screen (measured). Put
+            # it where the eye lands.
+            lay = d.get("/api/layout")
+            lay = lay.get("layout", lay) if isinstance(lay, dict) else {}
+            lay[c["id"]] = dict(lay.get(c["id"], {}), x=40, y=40, w=460, h=250)
+            d.raw("PUT", "/api/layout", {"layout": lay})
+            take.hold(1.0)
+            tab = lambda cid: br.ev("(()=>{const t=document.querySelector('.tab[data-id=%s]'); if(!t) return 0; t.click(); return 1;})()" % json.dumps(cid))
+            tab(cv["id"])
+            take.hold(1.8)
+            first = br.ev("(()=>{const t=document.querySelector('.tab'); return t ? t.dataset.id : null;})()")
+            if first:
+                tab(first)
+            take.hold(1.4)
+
+        # ⑦ **the left rail folds and comes back** (user, 2026-11-03): the column shrinks to the strip
+        # while the list leaves, the chevron riding down to the strip's spot; the strip brings it all
+        # back. The right rail stays folded (it names the person's homes).
+        br.ev("(()=>{const b=document.getElementById('fold-l'); if(b) b.click(); return 1;})()")
+        take.hold(1.6)
+        br.ev("(()=>{const b=document.getElementById('open-l'); if(b) b.click(); return 1;})()")
+        take.hold(1.8)
+
+        # ⑧ **a terminal says something, and the bell keeps it** (2026-11-02). What a script that
+        # watches for a review request does: `palmar --message …`. The card by the bell, then the
         # list behind the bell with the address already a link — the half of the product that is for
         # coming back to it.
         d.raw("PATCH", "/api/sessions/%s" % c["id"],
